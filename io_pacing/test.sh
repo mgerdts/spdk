@@ -1302,17 +1302,26 @@ function test_15()
 
 function test_16()
 {
-    local CPU_MASK=0xF0
+    local TGT_CPU_MASK=0xF0
     local NUM_CORES=4
 
-    for io_pacer in 5750 6000; do
-	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
-	for num_delay in 16 32; do
-	    echo "IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num delay $num_delay"
-	    start_tgt $CPU_MASK
-	    IO_PACER_PERIOD=$ADJUSTED_PERIOD NUM_DELAY_BDEVS=$num_delay config_nvme_split3_delay
-	    QD_LIST="1 2 4 8 16 32 64" FIO_JOB=fio-48ns basic_test
-	    stop_tgt
+    for io_pacer in 5750; do
+	for disk_credit in 0 2 6; do
+	    for num_delay in 0 16 32; do
+		ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
+		echo "CPU mask $TGT_CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num delay $num_delay, disk credit $disk_credit"
+
+		CONFIG=config_nvme_split3_delay \
+		      NUM_DELAY_BDEVS=$num_delay \
+		      TGT_CPU_MASK=$TGT_CPU_MASK \
+		      FIO_JOB=fio-48ns \
+		      QD_LIST="1 2 4 8 16 32 64" \
+		      IO_SIZE=128k \
+		      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
+		      IO_PACER_DISK_CREDIT=$disk_credit \
+		      test_base
+		sleep 3
+	    done
 	done
     done
 }
@@ -1323,7 +1332,7 @@ function test_17()
     local NUM_CORES=4
 
     for io_pacer in 5750; do
-	for disk_credit in 0; do
+	for disk_credit in 0 2 6; do
 	    for num_delay in 0 16 32; do
 		ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
 		echo "CPU mask $TGT_CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num delay bdevs $num_delay, disk credit $disk_credit"
