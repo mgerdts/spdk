@@ -68,6 +68,8 @@ seed_destroy(struct spdk_bs_dev *dev)
 	if (bdev_desc != NULL) {
 		spdk_bdev_close(bdev_desc);
 	}
+
+	// XXX-mg should this also be freeing dev?
 }
 
 static void

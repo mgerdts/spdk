@@ -43,6 +43,7 @@
 #include "blob/blobstore.h"
 
 #include "spdk_internal/thread.h"
+#include "spdk/bdev.h"
 
 #include "unit/lib/blob/bs_dev_common.c"
 
@@ -57,6 +58,25 @@ DEFINE_STUB_V(spdk_trace_register_description, (const char *name,
 		uint8_t arg1_is_ptr, const char *arg1_name));
 DEFINE_STUB_V(_spdk_trace_record, (uint64_t tsc, uint16_t tpoint_id, uint16_t poller_id,
 				   uint32_t size, uint64_t object_id, uint64_t arg1));
+DEFINE_STUB_V(spdk_bdev_close, (struct spdk_bdev_desc *desc));
+DEFINE_STUB(spdk_bdev_read_blocks, int,
+	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, void *buf,
+	    uint64_t offset_blocks, uint64_t num_blocks, spdk_bdev_io_completion_cb cb,
+	    void *cb_arg), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_readv_blocks, int,
+	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, struct iovec *iov,
+	    int iovcnt, uint64_t offset_blocks, uint64_t num_blocks,
+	    spdk_bdev_io_completion_cb cb, void *cb_arg), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *bdev_name), NULL);
+DEFINE_STUB(spdk_bdev_io_type_supported, bool,
+	    (struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type), false);
+DEFINE_STUB(spdk_bdev_open, int,
+	    (struct spdk_bdev *bdev, bool write, spdk_bdev_remove_cb_t remove_cb,
+	    void *remove_ctx, struct spdk_bdev_desc **_desc), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_get_block_size, uint32_t, (const struct spdk_bdev *bdev), 0);
+DEFINE_STUB(spdk_bdev_get_num_blocks, uint64_t, (const struct spdk_bdev *bdev), 0);
+DEFINE_STUB(spdk_bdev_get_io_channel, struct spdk_io_channel *,
+	    (struct spdk_bdev_desc *desc), NULL);
 
 /* Return NULL to test hardcoded defaults. */
 struct spdk_conf_section *
