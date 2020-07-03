@@ -1296,10 +1296,26 @@ blob_load_backing_dev(void *cb_arg)
 			spdk_bs_open_blob(blob->bs, blob->parent_id,
 					  blob_load_snapshot_cpl, ctx);
 			return;
-		} else {
-			/* add zeroes_dev for thin provisioned blob */
-			blob->back_bs_dev = bs_create_zeroes_dev();
 		}
+
+		rc = blob_get_xattr_value(blob, BLOB_SEED_DEV, &value, &len, true);
+		if (rc == 0) {
+			char *seed = strndup(value, len);
+
+			if (seed == NULL) {
+				blob_load_final(ctx, -ENOMEM);
+				return;
+			}
+
+			/* Use an existing bdev for unallocated blocks */
+			rc = bs_create_seed_dev(blob, seed);
+			free(seed);
+			blob_load_final(ctx, rc);
+			return;
+		}
+
+		/* add zeroes_dev for thin provisioned blob */
+		blob->back_bs_dev = bs_create_zeroes_dev();
 	} else {
 		/* standard blob */
 		blob->back_bs_dev = NULL;
@@ -5853,6 +5869,7 @@ bs_inflate_blob_done(void *cb_arg, int bserrno)
 		_blob->back_bs_dev = NULL;
 		_blob->parent_id = SPDK_BLOBID_INVALID;
 	} else {
+	// XXX-mg something for seed here?
 		_parent = ((struct spdk_blob_bs_dev *)(_blob->back_bs_dev))->blob;
 		if (_parent->parent_id != SPDK_BLOBID_INVALID) {
 			/* We must change the parent of the inflated blob */
@@ -6360,6 +6377,7 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 			       sizeof(spdk_blob_id),
 			       true);
 	} else {
+	// XXX-mg something for seed here?
 		/* ...to blobid invalid and zeroes dev */
 		ctx->clone->parent_id = SPDK_BLOBID_INVALID;
 		ctx->clone->back_bs_dev = bs_create_zeroes_dev();
