@@ -61,15 +61,11 @@ seed_destroy_channel(struct spdk_bs_dev *dev, struct spdk_io_channel *channel)
 static void
 seed_destroy(struct spdk_bs_dev *dev)
 {
-	struct spdk_bdev_desc *bdev_desc = dev->bdev_desc;
-
-	// XXX-mg racy
-	dev->bdev_desc = NULL;
-	if (bdev_desc != NULL) {
-		spdk_bdev_close(bdev_desc);
+	if (dev->bdev_desc != NULL) {
+		spdk_bdev_close(dev->bdev_desc);
 	}
 
-	// XXX-mg should this also be freeing dev?
+	free(dev);
 }
 
 static void
@@ -89,7 +85,8 @@ seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payloa
 		return;
 	}
 
-	spdk_bdev_read_blocks(dev->bdev_desc, channel, payload, lba, lba_count, seed_complete, cb_args);
+	spdk_bdev_read_blocks(dev->bdev_desc, channel, payload, lba, lba_count,
+			        seed_complete, cb_args);
 }
 
 static void
@@ -103,15 +100,16 @@ seed_write(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *paylo
 
 static void
 seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
-	     struct iovec *iov, int iovcnt,
-	     uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
+	     struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
+	     struct spdk_bs_dev_cb_args *cb_args)
 {
 	if (dev->bdev_desc == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
 		return;
 	}
 
-	spdk_bdev_readv_blocks(dev->bdev_desc, channel, iov, iovcnt, lba, lba_count, seed_complete, cb_args);
+	spdk_bdev_readv_blocks(dev->bdev_desc, channel, iov, iovcnt, lba,
+			         lba_count, seed_complete, cb_args);
 }
 
 static void
