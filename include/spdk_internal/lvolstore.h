@@ -108,7 +108,7 @@ struct spdk_lvol {
 	char				name[SPDK_LVOL_NAME_MAX];
 	struct spdk_uuid		uuid;
 	char				uuid_str[SPDK_UUID_STRING_LEN];
-	char				bdev_seed[NAME_MAX];
+	char				seed_bdev[NAME_MAX];
 	bool				thin_provision;
 	struct spdk_bdev		*bdev;
 	int				ref_count;

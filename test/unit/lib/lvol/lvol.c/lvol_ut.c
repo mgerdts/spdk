@@ -38,6 +38,9 @@
 
 #include "common/lib/ut_multithread.c"
 
+#define SPDK_BLOBSTORE_H
+#define BLOB_SEED_BDEV "SEED"
+
 #include "lvol/lvol.c"
 
 #define DEV_BUFFER_SIZE (64 * 1024 * 1024)

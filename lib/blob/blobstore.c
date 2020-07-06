@@ -1298,7 +1298,7 @@ blob_load_backing_dev(void *cb_arg)
 			return;
 		}
 
-		rc = blob_get_xattr_value(blob, BLOB_SEED_DEV, &value, &len, true);
+		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, true);
 		if (rc == 0) {
 			char *seed = strndup(value, len);
 
@@ -5316,6 +5316,14 @@ void spdk_bs_create_blob_ext(struct spdk_blob_store *bs, const struct spdk_blob_
 			     spdk_blob_op_with_id_complete cb_fn, void *cb_arg)
 {
 	bs_create_blob(bs, opts, NULL, cb_fn, cb_arg);
+}
+
+void spdk_bs_create_blob_int(struct spdk_blob_store *bs,
+			     const struct spdk_blob_opts *opts,
+			     const struct spdk_blob_xattr_opts *internal_xattrs,
+			     spdk_blob_op_with_id_complete cb_fn, void *cb_arg)
+{
+	bs_create_blob(bs, opts, internal_xattrs, cb_fn, cb_arg);
 }
 
 /* END spdk_bs_create_blob */

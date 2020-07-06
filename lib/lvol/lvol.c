@@ -37,6 +37,8 @@
 #include "spdk/thread.h"
 #include "spdk/blob_bdev.h"
 #include "spdk/util.h"
+// XXX-mg layer violation
+#include "../lib/blob/blobstore.h"
 
 /* Default blob channel opts for lvol */
 #define SPDK_LVOL_BLOB_OPTS_CHANNEL_OPS 512
@@ -982,7 +984,7 @@ lvol_get_xattr_value(void *xattr_ctx, const char *name,
 		*value_len = sizeof(lvol->uuid_str);
 	} else if (!strcmp(BLOB_SEED_BDEV, name)) {
 		*value = lvol->seed_bdev;
-		*value_len = sizeof(lvol_seed_bdev);
+		*value_len = sizeof(lvol->seed_bdev);
 	}
 }
 
@@ -1082,8 +1084,8 @@ spdk_lvol_create(struct spdk_lvol_store *lvs, const char *name, uint64_t sz,
 }
 
 int
-spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs, struct spdk_bdev *bdev,
-			    const char *clone_name,
+spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+			    const char *back_name, const char *clone_name,
 			    spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
 {
 	struct spdk_lvol_with_handle_req *req;
@@ -1092,6 +1094,7 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs, struct spdk_bdev *bdev,
 	struct spdk_blob_opts opts;
 	uint64_t num_clusters;
 	char *xattr_names[] = {LVOL_NAME, "uuid", BLOB_SEED_BDEV};
+	struct spdk_bdev *bdev = spdk_bdev_get_by_name(back_name);;
 	uint64_t sz;
 	int rc;
 
@@ -1137,11 +1140,11 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs, struct spdk_bdev *bdev,
 	lvol->thin_provision = true;
 	lvol->clear_method = BLOB_CLEAR_WITH_DEFAULT;
 	snprintf(lvol->name, sizeof(lvol->name), "%s", clone_name);
-	rc = snprintf(lvol->bdev_seed, sizeof(lvol->bdev_seed), "%s",
+	rc = snprintf(lvol->seed_bdev, sizeof(lvol->seed_bdev), "%s",
 		      spdk_bdev_get_name(bdev));
 	// XXX-mg <= is probably more correct but also more dangerous.  What
 	// sets the upper bound on strlen(bdev->name)?
-	assert(rc < sizeof(lvol->bdev_seed));
+	assert(rc < sizeof(lvol->seed_bdev));
 	TAILQ_INSERT_TAIL(&lvol->lvol_store->pending_lvols, lvol, link);
 	spdk_uuid_generate(&lvol->uuid);
 	spdk_uuid_fmt_lower(lvol->uuid_str, sizeof(lvol->uuid_str), &lvol->uuid);
@@ -1156,7 +1159,7 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs, struct spdk_bdev *bdev,
 	opts.xattrs.ctx = lvol;
 	opts.xattrs.get_value = lvol_get_xattr_value;
 
-	spdk_bs_create_blob_ext(lvs->blobstore, &opts, lvol_create_cb, req);
+	spdk_bs_create_blob_int(lvs->blobstore, &opts, NULL, lvol_create_cb, req);
 
 	return 0;
 }
