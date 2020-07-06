@@ -489,6 +489,7 @@ SPDK_RPC_REGISTER("bdev_lvol_snapshot", rpc_bdev_lvol_snapshot, SPDK_RPC_RUNTIME
 SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_lvol_snapshot, snapshot_lvol_bdev)
 
 struct rpc_bdev_lvol_clone {
+	char *bdev_name;
 	char *snapshot_name;
 	char *clone_name;
 };
@@ -501,6 +502,7 @@ free_rpc_bdev_lvol_clone(struct rpc_bdev_lvol_clone *req)
 }
 
 static const struct spdk_json_object_decoder rpc_bdev_lvol_clone_decoders[] = {
+	{"bdev_name", offsetof(struct rpc_bdev_lvol_clone, bdev_name), spdk_json_decode_string},
 	{"snapshot_name", offsetof(struct rpc_bdev_lvol_clone, snapshot_name), spdk_json_decode_string},
 	{"clone_name", offsetof(struct rpc_bdev_lvol_clone, clone_name), spdk_json_decode_string, true},
 };
@@ -532,6 +534,7 @@ rpc_bdev_lvol_clone(struct spdk_jsonrpc_request *request,
 	struct rpc_bdev_lvol_clone req = {};
 	struct spdk_bdev *bdev;
 	struct spdk_lvol *lvol;
+	char *name;
 
 	SPDK_INFOLOG(SPDK_LOG_LVOL_RPC, "Cloning blob\n");
 
@@ -544,21 +547,40 @@ rpc_bdev_lvol_clone(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	bdev = spdk_bdev_get_by_name(req.snapshot_name);
+	if ((req.bdev_name != NULL && req.snapshot_name != NULL) ||
+	      (req.bdev_name == NULL && req.snapshot_name == NULL)) {
+		SPDK_INFOLOG(SPDK_LOG_LVOL_RPC, "bdev or snapshot must be specified\n");
+		spdk_jsonrpc_send_error_response(request, -EINVAL, spdk_strerror(EINVAL));
+		goto cleanup;
+	}
+
+	name = req.snapshot_name != NULL ? req.snapshot_name : req.bdev_name;
+	bdev = spdk_bdev_get_by_name(req.name);
 	if (bdev == NULL) {
-		SPDK_INFOLOG(SPDK_LOG_LVOL_RPC, "bdev '%s' does not exist\n", req.snapshot_name);
+		SPDK_INFOLOG(SPDK_LOG_LVOL_RPC, "bdev '%s' does not exist\n", req.name);
 		spdk_jsonrpc_send_error_response(request, -ENODEV, spdk_strerror(ENODEV));
 		goto cleanup;
 	}
 
 	lvol = vbdev_lvol_get_from_bdev(bdev);
-	if (lvol == NULL) {
-		SPDK_ERRLOG("lvol does not exist\n");
+	if (req.snapshot_name != NULL) {
+		/* Clone a non-lvol bdev */
+		if (lvol == NULL) {
+			SPDK_ERRLOG("lvol does not exist\n");
+			spdk_jsonrpc_send_error_response(request, -ENODEV, spdk_strerror(ENODEV));
+			goto cleanup;
+		}
+		vbdev_lvol_create_clone(lvol, req.clone_name, rpc_bdev_lvol_clone_cb, request);
+		return
+	}
+	if (lvol != NULL) {
+		SPDK_ERRLOG("bdev '%s' is a lvol, use 'snapshot_name' not \n",
+			      req.bdev_name);
 		spdk_jsonrpc_send_error_response(request, -ENODEV, spdk_strerror(ENODEV));
 		goto cleanup;
 	}
-
-	vbdev_lvol_create_clone(lvol, req.clone_name, rpc_bdev_lvol_clone_cb, request);
+	vbdev_lvol_create_bdev_clone(bdev, req.bdev_name, req.clone_name,
+				      rpc_bdev_lvol_clone_cb, request);
 
 cleanup:
 	free_rpc_bdev_lvol_clone(&req);

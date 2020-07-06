@@ -211,6 +211,19 @@ void spdk_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 			    spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg);
 
 /**
+ * Create clone of given non-lvol bdev.
+ *
+ * \param lvs Handle to lvolstore.
+ * \param bdev Handle to non-lvol bdev.
+ * \param clone_name Name of created clone.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Completion callback custom arguments.
+ */
+void spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+				 struct spdk_bdev *back_bdev, const char *clone_name,
+				 spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg);
+
+/**
  * Rename lvol with new_name.
  *
  * \param lvol Handle to lvol.

@@ -976,9 +976,13 @@ lvol_get_xattr_value(void *xattr_ctx, const char *name,
 	if (!strcmp(LVOL_NAME, name)) {
 		*value = lvol->name;
 		*value_len = SPDK_LVOL_NAME_MAX;
+		return;
 	} else if (!strcmp("uuid", name)) {
 		*value = lvol->uuid_str;
 		*value_len = sizeof(lvol->uuid_str);
+	} else if (!strcmp(BLOB_SEED_BDEV, name)) {
+		*value = lvol->seed_bdev;
+		*value_len = sizeof(lvol_seed_bdev);
 	}
 }
 
@@ -1065,6 +1069,86 @@ spdk_lvol_create(struct spdk_lvol_store *lvs, const char *name, uint64_t sz,
 
 	spdk_blob_opts_init(&opts);
 	opts.thin_provision = thin_provision;
+	opts.num_clusters = num_clusters;
+	opts.clear_method = lvol->clear_method;
+	opts.xattrs.count = SPDK_COUNTOF(xattr_names);
+	opts.xattrs.names = xattr_names;
+	opts.xattrs.ctx = lvol;
+	opts.xattrs.get_value = lvol_get_xattr_value;
+
+	spdk_bs_create_blob_ext(lvs->blobstore, &opts, lvol_create_cb, req);
+
+	return 0;
+}
+
+int
+spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs, struct spdk_bdev *bdev,
+			    const char *clone_name,
+			    spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+	struct spdk_blob_store *bs;
+	struct spdk_lvol *lvol;
+	struct spdk_blob_opts opts;
+	uint64_t num_clusters;
+	char *xattr_names[] = {LVOL_NAME, "uuid", BLOB_SEED_BDEV};
+	uint64_t sz;
+	int rc;
+
+	if (lvs == NULL) {
+		SPDK_ERRLOG("lvol store does not exist\n");
+		return -EINVAL;
+	}
+
+	if (bdev == NULL) {
+		SPDK_ERRLOG("bdev does not exist\n");
+		return -EINVAL;
+	}
+
+	if (spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_WRITE)) {
+		SPDK_ERRLOG("bdev is not read-only\n");
+		return (-EINVAL);
+	}
+
+	rc = lvs_verify_lvol_name(lvs, clone_name);
+	if (rc < 0) {
+		return rc;
+	}
+
+	sz = spdk_bdev_get_num_blocks(bdev) * spdk_bdev_get_block_size(bdev);
+	bs = lvs->blobstore;
+
+	req = calloc(1, sizeof(*req));
+	if (!req) {
+		SPDK_ERRLOG("Cannot alloc memory for lvol request pointer\n");
+		return -ENOMEM;
+	}
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+
+	lvol = calloc(1, sizeof(*lvol));
+	if (!lvol) {
+		free(req);
+		SPDK_ERRLOG("Cannot alloc memory for lvol base pointer\n");
+		return -ENOMEM;
+	}
+	lvol->lvol_store = lvs;
+	num_clusters = spdk_divide_round_up(sz, spdk_bs_get_cluster_size(bs));
+	lvol->thin_provision = true;
+	lvol->clear_method = BLOB_CLEAR_WITH_DEFAULT;
+	snprintf(lvol->name, sizeof(lvol->name), "%s", clone_name);
+	rc = snprintf(lvol->bdev_seed, sizeof(lvol->bdev_seed), "%s",
+		      spdk_bdev_get_name(bdev));
+	// XXX-mg <= is probably more correct but also more dangerous.  What
+	// sets the upper bound on strlen(bdev->name)?
+	assert(rc < sizeof(lvol->bdev_seed));
+	TAILQ_INSERT_TAIL(&lvol->lvol_store->pending_lvols, lvol, link);
+	spdk_uuid_generate(&lvol->uuid);
+	spdk_uuid_fmt_lower(lvol->uuid_str, sizeof(lvol->uuid_str), &lvol->uuid);
+	req->lvol = lvol;
+
+	spdk_blob_opts_init(&opts);
+	opts.thin_provision = true;
 	opts.num_clusters = num_clusters;
 	opts.clear_method = lvol->clear_method;
 	opts.xattrs.count = SPDK_COUNTOF(xattr_names);

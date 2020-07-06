@@ -239,7 +239,7 @@ enum spdk_blob_op_type {
 #define BLOB_SNAPSHOT "SNAP"
 #define SNAPSHOT_IN_PROGRESS "SNAPTMP"
 #define SNAPSHOT_PENDING_REMOVAL "SNAPRM"
-#define BLOB_SEED_DEV "SEED"
+#define BLOB_SEED_BDEV "SEED"
 
 struct spdk_blob_bs_dev {
 	struct spdk_bs_dev bs_dev;

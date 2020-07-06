@@ -5752,6 +5752,7 @@ bs_clone_origblob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 	struct spdk_clone_snapshot_ctx	*ctx = (struct spdk_clone_snapshot_ctx *)cb_arg;
 	struct spdk_blob_opts		opts;
 	struct spdk_blob_xattr_opts internal_xattrs;
+	// XXX-mg need something like this function for bdev_clone
 	char *xattr_names[] = { BLOB_SNAPSHOT };
 
 	if (bserrno != 0) {

@@ -61,6 +61,7 @@ seed_destroy_channel(struct spdk_bs_dev *dev, struct spdk_io_channel *channel)
 static void
 seed_destroy(struct spdk_bs_dev *dev)
 {
+
 	if (dev->bdev_desc != NULL) {
 		spdk_bdev_close(dev->bdev_desc);
 	}
