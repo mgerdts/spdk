@@ -76,6 +76,7 @@ struct file_disk {
 	int			fd;
 	TAILQ_ENTRY(file_disk)  link;
 	bool			block_size_override;
+	bool			read_only;
 };
 
 /* For user space reaping of completions */
@@ -122,11 +123,12 @@ static int
 bdev_aio_open(struct file_disk *disk)
 {
 	int fd;
+	int flags = disk->read_only ? O_RDONLY : O_RDWR;
 
-	fd = open(disk->filename, O_RDWR | O_DIRECT);
+	fd = open(disk->filename, flags | O_DIRECT);
 	if (fd < 0) {
 		/* Try without O_DIRECT for non-disk files */
-		fd = open(disk->filename, O_RDWR);
+		fd = open(disk->filename, flags);
 		if (fd < 0) {
 			SPDK_ERRLOG("open() failed (file:%s), errno %d: %s\n",
 				    disk->filename, errno, spdk_strerror(errno));
@@ -464,12 +466,14 @@ static void bdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_bdev
 static bool
 bdev_aio_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 {
+	struct file_disk *fdisk = ctx;
 	switch (io_type) {
 	case SPDK_BDEV_IO_TYPE_READ:
-	case SPDK_BDEV_IO_TYPE_WRITE:
-	case SPDK_BDEV_IO_TYPE_FLUSH:
 	case SPDK_BDEV_IO_TYPE_RESET:
 		return true;
+	case SPDK_BDEV_IO_TYPE_WRITE:
+	case SPDK_BDEV_IO_TYPE_FLUSH:
+		return (!fdisk->read_only);
 
 	default:
 		return false;
@@ -531,6 +535,9 @@ bdev_aio_write_json_config(struct spdk_bdev *bdev, struct spdk_json_write_ctx *w
 	if (fdisk->block_size_override) {
 		spdk_json_write_named_uint32(w, "block_size", bdev->blocklen);
 	}
+	if (!spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_WRITE)) {
+		spdk_json_write_named_bool(w, "read_only", true);
+	}
 	spdk_json_write_named_string(w, "filename", fdisk->filename);
 	spdk_json_write_object_end(w);
 
@@ -581,7 +588,7 @@ bdev_aio_group_destroy_cb(void *io_device, void *ctx_buf)
 }
 
 int
-create_aio_bdev(const char *name, const char *filename, uint32_t block_size)
+create_aio_bdev(const char *name, const char *filename, uint32_t block_size, bool read_only)
 {
 	struct file_disk *fdisk;
 	uint32_t detected_block_size;
@@ -599,6 +606,8 @@ create_aio_bdev(const char *name, const char *filename, uint32_t block_size)
 		rc = -ENOMEM;
 		goto error_return;
 	}
+
+	fdisk->read_only = read_only;
 
 	if (bdev_aio_open(fdisk)) {
 		SPDK_ERRLOG("Unable to open file %s. fd: %d errno: %d\n", filename, fdisk->fd, errno);
@@ -771,7 +780,8 @@ bdev_aio_initialize(void)
 			block_size = (uint32_t)tmp;
 		}
 
-		rc = create_aio_bdev(name, file, block_size);
+		// XXX-mg need to get boolval, but I don't know how that is stored.
+		rc = create_aio_bdev(name, file, block_size, false);
 		if (rc) {
 			SPDK_ERRLOG("Unable to create AIO bdev from file %s, err is %s\n", file, spdk_strerror(-rc));
 		}

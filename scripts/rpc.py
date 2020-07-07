@@ -347,6 +347,7 @@ if __name__ == "__main__":
     p.add_argument('filename', help='Path to device or file (ex: /dev/sda)')
     p.add_argument('name', help='Block device name')
     p.add_argument('block_size', help='Block size for this bdev', type=int, nargs='?', default=0)
+    p.add_argument("-r", "--readonly", action='store_true', help='Set bdev as read-only')
     p.set_defaults(func=bdev_aio_create)
 
     def bdev_aio_delete(args):

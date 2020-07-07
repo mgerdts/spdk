@@ -297,7 +297,7 @@ def bdev_raid_delete(client, name):
 
 
 @deprecated_alias('construct_aio_bdev')
-def bdev_aio_create(client, filename, name, block_size=None):
+def bdev_aio_create(client, filename, name, block_size=None, read_only=None):
     """Construct a Linux AIO block device.
 
     Args:
@@ -313,6 +313,8 @@ def bdev_aio_create(client, filename, name, block_size=None):
 
     if block_size:
         params['block_size'] = block_size
+    if read_only:
+        params['read_only'] = read_only
 
     return client.call('bdev_aio_create', params)
 
