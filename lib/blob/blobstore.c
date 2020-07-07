@@ -1298,7 +1298,8 @@ blob_load_backing_dev(void *cb_arg)
 			return;
 		}
 
-		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, true);
+		// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
+		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, false);
 		if (rc == 0) {
 			char *seed = strndup(value, len);
 
