@@ -35,35 +35,55 @@
 #include "spdk/blob.h"
 #include "spdk/bdev.h"
 #include "spdk/thread.h"
-#include "spdk/log.h"
+#include "spdk_internal/log.h"
 
 #include "blobstore.h"
+
+struct seed_ctx {
+	struct spdk_bdev *bdev;
+	struct spdk_bdev_desc *bdev_desc;
+	struct spdk_io_channel *bdev_io_channel;
+};
 
 // XXX-mg
 // This feels like it needs reference counting to handle races with the destroy callback
 
+#if 0
 static struct spdk_io_channel *
 seed_create_channel(struct spdk_bs_dev *dev)
 {
+	struct spdk_io_channel *channel;
+
 	if (dev->bdev_desc == NULL) {
+		SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p has no seed descriptor\n", dev);
 		return NULL;
 	}
 
-	return spdk_bdev_get_io_channel(dev->bdev_desc);
+	channel = spdk_bdev_get_io_channel(dev->bdev_desc);
+	SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p created channel %p\n", dev, channel);
+	return channel;
 }
 
 static void
 seed_destroy_channel(struct spdk_bs_dev *dev, struct spdk_io_channel *channel)
 {
+	SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p destroying channel %p\n", dev, channel);
 	spdk_put_io_channel(channel);
 }
+#endif
 
 static void
 seed_destroy(struct spdk_bs_dev *dev)
 {
+	struct seed_ctx *ctx = dev->ctx;
 
-	if (dev->bdev_desc != NULL) {
-		spdk_bdev_close(dev->bdev_desc);
+	if (ctx != NULL) {
+		if (ctx->bdev_io_channel != NULL) {
+			spdk_put_io_channel(ctx->bdev_io_channel);
+		}
+		if (ctx->bdev_desc != NULL) {
+			spdk_bdev_close(ctx->bdev_desc);
+		}
 	}
 
 	free(dev);
@@ -81,13 +101,15 @@ static void
 seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
 	    uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
 {
-	if (dev->bdev_desc == NULL) {
+	struct seed_ctx *ctx = dev->ctx;
+
+	if (ctx->bdev_desc == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
 		return;
 	}
 
-	spdk_bdev_read_blocks(dev->bdev_desc, channel, payload, lba, lba_count,
-			        seed_complete, cb_args);
+	spdk_bdev_read_blocks(ctx->bdev_desc, ctx->bdev_io_channel, payload,
+			      lba, lba_count, seed_complete, cb_args);
 }
 
 static void
@@ -104,13 +126,15 @@ seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	     struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
 	     struct spdk_bs_dev_cb_args *cb_args)
 {
-	if (dev->bdev_desc == NULL) {
+	struct seed_ctx *ctx = dev->ctx;
+
+	if (ctx->bdev_desc == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
 		return;
 	}
 
-	spdk_bdev_readv_blocks(dev->bdev_desc, channel, iov, iovcnt, lba,
-			         lba_count, seed_complete, cb_args);
+	spdk_bdev_readv_blocks(ctx->bdev_desc, ctx->bdev_io_channel, iov,
+			       iovcnt, lba, lba_count, seed_complete, cb_args);
 }
 
 static void
@@ -144,11 +168,12 @@ seed_unmap(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 static void
 seed_back_remove_cb(void *data)
 {
-	struct spdk_bs_dev *bsdev = data;
-	struct spdk_bdev_desc *bdev_desc = bsdev->bdev_desc;
+	struct seed_ctx *ctx = data;
+	struct spdk_bdev_desc *bdev_desc = ctx->bdev_desc;
 
 	if (bdev_desc != NULL) {
-		bsdev->bdev_desc = NULL;
+		ctx->bdev_desc = NULL;
+		// XXX-mg what about channel?
 		spdk_bdev_close(bdev_desc);
 	}
 }
@@ -158,6 +183,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 {
 	struct spdk_bdev *bdev;
 	struct spdk_bs_dev *back;
+	struct seed_ctx *ctx;
 	int ret;
 
 	bdev = spdk_bdev_get_by_name(seedname);
@@ -172,21 +198,36 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 		return (-EINVAL);
 	}
 
-	back = calloc(1, sizeof (*back));
-	if (back == NULL) {
+	ctx = calloc(1, sizeof (*ctx));
+	if (ctx == NULL) {
 		return (-ENOMEM);
 	}
 
-	ret = spdk_bdev_open(bdev, false, seed_back_remove_cb, back, &back->bdev_desc);
+	ctx->bdev = bdev;
+	ret = spdk_bdev_open(bdev, false, seed_back_remove_cb, ctx, &ctx->bdev_desc);
 	if (ret != 0) {
-		free(back);
+		free(ctx);
 		return (ret);
+	}
+
+	ctx->bdev_io_channel = spdk_bdev_get_io_channel(ctx->bdev_desc);
+	if (ctx->bdev_io_channel == NULL) {
+		spdk_bdev_close(ctx->bdev_desc);
+		free(ctx);
 	}
 	// XXX-mg should set bdev->claimed, but need to coordinate among all
 	// instances that have this one open.
 
-	back->create_channel = seed_create_channel;
-	back->destroy_channel = seed_destroy_channel;
+	back = calloc(1, sizeof (*back));
+	if (back == NULL) {
+		spdk_bdev_close(ctx->bdev_desc);
+		spdk_put_io_channel(ctx->bdev_io_channel);
+		free(ctx);
+		return (-ENOMEM);
+	}
+
+	back->create_channel = NULL; //XXX-mg seed_create_channel;
+	back->destroy_channel = NULL; //seed_destroy_channel;
 	back->destroy = seed_destroy;
 	back->read = seed_read;
 	back->write = seed_write;
@@ -196,6 +237,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 	back->unmap = seed_unmap;
 	back->blockcnt = spdk_bdev_get_num_blocks(bdev);
 	back->blocklen = spdk_bdev_get_block_size(bdev);
+	back->ctx = ctx;
 
 	front->back_bs_dev = back;
 

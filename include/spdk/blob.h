@@ -195,7 +195,7 @@ struct spdk_bs_dev {
 	uint32_t	blocklen; /* In bytes */
 
 	/* the seed bdev descriptor for some sparse lvols */
-	struct spdk_bdev_desc	*bdev_desc;
+	void *ctx;
 };
 
 struct spdk_bs_type {
