@@ -83,7 +83,7 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 #define SPDK_BDEV_QOS_LIMIT_NOT_DEFINED		UINT64_MAX
 #define SPDK_BDEV_IO_POLL_INTERVAL_IN_MSEC	1000
 
-#define SPDK_BDEV_POOL_ALIGNMENT 512
+#define SPDK_BDEV_POOL_ALIGNMENT 4096
 
 static const char *qos_conf_type[] = {"Limit_IOPS",
 				      "Limit_BPS", "Limit_Read_BPS", "Limit_Write_BPS"
@@ -789,8 +789,10 @@ bdev_io_get_buf(struct spdk_bdev_io *bdev_io, uint64_t len)
 
 	if (len + alignment + md_len > SPDK_BDEV_BUF_SIZE_WITH_MD(SPDK_BDEV_LARGE_BUF_MAX_SIZE) +
 	    SPDK_BDEV_POOL_ALIGNMENT) {
-		SPDK_ERRLOG("Length + alignment %" PRIu64 " is larger than allowed\n",
-			    len + alignment);
+		SPDK_ERRLOG("Length (%" PRIu64 ") + alignment (%" PRIu64 ") + "
+			    "md_len (%" PRIu64 ") %" PRIu64
+			    " is larger than allowed\n", len, alignment, md_len,
+			    len + alignment + md_len);
 		bdev_io_get_buf_complete(bdev_io, NULL, false);
 		return;
 	}
