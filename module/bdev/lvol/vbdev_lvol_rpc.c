@@ -607,7 +607,10 @@ rpc_bdev_lvol_clone(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	vbdev_lvol_create_bdev_clone(lvs, name, req.clone_name, rpc_bdev_lvol_clone_cb, request);
+	rc = vbdev_lvol_create_bdev_clone(lvs, name, req.clone_name, rpc_bdev_lvol_clone_cb, request);
+	if (rc != 0) {
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+	}
 
 cleanup:
 	free_rpc_bdev_lvol_clone(&req);

@@ -1059,7 +1059,7 @@ vbdev_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 	spdk_lvol_create_clone(lvol, clone_name, _vbdev_lvol_create_cb, req);
 }
 
-void
+int
 vbdev_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 			     const char *back_name, const char *clone_name,
 			     spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
@@ -1075,7 +1075,7 @@ vbdev_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 	req->cb_fn = cb_fn;
 	req->cb_arg = cb_arg;
 
-	spdk_lvol_create_bdev_clone(lvs, back_name, clone_name,
+	return spdk_lvol_create_bdev_clone(lvs, back_name, clone_name,
 				    _vbdev_lvol_create_cb, req);
 }
 
