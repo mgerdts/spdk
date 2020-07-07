@@ -48,18 +48,18 @@ struct seed_ctx {
 // XXX-mg
 // This feels like it needs reference counting to handle races with the destroy callback
 
-#if 0
 static struct spdk_io_channel *
 seed_create_channel(struct spdk_bs_dev *dev)
 {
 	struct spdk_io_channel *channel;
+	struct seed_ctx *ctx = dev->ctx;
 
-	if (dev->bdev_desc == NULL) {
+	if (ctx == NULL || ctx->bdev_desc == NULL) {
 		SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p has no seed descriptor\n", dev);
 		return NULL;
 	}
 
-	channel = spdk_bdev_get_io_channel(dev->bdev_desc);
+	channel = spdk_bdev_get_io_channel(ctx->bdev_desc);
 	SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p created channel %p\n", dev, channel);
 	return channel;
 }
@@ -70,7 +70,6 @@ seed_destroy_channel(struct spdk_bs_dev *dev, struct spdk_io_channel *channel)
 	SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p destroying channel %p\n", dev, channel);
 	spdk_put_io_channel(channel);
 }
-#endif
 
 static void
 seed_destroy(struct spdk_bs_dev *dev)
@@ -108,7 +107,7 @@ seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payloa
 		return;
 	}
 
-	spdk_bdev_read_blocks(ctx->bdev_desc, ctx->bdev_io_channel, payload,
+	spdk_bdev_read_blocks(ctx->bdev_desc, cb_args->channel, payload,
 			      lba, lba_count, seed_complete, cb_args);
 }
 
@@ -133,7 +132,7 @@ seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		return;
 	}
 
-	spdk_bdev_readv_blocks(ctx->bdev_desc, ctx->bdev_io_channel, iov,
+	spdk_bdev_readv_blocks(ctx->bdev_desc, cb_args->channel, iov,
 			       iovcnt, lba, lba_count, seed_complete, cb_args);
 }
 
@@ -226,8 +225,8 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 		return (-ENOMEM);
 	}
 
-	back->create_channel = NULL; //XXX-mg seed_create_channel;
-	back->destroy_channel = NULL; //seed_destroy_channel;
+	back->create_channel = seed_create_channel;
+	back->destroy_channel = seed_destroy_channel;
 	back->destroy = seed_destroy;
 	back->read = seed_read;
 	back->write = seed_write;
