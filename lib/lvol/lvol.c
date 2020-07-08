@@ -1144,7 +1144,7 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 		      spdk_bdev_get_name(bdev));
 	// XXX-mg <= is probably more correct but also more dangerous.  What
 	// sets the upper bound on strlen(bdev->name)?
-	assert(rc < sizeof(lvol->seed_bdev));
+	assert(rc < (int)sizeof (lvol->seed_bdev));
 	TAILQ_INSERT_TAIL(&lvol->lvol_store->pending_lvols, lvol, link);
 	spdk_uuid_generate(&lvol->uuid);
 	spdk_uuid_fmt_lower(lvol->uuid_str, sizeof(lvol->uuid_str), &lvol->uuid);

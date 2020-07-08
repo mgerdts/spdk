@@ -1069,7 +1069,7 @@ vbdev_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 	req = calloc(1, sizeof(*req));
 	if (req == NULL) {
 		cb_fn(cb_arg, NULL, -ENOMEM);
-		return;
+		return 0;
 	}
 
 	req->cb_fn = cb_fn;
