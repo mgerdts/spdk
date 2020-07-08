@@ -5879,7 +5879,13 @@ bs_inflate_blob_done(void *cb_arg, int bserrno)
 		_blob->back_bs_dev = NULL;
 		_blob->parent_id = SPDK_BLOBID_INVALID;
 	} else {
-	// XXX-mg something for seed here?
+		// XXX-mg something for seed here?
+		// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
+		const void *value;
+		size_t len;
+		int rc = blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &value, &len, false);
+		assert(rc != 0);
+
 		_parent = ((struct spdk_blob_bs_dev *)(_blob->back_bs_dev))->blob;
 		if (_parent->parent_id != SPDK_BLOBID_INVALID) {
 			/* We must change the parent of the inflated blob */
