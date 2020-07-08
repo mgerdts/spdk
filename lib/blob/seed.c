@@ -191,12 +191,6 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 		return (-ENOENT);
 	}
 
-	/* The seed device must be read-only. */
-	if (spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_WRITE)) {
-		SPDK_ERRLOG("seed device %s is not read-only\n", seedname);
-		return (-EINVAL);
-	}
-
 	ctx = calloc(1, sizeof (*ctx));
 	if (ctx == NULL) {
 		return (-ENOMEM);
