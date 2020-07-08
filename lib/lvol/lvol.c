@@ -1108,11 +1108,6 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 		return -EINVAL;
 	}
 
-	if (spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_WRITE)) {
-		SPDK_ERRLOG("bdev is not read-only\n");
-		return (-EINVAL);
-	}
-
 	rc = lvs_verify_lvol_name(lvs, clone_name);
 	if (rc < 0) {
 		return rc;
