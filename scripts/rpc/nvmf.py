@@ -148,7 +148,7 @@ def nvmf_create_transport(client,
         params['max_queue_depth'] = max_queue_depth
     if max_qpairs_per_ctrlr:
         params['max_qpairs_per_ctrlr'] = max_qpairs_per_ctrlr
-    if in_capsule_data_size:
+    if in_capsule_data_size is not None:
         params['in_capsule_data_size'] = in_capsule_data_size
     if max_io_size:
         params['max_io_size'] = max_io_size
