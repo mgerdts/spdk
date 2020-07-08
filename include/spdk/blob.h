@@ -68,6 +68,7 @@ extern "C" {
 
 typedef uint64_t spdk_blob_id;
 #define SPDK_BLOBID_INVALID	(uint64_t)-1
+#define SPDK_BLOBID_SEED	(uint64_t)-2
 #define SPDK_BLOBSTORE_TYPE_LENGTH 16
 
 enum blob_clear_method {

@@ -1312,6 +1312,10 @@ blob_load_backing_dev(void *cb_arg)
 			rc = bs_create_seed_dev(blob, seed);
 			free(seed);
 			blob_load_final(ctx, rc);
+
+			blob->parent_id = SPDK_BLOBID_SEED;
+			SPDK_DEBUGLOG(SPDK_LOG_BLOB, "MG blob %lu using seed bdev %s\n",
+				     blob->id, seed);
 			return;
 		}
 
@@ -2991,7 +2995,7 @@ bs_blob_list_add(struct spdk_blob *blob)
 	assert(blob != NULL);
 
 	snapshot_id = blob->parent_id;
-	if (snapshot_id == SPDK_BLOBID_INVALID) {
+	if (snapshot_id == SPDK_BLOBID_INVALID || snapshot_id == SPDK_BLOBID_SEED) {
 		return 0;
 	}
 
@@ -5530,6 +5534,7 @@ bs_snapshot_newblob_sync_cpl(void *cb_arg, int bserrno)
 	}
 
 	bs_blob_list_remove(origblob);
+	// XXX-mg does this break bdev clones?
 	origblob->parent_id = newblob->id;
 
 	/* Create new back_bs_dev for snapshot */
@@ -5870,6 +5875,13 @@ bs_inflate_blob_done(void *cb_arg, int bserrno)
 		return;
 	}
 
+	// XXX-mg something for seed here?
+	// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
+	const void *value;
+	size_t len;
+	int rc = blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &value, &len, false);
+	assert(rc != 0);
+
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
 		bs_blob_list_remove(_blob);
@@ -5879,13 +5891,6 @@ bs_inflate_blob_done(void *cb_arg, int bserrno)
 		_blob->back_bs_dev = NULL;
 		_blob->parent_id = SPDK_BLOBID_INVALID;
 	} else {
-		// XXX-mg something for seed here?
-		// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
-		const void *value;
-		size_t len;
-		int rc = blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &value, &len, false);
-		assert(rc != 0);
-
 		_parent = ((struct spdk_blob_bs_dev *)(_blob->back_bs_dev))->blob;
 		if (_parent->parent_id != SPDK_BLOBID_INVALID) {
 			/* We must change the parent of the inflated blob */
@@ -5921,6 +5926,14 @@ bs_cluster_needs_allocation(struct spdk_blob *blob, uint64_t cluster, bool alloc
 	if (blob->parent_id == SPDK_BLOBID_INVALID) {
 		/* Blob have no parent blob */
 		return allocate_all;
+	}
+
+	if (blob->parent_id == SPDK_BLOBID_SEED) {
+		// XXX-mg verify this.  I assume that this is in the write or
+		// inflate path trying to figure out if it needs to do a CoW.
+		// However, if cluster in question is a zero cluster, it would
+		// be swell to not allocate it.
+		return true;
 	}
 
 	b = (struct spdk_blob_bs_dev *)blob->back_bs_dev;
@@ -6280,6 +6293,9 @@ delete_snapshot_sync_snapshot_cpl(void *cb_arg, int bserrno)
 	assert(TAILQ_EMPTY(&snapshot_entry->clones));
 
 	if (ctx->snapshot->parent_id != SPDK_BLOBID_INVALID) {
+		// XXX-mg verify this is all that is needed.
+		assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
+
 		/* This snapshot is at the same time a clone of another snapshot - we need to
 		 * update parent snapshot (remove current clone, add new one inherited from
 		 * the snapshot that is being removed) */
@@ -6384,6 +6400,10 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 	/* Delete old backing bs_dev from clone (related to snapshot that will be removed) */
 	ctx->clone->back_bs_dev->destroy(ctx->clone->back_bs_dev);
 
+	// XXX-mg verify this is all that is needed.
+	assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
+	assert(ctx->clone->parent_id != SPDK_BLOBID_SEED);
+
 	/* Set/remove snapshot xattr and switch parent ID and backing bs_dev on clone... */
 	if (ctx->parent_snapshot_entry != NULL) {
 		/* ...to parent snapshot */
@@ -6393,7 +6413,6 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 			       sizeof(spdk_blob_id),
 			       true);
 	} else {
-	// XXX-mg something for seed here?
 		/* ...to blobid invalid and zeroes dev */
 		ctx->clone->parent_id = SPDK_BLOBID_INVALID;
 		ctx->clone->back_bs_dev = bs_create_zeroes_dev();
