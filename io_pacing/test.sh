@@ -81,6 +81,11 @@ function print_report()
     local SUM_BW_MAX_R=0
     local SUM_BW_STDDEV_R=0
     local SUM_LAT_AVG_R=0
+    local SUM_IOPS_W=0
+    local SUM_BW_W=0
+    local SUM_BW_MAX_W=0
+    local SUM_BW_STDDEV_W=0
+    local SUM_LAT_AVG_W=0
 
     echo "Test parameters"
     echo "Time        : $TEST_TIME"
@@ -98,22 +103,41 @@ function print_report()
     local count=0
     for host in $HOSTS; do
 	parse_fio $OUT_PATH/fio-$host.json
+
 	SUM_IOPS_R=$(m $SUM_IOPS_R + $IOPS_R)
 	SUM_BW_R=$(m $SUM_BW_R + $BW_R)
 	SUM_BW_MAX_R=$(m $SUM_BW_MAX_R + $BW_MAX_R)
 	SUM_BW_STDDEV_R=$(m $SUM_BW_STDDEV_R + $BW_STDDEV_R^2)
 	SUM_LAT_AVG_R=$(m $SUM_LAT_AVG_R + $LAT_AVG_R)
 
-	printf "$FORMAT" $host $(m $IOPS_R/1000) $(m $BW_R*8/1000^3) "$(m $BW_MAX_R*8*1024/1000^3)" $(m $LAT_AVG_R/1000) "" "$(m $BW_STDDEV_R*8*1024/1000^3)"
+	SUM_IOPS_W=$(m $SUM_IOPS_W + $IOPS_W)
+	SUM_BW_W=$(m $SUM_BW_W + $BW_W)
+	SUM_BW_MAX_W=$(m $SUM_BW_MAX_W + $BW_MAX_W)
+	SUM_BW_STDDEV_W=$(m $SUM_BW_STDDEV_W + $BW_STDDEV_W^2)
+	SUM_LAT_AVG_W=$(m $SUM_LAT_AVG_W + $LAT_AVG_W)
+
+	# @todo: add support for mixed case
+	if [[ "$RW" == *"read"* ]]; then
+	    printf "$FORMAT" $host $(m $IOPS_R/1000) $(m $BW_R*8/1000^3) "$(m $BW_MAX_R*8*1024/1000^3)" $(m $LAT_AVG_R/1000) "" "$(m $BW_STDDEV_R*8*1024/1000^3)"
+	elif  [[ "$RW" == *"write"* ]]; then
+	    printf "$FORMAT" $host $(m $IOPS_W/1000) $(m $BW_W*8/1000^3) "$(m $BW_MAX_W*8*1024/1000^3)" $(m $LAT_AVG_W/1000) "" "$(m $BW_STDDEV_W*8*1024/1000^3)"
+	else
+	    printf "$FORMAT" "$host" "N/A"
+	fi
+
 	((count+=1))
     done
     SUM_LAT_AVG_R=$(m $SUM_LAT_AVG_R / $count)
     SUM_BW_STDDEV_R=$(m "sqrt($SUM_BW_STDDEV_R / $count)")
+    SUM_LAT_AVG_W=$(m $SUM_LAT_AVG_W / $count)
+    SUM_BW_STDDEV_W=$(m "sqrt($SUM_BW_STDDEV_W / $count)")
 
     printf "$FORMAT" | tr " " "-"
 
     if [ "1" == "$ENABLE_DEVICE_COUNTERS" ]; then
 	local TX_BW_WIRE=$(jq '.analysis[].analysisAttribute | select(.name=="TX BandWidth") | .value' $OUT_PATH/device-counters.json 2>/dev/null)
+	local RX_BW_WIRE=$(jq '.analysis[].analysisAttribute | select(.name=="RX BandWidth") | .value' $OUT_PATH/device-counters.json 2>/dev/null)
+
 	local L3_HIT_RATE=0
 	for l3hr in $(grep -Po "(?<=Hit Rate: )[0-9]*\.[0-9]*(?=%)" $OUT_PATH/bf_counters.log); do
 	    L3_HIT_RATE=$(m $L3_HIT_RATE + $l3hr)
@@ -138,7 +162,15 @@ function print_report()
 	local PACER_PERIOD=$(m 10^6*$TOTAL_TICKS/$TICK_RATE/$TOTAL_POLLS)
 
     fi
-    printf "$FORMAT" "Total" $(m $SUM_IOPS_R/1000) $(m $SUM_BW_R*8/1000^3)  $(m $SUM_BW_MAX_R*8*1024/1000^3) "$(m $SUM_LAT_AVG_R/1000)" "$TX_BW_WIRE" "$(m $SUM_BW_STDDEV_R*8*1024/1000^3)" "$L3_HIT_RATE" "$BUFFERS_ALLOCATED" "$PACER_PERIOD"
+
+    # @todo: add support for mixed case
+    if [[ "$RW" == *"read"* ]]; then
+	printf "$FORMAT" "Total" $(m $SUM_IOPS_R/1000) $(m $SUM_BW_R*8/1000^3)  $(m $SUM_BW_MAX_R*8*1024/1000^3) "$(m $SUM_LAT_AVG_R/1000)" "$TX_BW_WIRE" "$(m $SUM_BW_STDDEV_R*8*1024/1000^3)" "$L3_HIT_RATE" "$BUFFERS_ALLOCATED" "$PACER_PERIOD"
+    elif  [[ "$RW" == *"write"* ]]; then
+	printf "$FORMAT" "Total" $(m $SUM_IOPS_W/1000) $(m $SUM_BW_W*8/1000^3)  $(m $SUM_BW_MAX_W*8*1024/1000^3) "$(m $SUM_LAT_AVG_W/1000)" "$RX_BW_WIRE" "$(m $SUM_BW_STDDEV_W*8*1024/1000^3)" "$L3_HIT_RATE" "$BUFFERS_ALLOCATED" "$PACER_PERIOD"
+    else
+	printf "$FORMAT" "$host" "N/A"
+    fi
 }
 
 function run_fio()
