@@ -187,7 +187,29 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 
 	bdev = spdk_bdev_get_by_name(seedname);
 	if (bdev == NULL) {
-		SPDK_ERRLOG("seed device %s is not found\n", seedname);
+		/*
+		 * Someone removed the seed device or there is an initialization
+		 * order problem.
+		 * XXX-mg we now have an unremovable child because the lvol will
+		 * not open.
+		 */
+		const char *name;
+		size_t len;
+		int rc;
+
+		// XXX-mg hack alert!
+		// Blobstore does not like to access xattrs before the blob is
+		// fully loaded.  We know that the blob is loaded far enough to
+		// get xattrs, so fake the state for a bit.  It would be better
+		// to have a bs-private blob_get_xattr_value that works across
+		// blobstore source files.
+		assert(front->state == SPDK_BLOB_STATE_LOADING);
+		front->state = SPDK_BLOB_STATE_CLEAN;
+		rc = spdk_blob_get_xattr_value(front, "name",
+						(const void **)&name, &len);
+		front->state = SPDK_BLOB_STATE_LOADING;
+		SPDK_ERRLOG("seed device %s is not found for lvol %s\n",
+			    seedname, rc == 0 ? name : "<unknown>");
 		return (-ENOENT);
 	}
 
