@@ -340,7 +340,8 @@ if __name__ == "__main__":
         print_json(rpc.bdev.bdev_aio_create(args.client,
                                             filename=args.filename,
                                             name=args.name,
-                                            block_size=args.block_size))
+                                            block_size=args.block_size,
+                                            read_only=args.readonly))
 
     p = subparsers.add_parser('bdev_aio_create', aliases=['construct_aio_bdev'],
                               help='Add a bdev with aio backend')
