@@ -148,6 +148,8 @@ struct spdk_bs_dev_cb_args {
 	void			*cb_arg;
 };
 
+struct seed_ctx;
+
 struct spdk_bs_dev {
 	/* Create a new channel which is a software construct that is used
 	 * to submit I/O. */
@@ -195,7 +197,7 @@ struct spdk_bs_dev {
 	uint32_t	blocklen; /* In bytes */
 
 	/* the seed bdev descriptor for some sparse lvols */
-	void *ctx;
+	struct seed_ctx *seed_ctx;
 };
 
 struct spdk_bs_type {

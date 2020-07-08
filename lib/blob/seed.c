@@ -52,7 +52,7 @@ static struct spdk_io_channel *
 seed_create_channel(struct spdk_bs_dev *dev)
 {
 	struct spdk_io_channel *channel;
-	struct seed_ctx *ctx = dev->ctx;
+	struct seed_ctx *ctx = dev->seed_ctx;
 
 	if (ctx == NULL || ctx->bdev_desc == NULL) {
 		SPDK_INFOLOG(SPDK_LOG_BLOB, "bsdev %p has no seed descriptor\n", dev);
@@ -74,7 +74,7 @@ seed_destroy_channel(struct spdk_bs_dev *dev, struct spdk_io_channel *channel)
 static void
 seed_destroy(struct spdk_bs_dev *dev)
 {
-	struct seed_ctx *ctx = dev->ctx;
+	struct seed_ctx *ctx = dev->seed_ctx;
 
 	if (ctx != NULL) {
 		if (ctx->bdev_io_channel != NULL) {
@@ -100,7 +100,7 @@ static void
 seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
 	    uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct seed_ctx *ctx = dev->ctx;
+	struct seed_ctx *ctx = dev->seed_ctx;
 
 	if (ctx->bdev_desc == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
@@ -125,7 +125,7 @@ seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	     struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
 	     struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct seed_ctx *ctx = dev->ctx;
+	struct seed_ctx *ctx = dev->seed_ctx;
 
 	if (ctx->bdev_desc == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
@@ -230,7 +230,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 	back->unmap = seed_unmap;
 	back->blockcnt = spdk_bdev_get_num_blocks(bdev);
 	back->blocklen = spdk_bdev_get_block_size(bdev);
-	back->ctx = ctx;
+	back->seed_ctx = ctx;
 
 	front->back_bs_dev = back;
 
