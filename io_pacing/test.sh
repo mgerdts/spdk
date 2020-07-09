@@ -356,6 +356,8 @@ function config_null_1()
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
+    IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
+
     rpc_start
     rpc_send nvmf_set_config --conn-sched transport
     rpc_send framework_start_init
@@ -363,7 +365,7 @@ function config_null_1()
     rpc_send nvmf_create_transport --trtype RDMA \
 	     --max-queue-depth 128 \
 	     --max-qpairs-per-ctrlr 64 \
-	     --in-capsule-data-size 4096 \
+	     --in-capsule-data-size $IN_CAPSULE_DATA \
 	     --max-io-size 131072 \
 	     --io-unit-size $IO_UNIT_SIZE \
 	     --num-shared-buffers $NUM_SHARED_BUFFERS \
@@ -404,6 +406,8 @@ function config_null_16()
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
+    IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
+
     rpc_start
     rpc_send nvmf_set_config --conn-sched transport
     rpc_send framework_start_init
@@ -411,7 +415,7 @@ function config_null_16()
     rpc_send nvmf_create_transport --trtype RDMA \
 	     --max-queue-depth 128 \
 	     --max-qpairs-per-ctrlr 64 \
-	     --in-capsule-data-size 4096 \
+	     --in-capsule-data-size $IN_CAPSULE_DATA \
 	     --max-io-size 131072 \
 	     --io-unit-size $IO_UNIT_SIZE \
 	     --num-shared-buffers $NUM_SHARED_BUFFERS \
@@ -454,7 +458,9 @@ function config_nvme()
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
+    IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
     local DISKS="05 06 07 08 09 0a 0b 0c 0f 10 11 12 13 14 15 16"
+
     rpc_start
     rpc_send nvmf_set_config --conn-sched transport
     rpc_send framework_start_init
@@ -462,7 +468,7 @@ function config_nvme()
     rpc_send nvmf_create_transport --trtype RDMA \
 	     --max-queue-depth 128 \
 	     --max-qpairs-per-ctrlr 64 \
-	     --in-capsule-data-size 4096 \
+	     --in-capsule-data-size $IN_CAPSULE_DATA \
 	     --max-io-size 131072 \
 	     --io-unit-size $IO_UNIT_SIZE \
 	     --num-shared-buffers $NUM_SHARED_BUFFERS \
@@ -510,7 +516,9 @@ function config_nvme_split3_delay()
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
+    IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
     local DISKS="05 06 07 08 09 0a 0b 0c 0f 10 11 12 13 14 15 16"
+
     rpc_start
     rpc_send nvmf_set_config --conn-sched transport
     rpc_send framework_start_init
@@ -518,7 +526,7 @@ function config_nvme_split3_delay()
     rpc_send nvmf_create_transport --trtype RDMA \
 	     --max-queue-depth 128 \
 	     --max-qpairs-per-ctrlr 64 \
-	     --in-capsule-data-size 4096 \
+	     --in-capsule-data-size $IN_CAPSULE_DATA \
 	     --max-io-size 131072 \
 	     --io-unit-size $IO_UNIT_SIZE \
 	     --num-shared-buffers $NUM_SHARED_BUFFERS \
