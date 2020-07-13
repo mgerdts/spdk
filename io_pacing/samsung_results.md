@@ -804,9 +804,10 @@ CPU mask 0xF0, num cores 4, IO pacer period 6000, adjusted period 24000
 
 **with adaptive per disk credits**
 
-CPU mask 0xF0, num cores 4, IO pacer period 5750, adjusted period 23000
+CPU mask 0xF0, num cores 4, IO pacer period 5750, adjusted period 23000, num delay bdevs 0, disk credit
+
 | Num delay bdevs | QD | BW    | BW Max | WIRE BW  | AVG LAT, us | BW STDDEV | L3 Hit Rate | Bufs in-flight (MiB) | Pacer period, us |
 |-----------------|----|-------|--------|----------|-------------|-----------|-------------|----------------------|------------------|
-| 0               | 16 | 141.1 | 301.5  | 118.7178 | 14241.0     | 10.8      | 99.3        | 24.0 (3.0)           | 23.1             |
-| 16              | 16 | 144.9 | 311.8  | 160.2516 | 13477.3     | 15.3      | 98.6        | 36.6 (4.5)           | 23.2             |
-| 32              | 16 | 122.7 | 211.8  | 98.7012  | 16694.7     | 13.3      | 97.4        | 52.3 (6.5)           | 23.1             |
+| 0               | 85 | 179.2 | 183.4  | 190.6196 | 2983.3      | .2        | 99.3        | 27.3 (3.4)           | 23.1             |
+| 16              | 85 | 167.4 | 189.6  | 180.8361 | 3157.2      | 1.2       | 99.3        | 44.3 (5.5)           | 23.1             |
+| 32              | 85 | 166.1 | 197.3  | 184.3932 | 3214.2      | 2.0       | 97.7        | 47.0 (5.8)           | 23.1             |
