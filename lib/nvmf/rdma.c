@@ -2221,6 +2221,11 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
+
+			if (rgroup->pacer_tuner2 && (rtransport->transport.opts.io_pacer_tuner_type == 1)) {
+				spdk_io_pacer_tuner2_add(rgroup->pacer_tuner2, rdma_req->req.length);
+			}
+
 			/* If data is transferring from host to controller and the data didn't
 			 * arrive using in capsule data, we need to do a transfer from the host.
 			 */
@@ -2395,7 +2400,13 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				rqpair->poller->stat.request_latency_large += tsc - rdma_req->receive_tsc;
 			}
 
+			if (rgroup->pacer_tuner2 &&
+			    (rtransport->transport.opts.io_pacer_tuner_type == 1)) {
+				spdk_io_pacer_tuner2_sub(rgroup->pacer_tuner2, rdma_req->req.length);
+			}
+
 			nvmf_rdma_request_free(rdma_req, rtransport);
+
 			if (rdma_req->pacer_key != 0xDEADBEEF) {
 				spdk_io_pacer_drive_stats_sub(&drives_stats, rdma_req->pacer_key, 1);
 				rdma_req->pacer_key = 0xDEADBEEF;
@@ -2434,7 +2445,7 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 #define SPDK_NVMF_RDMA_DEFAULT_IO_PACER_TUNER_PERIOD 10000 /* us */
 #define SPDK_NVMF_RDMA_DEFAULT_IO_PACER_TUNER_STEP 1000 /* ns */
 #define SPDK_NVMF_RDMA_DEFAULT_IO_PACER_TUNER_THRESHOLD 12*1024*1024
-#define SPDK_NVMF_RDMA_DEFAULT_IO_PACER_TUNER_FACTOR 150
+#define SPDK_NVMF_RDMA_DEFAULT_IO_PACER_TUNER_FACTOR 1
 #define SPDK_NVMF_RDMA_DEFAULT_IO_PACER_DISK_CREDIT 0 /* operations per disk in flight */
 
 static void
@@ -3566,9 +3577,7 @@ spdk_nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport)
 		} else {
 			rgroup->pacer_tuner2 = spdk_io_pacer_tuner2_create(rgroup->pacer,
 									   transport->opts.io_pacer_tuner_period,
-									   &rgroup->group.buffers_allocated,
 									   transport->opts.io_pacer_tuner_threshold /
-									   transport->opts.io_unit_size /
 									   spdk_env_get_core_count(),
 									   transport->opts.io_pacer_tuner_factor);
 			if (!rgroup->pacer_tuner2) {
@@ -3701,8 +3710,10 @@ spdk_nvmf_rdma_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 		return;
 	}
 
+	rtransport = SPDK_CONTAINEROF(rgroup->group.transport, struct spdk_nvmf_rdma_transport, transport);
+
 	if (rgroup->pacer) {
-		if (transport->opts.io_pacer_tuner_type == 0) {
+		if (rtransport->transport.opts.io_pacer_tuner_type == 0) {
 			spdk_io_pacer_tuner_destroy(rgroup->pacer_tuner);
 		} else {
 			spdk_io_pacer_tuner2_destroy(rgroup->pacer_tuner2);
@@ -3710,8 +3721,6 @@ spdk_nvmf_rdma_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 
 		spdk_io_pacer_destroy(rgroup->pacer);
 	}
-
-	rtransport = SPDK_CONTAINEROF(rgroup->group.transport, struct spdk_nvmf_rdma_transport, transport);
 
 	pthread_mutex_lock(&rtransport->lock);
 	next_rgroup = TAILQ_NEXT(rgroup, link);

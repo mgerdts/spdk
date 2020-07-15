@@ -469,7 +469,7 @@ spdk_io_pacer_tuner_destroy(struct spdk_io_pacer_tuner *tuner)
 struct spdk_io_pacer_tuner2 {
 	struct spdk_io_pacer *pacer;
 	uint64_t period_ns;
-	uint32_t *value;
+	uint32_t value;
 	uint32_t min_threshold;
 	uint64_t factor;
 	uint64_t min_pacer_period_ticks;
@@ -482,11 +482,11 @@ io_pacer_tune2(void *arg)
 {
 	struct spdk_io_pacer_tuner2 *tuner = arg;
 	struct spdk_io_pacer *pacer = tuner->pacer;
-	uint32_t v = *tuner->value;
+	uint32_t v = tuner->value;
 
 	uint64_t new_period_ticks = (v <= tuner->min_threshold) ?
 		tuner->min_pacer_period_ticks :
-		(v - tuner->min_threshold) * tuner->factor + tuner->min_pacer_period_ticks;
+		(v - tuner->min_threshold) * tuner->factor / 1000 + tuner->min_pacer_period_ticks;
 	new_period_ticks = spdk_min(new_period_ticks, tuner->max_pacer_period_ticks);
 
 	static __thread uint32_t log_counter = 0;
@@ -509,14 +509,12 @@ io_pacer_tune2(void *arg)
 struct spdk_io_pacer_tuner2 *
 spdk_io_pacer_tuner2_create(struct spdk_io_pacer *pacer,
 			    uint32_t period_us,
-			    uint32_t *value,
 			    uint32_t min_threshold,
 			    uint64_t factor)
 {
 	struct spdk_io_pacer_tuner2 *tuner;
 
 	assert(pacer != NULL);
-	assert(value != NULL);
 
 	tuner = (struct spdk_io_pacer_tuner2 *)calloc(1, sizeof(struct spdk_io_pacer_tuner2));
 	if (!tuner) {
@@ -526,7 +524,7 @@ spdk_io_pacer_tuner2_create(struct spdk_io_pacer *pacer,
 
 	tuner->pacer = pacer;
 	tuner->period_ns = 1000ULL * period_us;
-	tuner->value = value;
+	tuner->value = 0;
 	tuner->min_threshold = min_threshold;
 	tuner->factor = factor;
 	tuner->min_pacer_period_ticks = pacer->period_ticks;
@@ -541,11 +539,10 @@ spdk_io_pacer_tuner2_create(struct spdk_io_pacer *pacer,
 		}
 	}
 
-	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, val_ptr %p, threshold %u, factor %lu\n",
+	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, threshold %u, factor %lu\n",
 		       tuner,
 		       pacer,
 		       tuner->period_ns,
-		       tuner->value,
 		       tuner->min_threshold,
 		       tuner->factor);
 
@@ -560,4 +557,18 @@ spdk_io_pacer_tuner2_destroy(struct spdk_io_pacer_tuner2 *tuner)
 	spdk_poller_unregister(&tuner->poller);
 	free(tuner);
 	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
+}
+
+void
+spdk_io_pacer_tuner2_add(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
+{
+	assert(tuner != NULL);
+	tuner->value += value;
+}
+
+void
+spdk_io_pacer_tuner2_sub(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
+{
+	assert(tuner != NULL);
+	tuner->value -= value;
 }
