@@ -2097,6 +2097,7 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 	bool				progress = false;
 	int				data_posted;
 	uint32_t			num_blocks;
+	struct spdk_nvme_sgl_descriptor *sgl;
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	device = rqpair->device;
@@ -2165,7 +2166,11 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			break;
 
 		case RDMA_REQUEST_STATE_IO_PACING:
+			sgl = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
+
 			if ((rgroup->pacer == NULL) ||
+			    (sgl->generic.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK &&
+			     sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) ||
 			    spdk_unlikely(spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)) ||
 			    spdk_unlikely(rdma_req->req.cmd->nvmf_cmd.opcode == SPDK_NVME_OPC_FABRIC)) {
 				rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
