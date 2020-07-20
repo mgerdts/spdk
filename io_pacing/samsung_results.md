@@ -811,3 +811,13 @@ CPU mask 0xF0, num cores 4, IO pacer period 5750, adjusted period 23000, num del
 | 0               | 85 | 179.2 | 183.4  | 190.6196 | 2983.3      | .2        | 99.3        | 27.3 (3.4)           | 23.1             |
 | 16              | 85 | 167.4 | 189.6  | 180.8361 | 3157.2      | 1.2       | 99.3        | 44.3 (5.5)           | 23.1             |
 | 32              | 85 | 166.1 | 197.3  | 184.3932 | 3214.2      | 2.0       | 97.7        | 47.0 (5.8)           | 23.1             |
+
+**Credit algorithm with restrictions**
+Just 6Mb of cache distributed between slow block devices. Fast devices' operations are started without credit based considerations. egulating by pacer frequency.
+
+80 devices
+| Num delay bdevs | QD | BW    | BW Max | WIRE BW  | AVG LAT, us | BW STDDEV | L3 Hit Rate | Bufs in-flight (MiB) | Pacer period, us |
+|-----------------|----|-------|--------|----------|-------------|-----------|-------------|----------------------|------------------|
+| 8               | 85 | 174.3 | 187.6  | 188.5537 | 4090.2      | 1.3       | 94.8        | 45.3 (5.6)           | 23.3             |
+| 16              | 85 | 123.0 | 154.5  | 130.1026 | 5791.9      | .9        | 97.0        | 45.6 (5.7)           | 23.1             |
+| 32              | 85 | 63.3  | 95.7   | 67.8748  | 11258.5     | .7        | 98.9        | 31.6 (3.9)           | 23.1             |
