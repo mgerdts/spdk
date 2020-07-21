@@ -11,7 +11,7 @@ KERNEL_DRIVER=${KERNEL_DRIVER-0}
 
 # Test setup configuration
 if [ "1" == "$SETUP" ]; then
-    HOSTS="r-dcs79 spdk03.swx.labs.mlnx"
+    HOSTS="spdk08.swx.labs.mlnx spdk03.swx.labs.mlnx"
     TARGET="ubuntu@spdk-tgt-bw-03"
     TARGET_ADDRS="1.1.103.1 2.2.103.1"
     TARGET_SPDK_PATH="/home/evgeniik/spdk"
@@ -354,6 +354,8 @@ function config_null_1()
     IO_PACER_THRESHOLD=${IO_PACER_THRESHOLD-0}
     IO_PACER_TUNER_PERIOD=${IO_PACER_TUNER_PERIOD-10000}
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
+    IO_PACER_TUNER_THRESHOLD=${IO_PACER_TUNER_THRESHOLD-12582912}
+    IO_PACER_TUNER_FACTOR=${IO_PACER_TUNER_FACTOR-1}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
     IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
@@ -376,6 +378,8 @@ function config_null_1()
 	     --io-pacer-threshold $IO_PACER_THRESHOLD \
 	     --io-pacer-tuner-period $IO_PACER_TUNER_PERIOD \
 	     --io-pacer-tuner-step $IO_PACER_TUNER_STEP \
+	     --io-pacer-tuner-threshold $IO_PACER_TUNER_THRESHOLD \
+	     --io-pacer-tuner-factor $IO_PACER_TUNER_FACTOR \
 	     --io-pacer-disk-credit $IO_PACER_DISK_CREDIT
     rpc_send nvmf_create_subsystem --allow-any-host \
 	     --max-namespaces 48 \
@@ -404,6 +408,8 @@ function config_null_16()
     IO_PACER_THRESHOLD=${IO_PACER_THRESHOLD-0}
     IO_PACER_TUNER_PERIOD=${IO_PACER_TUNER_PERIOD-10000}
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
+    IO_PACER_TUNER_THRESHOLD=${IO_PACER_TUNER_THRESHOLD-12582912}
+    IO_PACER_TUNER_FACTOR=${IO_PACER_TUNER_FACTOR-1}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
     IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
@@ -426,6 +432,8 @@ function config_null_16()
 	     --io-pacer-threshold $IO_PACER_THRESHOLD \
 	     --io-pacer-tuner-period $IO_PACER_TUNER_PERIOD \
 	     --io-pacer-tuner-step $IO_PACER_TUNER_STEP \
+	     --io-pacer-tuner-threshold $IO_PACER_TUNER_THRESHOLD \
+	     --io-pacer-tuner-factor $IO_PACER_TUNER_FACTOR \
 	     --io-pacer-disk-credit $IO_PACER_DISK_CREDIT
     rpc_send nvmf_create_subsystem --allow-any-host \
 	     --max-namespaces 48 \
@@ -456,6 +464,8 @@ function config_nvme()
     IO_PACER_THRESHOLD=${IO_PACER_THRESHOLD-0}
     IO_PACER_TUNER_PERIOD=${IO_PACER_TUNER_PERIOD-10000}
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
+    IO_PACER_TUNER_THRESHOLD=${IO_PACER_TUNER_THRESHOLD-12582912}
+    IO_PACER_TUNER_FACTOR=${IO_PACER_TUNER_FACTOR-1}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
     IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
@@ -479,6 +489,8 @@ function config_nvme()
 	     --io-pacer-threshold $IO_PACER_THRESHOLD \
 	     --io-pacer-tuner-period $IO_PACER_TUNER_PERIOD \
 	     --io-pacer-tuner-step $IO_PACER_TUNER_STEP \
+	     --io-pacer-tuner-threshold $IO_PACER_TUNER_THRESHOLD \
+	     --io-pacer-tuner-factor $IO_PACER_TUNER_FACTOR \
 	     --io-pacer-disk-credit $IO_PACER_DISK_CREDIT
     rpc_send nvmf_create_subsystem --allow-any-host \
 	     --max-namespaces 48 \
@@ -514,6 +526,8 @@ function config_nvme_split3_delay()
     IO_PACER_CREDIT=${IO_PACER_CREDIT-131072}
     IO_PACER_TUNER_PERIOD=${IO_PACER_TUNER_PERIOD-10000}
     IO_PACER_TUNER_STEP=${IO_PACER_TUNER_STEP-1000}
+    IO_PACER_TUNER_THRESHOLD=${IO_PACER_TUNER_THRESHOLD-12582912}
+    IO_PACER_TUNER_FACTOR=${IO_PACER_TUNER_FACTOR-1}
     IO_UNIT_SIZE=${IO_UNIT_SIZE-131072}
     IO_PACER_DISK_CREDIT=${IO_PACER_DISK_CREDIT-0}
     IN_CAPSULE_DATA=${IN_CAPSULE_DATA-0}
@@ -537,6 +551,8 @@ function config_nvme_split3_delay()
 	     --io-pacer-threshold $IO_PACER_THRESHOLD \
 	     --io-pacer-tuner-period $IO_PACER_TUNER_PERIOD \
 	     --io-pacer-tuner-step $IO_PACER_TUNER_STEP \
+	     --io-pacer-tuner-threshold $IO_PACER_TUNER_THRESHOLD \
+	     --io-pacer-tuner-factor $IO_PACER_TUNER_FACTOR \
 	     --io-pacer-disk-credit $IO_PACER_DISK_CREDIT
     rpc_send nvmf_create_subsystem --allow-any-host \
 	     --max-namespaces 48 \
