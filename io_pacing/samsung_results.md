@@ -824,6 +824,8 @@ Just 6Mb of cache distributed between slow block devices. Fast devices' operatio
 | 40              | 85 | 168.0 | 208.0  | 186.9235 | 5314.7      | 1.6       | 91.3        | 56.6 (7.0)           | 23.8             |
 | 48              | 85 | 157.8 | 264.3  | 140.9648 | 5643.0      | 4.3       | 94.3        | 60.6 (7.5)           | 24.2             |
 | 64              | 85 | 155.4 | 212.6  | 164.7975 | 5734.2      | 1.8       | 84.1        | 73.3 (9.1)           | 24.8             |
+| 72              | 85 | 62.5  | 107.7  | 53.8682  | 14237.3     | .8        | 85.7        | 62.0 (7.7)           | 23.4             |
 | 80              | 85 | 93.3  | 151.8  | 96.6674  | 9572.2      | .9        | 42.6        | 153.3 (19.1)         | 29.7             |
+
 
 For the case with 80 delay bdevs we probably have a bug in algorithm as Buf in flight shows 19.1 MiB of cache used. 
