@@ -1413,9 +1413,17 @@ function test_18()
     local TGT_CPU_MASK=0xFFFF
     local NUM_CORES=16
 
-    for io_pacer in 2875; do
+    for io_pacer in 0 2875; do
 	for threshold in 0 16384; do
-	    for io_size in "128k" "4k" "128k/80:4k/20" "128k/20:4k/80" "8k" "128k/80:8k/20" "128k/20:8k/80" "16k" "128k/80:16k/20" "128k/20:16k/80"; do
+	    if [ "0" -eq "$io_pacer" -a "0" -ne "$threshold" ]; then
+		continue
+	    fi
+
+#	    for io_size in "128k" "4k" "128k/80:4k/20" "128k/20:4k/80" "8k" "128k/80:8k/20" "128k/20:8k/80" "16k" "128k/80:16k/20" "128k/20:16k/80"; do
+	    for io_size in "128k" "4k" "128k/80:4k/20" "128k/20:4k/80" "128k/3:4k/97"; do
+#	    for io_size in "8k" "128k/80:8k/20" "128k/20:8k/80" "128k/3:8k/97"; do
+#	    for io_size in "128k/80:4k/20"; do
+		local factor=3
 		ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
 		num_buffers=131072
 		buf_cache=$((num_buffers/NUM_CORES))
@@ -1426,12 +1434,14 @@ function test_18()
 		      NUM_SHARED_BUFFERS=$num_buffers \
 		      BUF_CACHE_SIZE=$buf_cache \
 		      IO_UNIT_SIZE=8192 \
-		      QD_LIST="32 64 128 256" \
+		      QD_LIST="16 32 256" \
 		      IO_SIZE="$io_size" \
 		      BUFFER_SIZE=8192 \
 		      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
 		      IO_PACER_CREDIT=65536 \
 		      IO_PACER_THRESHOLD=$threshold \
+		      IO_PACER_TUNER_FACTOR=$factor \
+		      IN_CAPSULE_DATA=4096 \
 		      test_base
 		sleep 3
 	    done
