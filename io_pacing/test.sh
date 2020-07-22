@@ -1257,27 +1257,56 @@ function test_14()
     done
 }
 
+function test_14_16_cores()
+{
+    local TGT_CPU_MASK=0xFFFF
+    local NUM_CORES=16
+
+    for io_pacer in 2800 2875 3000; do
+#    for io_pacer in 2875; do
+	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
+	num_buffers=131072
+	buf_cache=$((num_buffers/NUM_CORES))
+	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num buffers $num_buffers, buf cache $buf_cache"
+
+	CONFIG=config_nvme \
+	      TGT_CPU_MASK=$TGT_CPU_MASK \
+	      FIO_JOB=fio-16ns-16jobs \
+	      NUM_SHARED_BUFFERS=$num_buffers \
+	      BUF_CACHE_SIZE=$buf_cache \
+	      IO_UNIT_SIZE=8192 \
+	      BUFFER_SIZE=8192 \
+	      QD_LIST="256" \
+	      IO_SIZE=128k \
+	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
+	      IO_PACER_CREDIT=65536 \
+	      test_base
+	sleep 3
+    done
+}
+
 function test_14_4k()
 {
     local TGT_CPU_MASK=0xFFFF
     local NUM_CORES=16
 
-    for io_pacer in 1400 1425 1437 1450 1500; do
-#    for io_pacer in 5600 5650 5700 5750 5800 6000; do
-#    for io_pacer in 170 180 190; do
+    for io_pacer in 2875; do
 	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
-	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD"
+	num_buffers=131072
+	buf_cache=$((num_buffers/NUM_CORES))
+	echo "CPU mask $TGT_CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num buffers $num_buffers, buf cache $buf_cache"
 	CONFIG=config_nvme \
 	      TGT_CPU_MASK=$TGT_CPU_MASK \
 	      FIO_JOB=fio-16ns-16jobs \
-	      NUM_SHARED_BUFFERS=32768 \
-	      BUF_CACHE_SIZE=1024 \
+	      NUM_SHARED_BUFFERS=$num_buffers \
+	      BUF_CACHE_SIZE=$buf_cache \
 	      IO_UNIT_SIZE=8192 \
-	      QD_LIST="256 1024 2048" \
+	      QD_LIST="256 2048" \
 	      IO_SIZE=4k \
 	      BUFFER_SIZE=4096 \
 	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
-	      IO_PACER_CREDIT=32768 \
+	      IO_PACER_CREDIT=65536 \
+	      IO_PACER_TUNER_PERIOD=0 \
 	      test_base
 	sleep 3
     done
@@ -1288,23 +1317,22 @@ function test_14_8k()
     local TGT_CPU_MASK=0xFFFF
     local NUM_CORES=16
 
-#    for io_pacer in 5600 5650 5700 5750 5800 6000; do
-#    for io_pacer in 330 350 380; do
-#    for io_pacer in 1400 1425 1437 1450 1500; do
-    for io_pacer in 1450; do
+    for io_pacer in 2875; do
 	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
-	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD"
+	num_buffers=131072
+	buf_cache=$((num_buffers/NUM_CORES))
+	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num buffers $num_buffers, buf cache $buf_cache"
 	CONFIG=config_nvme \
 	      TGT_CPU_MASK=$TGT_CPU_MASK \
 	      FIO_JOB=fio-16ns-16jobs \
-	      NUM_SHARED_BUFFERS=32768 \
-	      BUF_CACHE_SIZE=1024 \
+	      NUM_SHARED_BUFFERS=$num_buffers \
+	      BUF_CACHE_SIZE=$buf_cache \
 	      IO_UNIT_SIZE=8192 \
-	      QD_LIST="1024" \
+	      QD_LIST="256 2048" \
 	      IO_SIZE=8k \
 	      BUFFER_SIZE=8192 \
 	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
-	      IO_PACER_CREDIT=32768 \
+	      IO_PACER_CREDIT=65536 \
 	      test_base
 	sleep 3
     done
@@ -1314,19 +1342,18 @@ function test_14_16k()
     local TGT_CPU_MASK=0xFFFF
     local NUM_CORES=16
 
-#    for io_pacer in 5600 5650 5700 5750 5800 6000; do
-
-    for io_pacer in 1400 1425 1437 1450 1500; do
-#    for io_pacer in 750 770 800; do
+    for io_pacer in 1425 1500; do
 	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
-	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD"
+	num_buffers=131072
+	buf_cache=$((num_buffers/NUM_CORES))
+	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num buffers $num_buffers, buf cache $buf_cache"
 	CONFIG=config_nvme \
 	      TGT_CPU_MASK=$TGT_CPU_MASK \
 	      FIO_JOB=fio-16ns-16jobs \
-	      NUM_SHARED_BUFFERS=32768 \
-	      BUF_CACHE_SIZE=1024 \
+	      NUM_SHARED_BUFFERS=$num_buffers \
+	      BUF_CACHE_SIZE=$buf_cache \
 	      IO_UNIT_SIZE=8192 \
-	      QD_LIST="64 256 512" \
+	      QD_LIST="128 1024" \
 	      IO_SIZE=16k \
 	      BUFFER_SIZE=8192 \
 	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
