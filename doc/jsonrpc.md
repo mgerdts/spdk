@@ -4755,6 +4755,7 @@ sock_priority               | Optional | number  | The socket priority of the co
 acceptor_backlog            | Optional | number  | The number of pending connections allowed in backlog before failing new connection attempts (RDMA only)
 abort_timeout_sec           | Optional | number  | Abort execution timeout value, in seconds
 no_wr_batching              | Optional | boolean | Disable work requests batching (RDMA only)
+io_buffer_alignment         | Optional | number  | IO buffers alignment, in bytes. Must be power of 2 and not smaller than cache line size
 
 ### Example
 

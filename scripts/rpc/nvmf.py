@@ -110,7 +110,8 @@ def nvmf_create_transport(client,
                           sock_priority=None,
                           acceptor_backlog=None,
                           abort_timeout_sec=None,
-                          no_wr_batching=None):
+                          no_wr_batching=None,
+                          io_buffer_alignment=None):
     """NVMf Transport Create options.
 
     Args:
@@ -131,6 +132,7 @@ def nvmf_create_transport(client,
         acceptor_backlog: Pending connections allowed at one time - RDMA specific (optional)
         abort_timeout_sec: Abort execution timeout value, in seconds (optional)
         no_wr_batching: Boolean flag to disable work requests batching - RDMA specific (optional)
+        io_buffer_alignment: IO buffer alignment, in bytes, must be power of 2 and not smaller than cache line size (optional)
     Returns:
         True or False
     """
@@ -174,6 +176,8 @@ def nvmf_create_transport(client,
         params['abort_timeout_sec'] = abort_timeout_sec
     if no_wr_batching is not None:
         params['no_wr_batching'] = no_wr_batching
+    if io_buffer_alignment:
+        params['io_buffer_alignment'] = io_buffer_alignment
     return client.call('nvmf_create_transport', params)
 
 

@@ -86,6 +86,8 @@ struct spdk_nvmf_transport_opts {
 	uint32_t	abort_timeout_sec;
 	/* ms */
 	uint32_t	association_timeout;
+	/* in bytes, must be power of 2 and not smaller than cache line size */
+	uint32_t	io_buffer_alignment;
 
 	const struct spdk_json_val *transport_specific;
 };

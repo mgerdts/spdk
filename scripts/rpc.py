@@ -1815,7 +1815,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                        sock_priority=args.sock_priority,
                                        acceptor_backlog=args.acceptor_backlog,
                                        abort_timeout_sec=args.abort_timeout_sec,
-                                       no_wr_batching=args.no_wr_batching)
+                                       no_wr_batching=args.no_wr_batching,
+                                       io_buffer_alignment=args.io_buffer_alignment)
 
     p = subparsers.add_parser('nvmf_create_transport', help='Create NVMf transport')
     p.add_argument('-t', '--trtype', help='Transport type (ex. RDMA)', type=str, required=True)
@@ -1838,6 +1839,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-l', '--acceptor_backlog', help='Pending connections allowed at one time. Relevant only for RDMA transport', type=int)
     p.add_argument('-x', '--abort-timeout-sec', help='Abort execution timeout value, in seconds', type=int)
     p.add_argument('-w', '--no-wr-batching', action='store_true', help='Disable work requests batching. Relevant only for RDMA transport')
+    p.add_argument('-e', '--io_buffer_alignment', help='IO buffer alignment, in bytes. Must be power of 2 and not smaller than cache line', type=int)
     p.set_defaults(func=nvmf_create_transport)
 
     def nvmf_get_transports(args):
