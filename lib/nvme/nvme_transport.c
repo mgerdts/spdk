@@ -589,3 +589,27 @@ nvme_transport_poll_group_connect_qpair(struct spdk_nvme_qpair *qpair)
 
 	return -EINVAL;
 }
+
+void
+nvme_transport_get_opts(const char *transport_name,
+			struct spdk_nvme_transport_opts *opts)
+{
+	const struct spdk_nvme_transport *transport;
+
+	transport = nvme_get_transport(transport_name);
+	if (transport->ops.get_opts) {
+		transport->ops.get_opts(opts);
+	}
+}
+
+void
+nvme_transport_set_opts(const char *transport_name,
+			const struct spdk_nvme_transport_opts *opts)
+{
+	const struct spdk_nvme_transport *transport;
+
+	transport = nvme_get_transport(transport_name);
+	if (transport->ops.set_opts) {
+		transport->ops.set_opts(opts);
+	}
+}

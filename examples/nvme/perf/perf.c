@@ -252,7 +252,7 @@ static bool g_mix_specified;
 static bool g_exit;
 /* Default to 10 seconds for the keep alive value. This value is arbitrary. */
 static uint32_t g_keep_alive_timeout_in_ms = 10000;
-
+static uint32_t g_srq_depth;
 static const char *g_core_mask;
 
 struct trid_entry {
@@ -1395,6 +1395,7 @@ static void usage(char *program_name)
 #else
 	printf("\t[-G enable debug logging (flag disabled, must reconfigure with --enable-debug)\n");
 #endif
+	printf("\t[-S SRQ depth for RDMA transport. Default 0 (do not use SRQ)]\n");
 }
 
 static void
@@ -1801,7 +1802,7 @@ parse_args(int argc, char **argv)
 	long int val;
 	int rc;
 
-	while ((op = getopt(argc, argv, "a:c:e:i:lo:q:r:k:s:t:w:C:DGHILM:NP:RT:U:V")) != -1) {
+	while ((op = getopt(argc, argv, "a:c:e:i:lo:q:r:k:s:t:w:C:DGHILM:NP:RT:U:VS:")) != -1) {
 		switch (op) {
 		case 'a':
 		case 'i':
@@ -1814,6 +1815,7 @@ parse_args(int argc, char **argv)
 		case 't':
 		case 'M':
 		case 'U':
+		case 'S':
 			val = spdk_strtol(optarg, 10);
 			if (val < 0) {
 				fprintf(stderr, "Converting a string to integer failed\n");
@@ -1853,6 +1855,9 @@ parse_args(int argc, char **argv)
 				break;
 			case 'U':
 				g_nr_unused_io_queues = val;
+				break;
+			case 'S':
+				g_srq_depth = val;
 				break;
 			}
 			break;
@@ -2251,6 +2256,7 @@ int main(int argc, char **argv)
 	struct worker_thread *worker, *master_worker;
 	struct spdk_env_opts opts;
 	pthread_t thread_id = 0;
+	struct trid_entry *trid_entry;
 
 	rc = parse_args(argc, argv);
 	if (rc != 0) {
@@ -2277,6 +2283,13 @@ int main(int argc, char **argv)
 	}
 
 	g_tsc_rate = spdk_get_ticks_hz();
+
+	TAILQ_FOREACH(trid_entry, &g_trid_list, tailq) {
+		struct spdk_nvme_transport_opts opts;
+		nvme_transport_get_opts(trid_entry->trid.trstring, &opts);
+		opts.srq_depth = g_srq_depth;
+		nvme_transport_set_opts(trid_entry->trid.trstring, &opts);
+	}
 
 	if (register_workers() != 0) {
 		rc = -1;
