@@ -254,6 +254,7 @@ static bool g_exit;
 static uint32_t g_keep_alive_timeout_in_ms = 10000;
 static uint32_t g_srq_depth;
 static const char *g_core_mask;
+static volatile uint32_t g_num_workers_not_ready;
 
 struct trid_entry {
 	struct spdk_nvme_transport_id	trid;
@@ -1252,6 +1253,10 @@ work_fn(void *arg)
 		}
 		ns_ctx = ns_ctx->next;
 	}
+
+	/* Wait till all workers are ready */
+	__atomic_fetch_sub(&g_num_workers_not_ready, 1, __ATOMIC_RELAXED);
+	while (0 != __atomic_load_n(&g_num_workers_not_ready, __ATOMIC_RELAXED));
 
 	tsc_current = spdk_get_ticks();
 	tsc_next_print = tsc_current + g_tsc_rate;
@@ -2331,6 +2336,7 @@ int main(int argc, char **argv)
 	printf("Initialization complete. Launching workers.\n");
 
 	/* Launch all of the slave workers */
+	g_num_workers_not_ready = g_num_workers;
 	g_master_core = spdk_env_get_current_core();
 	master_worker = NULL;
 	worker = g_workers;
