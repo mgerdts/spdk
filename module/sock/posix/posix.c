@@ -51,6 +51,14 @@
 #define PORTNUMLEN 32
 #define IOV_BATCH_SIZE 64
 
+#ifndef SO_ZEROCOPY
+#define SO_ZEROCOPY 60
+#endif
+
+#ifndef MSG_ZEROCOPY
+#define MSG_ZEROCOPY 0x4000000
+#endif
+
 #if defined(SO_ZEROCOPY) && defined(MSG_ZEROCOPY)
 #define SPDK_ZEROCOPY
 #endif
