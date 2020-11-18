@@ -1,3 +1,4 @@
+- spdk.spec: rhel8 compatibility [79c0d5352]
 - sock/posix: Workaround lack of zero-copy support in user space libs [7fc123015]
 - sock/posix: Workaround lack of zero-copy support in user space libs [fd16ae029]
 - nvmf/transport: Add option to configure io_buffer alignment [3e6da4dd8]
