@@ -59,6 +59,10 @@
 #define MSG_ZEROCOPY 0x4000000
 #endif
 
+#ifndef SO_EE_ORIGIN_ZEROCOPY
+#define SO_EE_ORIGIN_ZEROCOPY 5
+#endif
+
 #if defined(SO_ZEROCOPY) && defined(MSG_ZEROCOPY)
 #define SPDK_ZEROCOPY
 #endif
