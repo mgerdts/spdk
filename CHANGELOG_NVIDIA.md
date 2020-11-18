@@ -1,3 +1,4 @@
+- sock/posix: Workaround lack of zero-copy support in user space libs [7fc123015]
 - sock/posix: Workaround lack of zero-copy support in user space libs [fd16ae029]
 - nvmf/transport: Add option to configure io_buffer alignment [3e6da4dd8]
 - bdev: Add new IO type DATA_PASSTHRU [5ca67413c]
