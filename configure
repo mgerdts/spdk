@@ -579,8 +579,8 @@ if [[ $sys_name == "FreeBSD" ]]; then
 fi
 
 if [ "${CONFIG[RDMA]}" = "y" ]; then
-  if [[ ! "${CONFIG[RDMA_PROV]}" == "verbs" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv" ]]; then
-    echo "Invalid RDMA provider specified, must be \"verbs\" or \"mlx5_dv\""
+  if [[ ! "${CONFIG[RDMA_PROV]}" == "verbs" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv_dc" ]]; then
+    echo "Invalid RDMA provider specified, must be \"verbs\" or \"mlx5_dv\" or \"mlx5_dv_dc\""
     exit 1
   fi
 
@@ -623,7 +623,7 @@ than or equal to 4.14 will see significantly reduced performance.
 		echo "RDMA_OPTION_ID_ACK_TIMEOUT is not supported"
 	fi
 
-	if [ "${CONFIG[RDMA_PROV]}" == "mlx5_dv" ]; then
+	if [ "${CONFIG[RDMA_PROV]}" == "mlx5_dv" ] || [ "${CONFIG[RDMA_PROV]}" == "mlx5_dv_dc" ]; then
 	  if ! echo -e '#include <spdk/stdinc.h>\n' \
 	    '#include <infiniband/mlx5dv.h>\n' \
 	    '#include <rdma/rdma_cma.h>\n' \

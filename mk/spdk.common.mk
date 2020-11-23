@@ -75,6 +75,8 @@ TARGET_MACHINE := $(firstword $(TARGET_TRIPLET_WORDS))
 
 COMMON_CFLAGS = -g $(C_OPT) -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wmissing-declarations -fno-strict-aliasing -I$(SPDK_ROOT_DIR)/include
 
+LDFLAGS += -L/hpc/local/work/denisn/dc/rdma-core/build/lib
+
 ifneq ($(filter powerpc%,$(TARGET_MACHINE)),)
 COMMON_CFLAGS += -mcpu=$(TARGET_ARCHITECTURE)
 else ifeq ($(TARGET_MACHINE),aarch64)
@@ -146,6 +148,7 @@ endif
 
 ifeq ($(CONFIG_RDMA),y)
 SYS_LIBS += -libverbs -lrdmacm
+COMMON_CFLAGS +=-I/hpc/local/work/denisn/dc/rdma-core/build/include 
 endif
 
 ifeq ($(CONFIG_URING),y)

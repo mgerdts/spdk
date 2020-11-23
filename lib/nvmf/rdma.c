@@ -406,6 +406,7 @@ struct spdk_nvmf_rdma_poller_stat {
 	uint64_t				pending_rdma_write;
 };
 
+struct spdk_rdma_poller_context;
 struct spdk_nvmf_rdma_poller {
 	struct spdk_nvmf_rdma_device		*device;
 	struct spdk_nvmf_rdma_poll_group	*group;
@@ -419,6 +420,7 @@ struct spdk_nvmf_rdma_poller {
 
 	/* Shared receive queue */
 	struct ibv_srq				*srq;
+    struct spdk_rdma_poller_context    *ctx;
 
 	struct spdk_nvmf_rdma_resources		*resources;
 	struct spdk_nvmf_rdma_poller_stat	stat;
@@ -969,6 +971,16 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 		goto error;
 	}
 
+    if (!rqpair->poller->ctx) {
+        rqpair->poller->ctx = spdk_rdma_create_poller_context(rqpair->cm_id, &qp_init_attr);
+    }
+
+    if (!rqpair->poller->ctx) {
+        goto error_destroy_qp;
+    }
+    
+    spdk_rdma_qp_set_poller_context(rqpair->rdma_qp, rqpair->poller->ctx);
+
 	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2),
 					  qp_init_attr.cap.max_send_wr);
 	rqpair->max_send_sge = spdk_min(NVMF_DEFAULT_TX_SGE, qp_init_attr.cap.max_send_sge);
@@ -991,7 +1003,6 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 
 		if (!rqpair->resources) {
 			SPDK_ERRLOG("Unable to allocate resources for receive queue.\n");
-			rdma_destroy_qp(rqpair->cm_id);
 			goto error;
 		}
 	} else {
@@ -1003,6 +1014,9 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	STAILQ_INIT(&rqpair->pending_rdma_write_queue);
 
 	return 0;
+
+error_destroy_qp:
+    rdma_destroy_qp(rqpair->cm_id); /*FIXME for DC case*/
 
 error:
 	rdma_destroy_id(rqpair->cm_id);
@@ -1148,7 +1162,7 @@ nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpai
 	 * Fields below are ignored by rdma cm if qpair has been
 	 * created using rdma cm API. */
 	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
-	ctrlr_event_data.qp_num = rqpair->rdma_qp->qp->qp_num;
+	ctrlr_event_data.qp_num = rqpair->rdma_qp->qp->qp_num; /* DCTN in DC case ??? */
 
 	rc = spdk_rdma_qp_accept(rqpair->rdma_qp, &ctrlr_event_data);
 	if (rc) {
