@@ -1,3 +1,4 @@
+- spdk.spec: add git sha1 sum to description [745c7e19a]
 - spdk.spec: rhel8 compatibility [79c0d5352]
 - sock/posix: Workaround lack of zero-copy support in user space libs [7fc123015]
 - sock/posix: Workaround lack of zero-copy support in user space libs [fd16ae029]
