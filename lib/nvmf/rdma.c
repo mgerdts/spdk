@@ -31,6 +31,9 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <string.h>
+#include <errno.h>
+
 #include "spdk/stdinc.h"
 
 #include "spdk/config.h"
@@ -394,6 +397,7 @@ struct spdk_nvmf_rdma_qpair {
 
 	/* Indicate that nvmf_rdma_close_qpair is called */
 	bool					to_close;
+	uint32_t                                remote_dctn; /*FIXME - find how to keep it until we createg rdma_qp*/
 };
 
 struct spdk_nvmf_rdma_poller_stat {
@@ -545,12 +549,16 @@ nvmf_rdma_update_ibv_state(struct spdk_nvmf_rdma_qpair *rqpair) {
 	int rc;
 
 	old_state = rqpair->ibv_state;
+/*
 	rc = ibv_query_qp(rqpair->rdma_qp->qp, &qp_attr,
-			  g_spdk_nvmf_ibv_query_mask, &init_attr);
-
+		  g_spdk_nvmf_ibv_query_mask, &init_attr); 
+*//* DCT ????*/
+	rc = spdk_rdma_query_qp_dci(rqpair->rdma_qp, &qp_attr,
+				    g_spdk_nvmf_ibv_query_mask, &init_attr); /*FIXME - which QP state? /*/
 	if (rc)
 	{
-		SPDK_ERRLOG("Failed to get updated RDMA queue pair state!\n");
+		SPDK_ERRLOG("Failed to get updated RDMA queue pair state: %s\n",
+			    strerror(errno));
 		return IBV_QPS_ERR + 1;
 	}
 
@@ -720,6 +728,7 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 	STAILQ_INIT(&resources->incoming_queue);
 	STAILQ_INIT(&resources->free_queue);
 
+	SPDK_NOTICELOG("SRQ??? :%p\n", opts->qp);
 	for (i = 0; i < opts->max_queue_depth; i++) {
 		struct ibv_recv_wr *bad_wr = NULL;
 
@@ -970,16 +979,17 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	if (!rqpair->rdma_qp) {
 		goto error;
 	}
-
-    if (!rqpair->poller->ctx) {
-        rqpair->poller->ctx = spdk_rdma_create_poller_context(rqpair->cm_id, &qp_init_attr);
-    }
-
-    if (!rqpair->poller->ctx) {
-        goto error_destroy_qp;
-    }
+	
+	if (!rqpair->poller->ctx) {
+		rqpair->poller->ctx = spdk_rdma_create_poller_context(rqpair->cm_id, &qp_init_attr);
+	}
     
-    spdk_rdma_qp_set_poller_context(rqpair->rdma_qp, rqpair->poller->ctx);
+	if (!rqpair->poller->ctx) {
+		goto error_destroy_qp;
+	}
+    
+	spdk_rdma_qp_set_poller_context(rqpair->rdma_qp, rqpair->poller->ctx);
+	spdk_rdma_qp_set_remote_dctn(rqpair->rdma_qp, rqpair->remote_dctn); /*FIXME very ugly. rqpair bad temp storage*/
 
 	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2),
 					  qp_init_attr.cap.max_send_wr);
@@ -1012,7 +1022,6 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	rqpair->current_recv_depth = 0;
 	STAILQ_INIT(&rqpair->pending_rdma_read_queue);
 	STAILQ_INIT(&rqpair->pending_rdma_write_queue);
-
 	return 0;
 
 error_destroy_qp:
@@ -1162,7 +1171,11 @@ nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpai
 	 * Fields below are ignored by rdma cm if qpair has been
 	 * created using rdma cm API. */
 	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
-	ctrlr_event_data.qp_num = rqpair->rdma_qp->qp->qp_num; /* DCTN in DC case ??? */
+
+//	ctrlr_event_data.qp_num = spdk_rdma_recv_qp_num(rqpair->rdma_qp); /* FIXME check if proper */
+	ctrlr_event_data.qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp); /* FIXME check if proper */
+
+	/*rqpair->rdma_qp->qp->qp_num; *//* DCTN in DC case ??? */
 
 	rc = spdk_rdma_qp_accept(rqpair->rdma_qp, &ctrlr_event_data);
 	if (rc) {
@@ -1215,7 +1228,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 		nvmf_rdma_event_reject(event->id, SPDK_NVMF_RDMA_ERROR_INVALID_RECFMT);
 		return -1;
 	}
-
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "dctn received: %d\n", private_data->dctn);
 	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Connect Recv on fabric intf name %s, dev_name %s\n",
 		      event->id->verbs->device->name, event->id->verbs->device->dev_name);
 
@@ -1277,6 +1290,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	rqpair->listen_id = event->listen_id;
 	rqpair->qpair.transport = transport;
 	rqpair->qpair.trid = port->trid;
+	rqpair->remote_dctn = private_data->dctn;
 	STAILQ_INIT(&rqpair->ibv_events);
 	/* use qid from the private data to determine the qpair type
 	   qid will be set to the appropriate value when the controller is created */
@@ -1285,7 +1299,8 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	event->id->context = &rqpair->qpair;
 
 	spdk_nvmf_tgt_new_qpair(transport->tgt, &rqpair->qpair);
-
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Host Send dctn: %d\n", private_data->dctn);
+	
 	return 0;
 }
 
@@ -2941,6 +2956,7 @@ nvmf_process_cm_event(struct spdk_nvmf_transport *transport)
 			/* No action required. The target never attempts to resolve routes. */
 			break;
 		case RDMA_CM_EVENT_CONNECT_REQUEST:
+			SPDK_NOTICELOG("In RDMA_CM_EVENT_CONNECT_REQUEST\n");
 			rc = nvmf_rdma_connect(transport, event);
 			if (rc < 0) {
 				SPDK_ERRLOG("Unable to process connect event. rc: %d\n", rc);
@@ -3598,8 +3614,12 @@ get_rdma_qpair_from_wc(struct spdk_nvmf_rdma_poller *rpoller, struct ibv_wc *wc)
 {
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	/* @todo: improve QP search */
+	SPDK_NOTICELOG("Looking for wc with qp_num: %"PRIu32"\n", wc->qp_num);
 	TAILQ_FOREACH(rqpair, &rpoller->qpairs, link) {
-		if (wc->qp_num == rqpair->rdma_qp->qp->qp_num) {
+		SPDK_NOTICELOG("\tDCI qp_num: %"PRIu32"\n",spdk_rdma_send_qp_num(rqpair->rdma_qp));
+		SPDK_NOTICELOG("\tDCT qp_num: %"PRIu32"\n",spdk_rdma_recv_qp_num(rqpair->rdma_qp));
+		if (wc->qp_num == spdk_rdma_recv_qp_num(rqpair->rdma_qp) ||
+		    wc->qp_num == spdk_rdma_send_qp_num(rqpair->rdma_qp)) {
 			return rqpair;
 		}
 	}
@@ -3656,6 +3676,7 @@ _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 
 	if (rpoller->srq) {
 		if (rpoller->resources->recvs_to_post.first != NULL) {
+			SPDK_NOTICELOG("post_srq_recv 1, srq: %p\n", rpoller->srq);
 			rc = ibv_post_srq_recv(rpoller->srq, rpoller->resources->recvs_to_post.first, &bad_recv_wr);
 			if (rc) {
 				_poller_reset_failed_recvs(rpoller, bad_recv_wr, rc);
@@ -3667,7 +3688,8 @@ _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 		while (!STAILQ_EMPTY(&rpoller->qpairs_pending_recv)) {
 			rqpair = STAILQ_FIRST(&rpoller->qpairs_pending_recv);
 			assert(rqpair->resources->recvs_to_post.first != NULL);
-			rc = ibv_post_recv(rqpair->rdma_qp->qp, rqpair->resources->recvs_to_post.first, &bad_recv_wr);
+			SPDK_NOTICELOG("post_srq_recv 2.\n");
+			rc = ibv_post_recv(spdk_rdma_receive_qp(rqpair->rdma_qp), rqpair->resources->recvs_to_post.first, &bad_recv_wr);
 			if (rc) {
 				_qp_reset_failed_recvs(rqpair, bad_recv_wr, rc);
 			}
@@ -3843,6 +3865,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			break;
 		case RDMA_WR_TYPE_RECV:
 			/* rdma_recv->qpair will be invalid if using an SRQ.  In that case we have to get the qpair from the wc. */
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "!!!!!!!!!!!!!!!!!!!!!!!! received something\n");
 			rdma_recv = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_recv, rdma_wr);
 			if (rpoller->srq != NULL) {
 				rdma_recv->qpair = get_rdma_qpair_from_wc(rpoller, &wc[i]);

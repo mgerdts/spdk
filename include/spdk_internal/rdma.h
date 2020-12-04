@@ -114,4 +114,26 @@ bool spdk_rdma_qp_queue_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_s
  */
 int spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_wr **bad_wr);
 
+struct spdk_rdma_poller_context;
+struct spdk_rdma_poller_context *
+spdk_rdma_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_attr);
+
+int spdk_rdma_qp_set_poller_context(struct spdk_rdma_qp *spdk_rdma_qp,
+                                            struct spdk_rdma_poller_context *poller_ctx);
+uint32_t spdk_rdma_send_qp_num(struct spdk_rdma_qp *spdk_rdma_qp);
+uint32_t spdk_rdma_recv_qp_num(struct spdk_rdma_qp *spdk_rdma_qp);
+
+struct ibv_pd *spdk_rdma_qp_pd(struct spdk_rdma_qp *spdk_rdma_qp);
+int spdk_rdma_query_qp_dci(struct spdk_rdma_qp *spdk_rdma_qp,  struct ibv_qp_attr *attr,
+			   enum ibv_qp_attr_mask attr_mask,
+			   struct ibv_qp_init_attr *init_attr);
+int spdk_rdma_query_qp_dct(struct spdk_rdma_qp *spdk_rdma_qp,  struct ibv_qp_attr *attr,
+			   enum ibv_qp_attr_mask attr_mask,
+			   struct ibv_qp_init_attr *init_attr);
+struct ibv_qp *
+spdk_rdma_receive_qp(struct spdk_rdma_qp *spdk_rdma_qp);
+
+void spdk_rdma_qp_set_remote_dctn(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dctn);
+uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp);
+
 #endif /* SPDK_RDMA_H */
