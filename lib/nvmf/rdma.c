@@ -1537,7 +1537,7 @@ nvmf_rdma_fill_wr_sgl(struct spdk_nvmf_rdma_poll_group *rgroup,
 	while (length && (num_extra_wrs || wr->num_sge < SPDK_NVMF_MAX_SGL_ENTRIES)) {
 		while (spdk_unlikely(!nvmf_rdma_fill_wr_sge(rqpair, &req->iov[rdma_req->iovpos], &wr,
 				     &remaining_data_block, &offset, &num_extra_wrs, dif_ctx))) {
-			uint32_t io_buffer_alignment_mask = rgroup->group.transport->opts.io_buffer_alignment - 1;
+			uintptr_t io_buffer_alignment_mask = rgroup->group.transport->opts.io_buffer_alignment - 1;
 
 			if (nvmf_rdma_replace_buffer(rgroup, &req->buffers[rdma_req->iovpos]) == -ENOMEM) {
 				return -ENOMEM;

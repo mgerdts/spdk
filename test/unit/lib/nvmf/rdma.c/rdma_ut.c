@@ -163,7 +163,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	struct spdk_nvmf_transport_pg_cache_buf	buffer;
 	struct spdk_nvmf_transport_pg_cache_buf	*buffer_ptr;
 	int rc, i;
-	uint32_t io_buffer_alignment_mask;
+	uintptr_t io_buffer_alignment_mask;
 
 	data.wr.sg_list = data.sgl;
 	STAILQ_INIT(&group.group.buf_cache);
@@ -879,7 +879,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	const uint32_t data_bs = 512;
 	const uint32_t md_size = 8;
 	int rc, i;
-	uint32_t io_buffer_alignment_mask;
+	uintptr_t io_buffer_alignment_mask;
 	void *aligned_buffer;
 
 	data.wr.sg_list = data.sgl;

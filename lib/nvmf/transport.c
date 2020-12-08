@@ -578,7 +578,7 @@ spdk_nvmf_request_free_buffers(struct spdk_nvmf_request *req,
 
 static inline int
 nvmf_request_set_buffer(struct spdk_nvmf_request *req, void *buf, uint32_t length,
-			uint32_t io_unit_size, uint32_t io_buffer_alignment_mask)
+			uint32_t io_unit_size, uintptr_t io_buffer_alignment_mask)
 {
 	req->buffers[req->iovcnt] = buf;
 	req->iov[req->iovcnt].iov_base = (void *)((uintptr_t)(buf + io_buffer_alignment_mask) &
@@ -598,7 +598,7 @@ nvmf_request_get_buffers(struct spdk_nvmf_request *req,
 {
 	uint32_t io_unit_size = transport->opts.io_unit_size;
 	uint32_t num_buffers;
-	uint32_t io_buffer_alignment_mask = transport->opts.io_buffer_alignment - 1;
+	uintptr_t io_buffer_alignment_mask = transport->opts.io_buffer_alignment - 1;
 	uint32_t i = 0, j;
 	void *buffer, *buffers[NVMF_REQ_MAX_BUFFERS];
 
