@@ -1171,9 +1171,9 @@ nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpai
 	 * Fields below are ignored by rdma cm if qpair has been
 	 * created using rdma cm API. */
 	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
-
+	static int qp_num_cnt;
 //	ctrlr_event_data.qp_num = spdk_rdma_recv_qp_num(rqpair->rdma_qp); /* FIXME check if proper */
-	ctrlr_event_data.qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp); /* FIXME check if proper */
+	ctrlr_event_data.qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp) + qp_num_cnt++; /* FIXME check if proper */
 
 	/*rqpair->rdma_qp->qp->qp_num; *//* DCTN in DC case ??? */
 
@@ -3615,6 +3615,7 @@ get_rdma_qpair_from_wc(struct spdk_nvmf_rdma_poller *rpoller, struct ibv_wc *wc)
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	/* @todo: improve QP search */
 	SPDK_NOTICELOG("Looking for wc with qp_num: %"PRIu32"\n", wc->qp_num);
+//	SPDK_NOTICELOG("\t ah:%p\n", 
 	TAILQ_FOREACH(rqpair, &rpoller->qpairs, link) {
 		SPDK_NOTICELOG("\tDCI qp_num: %"PRIu32"\n",spdk_rdma_send_qp_num(rqpair->rdma_qp));
 		SPDK_NOTICELOG("\tDCT qp_num: %"PRIu32"\n",spdk_rdma_recv_qp_num(rqpair->rdma_qp));
@@ -3847,6 +3848,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 
 		switch (rdma_wr->type) {
 		case RDMA_WR_TYPE_SEND:
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "!!!!!!!!!!!!!!!!!!!!!!!! RDMA_WR_TYPE_SEND\n");			
 			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_request, rsp.rdma_wr);
 			rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 
@@ -3865,7 +3867,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			break;
 		case RDMA_WR_TYPE_RECV:
 			/* rdma_recv->qpair will be invalid if using an SRQ.  In that case we have to get the qpair from the wc. */
-			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "!!!!!!!!!!!!!!!!!!!!!!!! received something\n");
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "!!!!!!!!!!!!!!!!!!!!!!!! RDMA_WR_TYPE_RECV\n");
 			rdma_recv = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_recv, rdma_wr);
 			if (rpoller->srq != NULL) {
 				rdma_recv->qpair = get_rdma_qpair_from_wc(rpoller, &wc[i]);
@@ -3905,6 +3907,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			STAILQ_INSERT_TAIL(&rqpair->resources->incoming_queue, rdma_recv, link);
 			break;
 		case RDMA_WR_TYPE_DATA:
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "!!!!!!!!!!!!!!!!!!!!!!!! RDMA_WR_TYPE_DATA\n");
 			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_request, data.rdma_wr);
 			rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 

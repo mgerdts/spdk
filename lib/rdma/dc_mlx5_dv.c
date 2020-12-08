@@ -46,7 +46,7 @@
 
 struct spdk_rdma_poller_context {};
 
-struct spdk_dc_mlx5_dv_poller_context {
+struct spdk_dc_mlx5_dv_poller_context {      
 	struct spdk_rdma_poller_context common;
 	struct ibv_qp *qp_dci;
 	struct ibv_qp_ex *qp_dci_qpex;
@@ -54,6 +54,7 @@ struct spdk_dc_mlx5_dv_poller_context {
 
 	struct ibv_qp *srq; /*FIXME now owning. Just pointer to SRQ*/
 	struct ibv_qp *qp_dct;
+	bool   activated;
 };
 
 struct spdk_dc_mlx5_dv_qp {
@@ -189,7 +190,7 @@ dc_mlx5_dv_init_dct(struct spdk_dc_mlx5_dv_poller_context *poller_ctx, struct rd
 			.qp_state        = IBV_QPS_INIT,
 			.pkey_index      = 0,
 			.port_num        = cm_id->port_num,
-			.qp_access_flags = IBV_ACCESS_REMOTE_WRITE,
+			.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ,
 		};
 
 /*		rc = rdma_init_qp_attr(cm_id, &attr, &attr_mask); */
@@ -583,7 +584,8 @@ spdk_dc_qp_queue_send_wrs(struct  spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fi
 			assert(0);
 		}
 		SPDK_NOTICELOG("ah: %p\n", qp->ah);
-		SPDK_NOTICELOG("dctn: %"PRIu32"\n", qp->remote_dctn);
+		SPDK_NOTICELOG("Sending from qpair with dci: %"PRIu32"\n", poller_ctx->qp_dci->qp_num);
+		SPDK_NOTICELOG("remote dctn: %"PRIu32"\n", qp->remote_dctn);
 		SPDK_NOTICELOG("remote_dc_key: %"PRIu64"\n", qp->remote_dc_key);
 
 		mlx5dv_wr_set_dc_addr(poller_ctx->qp_dci_mqpex,
@@ -666,19 +668,20 @@ spdk_rdma_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_in
 }
 
 int spdk_rdma_qp_set_poller_context(struct spdk_rdma_qp *spdk_rdma_qp,
-				     struct spdk_rdma_poller_context *poller_ctx)
+				    struct spdk_rdma_poller_context *poller_ctx)
 {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
 	if (qp->poller_ctx) {
 		SPDK_NOTICELOG("WARNING resetting poller_ctx. old=%p new=%p\n", qp->poller_ctx, poller_ctx);
 	}
 	qp->poller_ctx = SPDK_CONTAINEROF(poller_ctx, struct spdk_dc_mlx5_dv_poller_context, common);
-	if (dc_mlx5_dv_init_qpairs(qp) != 0) {
+	if (!qp->poller_ctx->activated && (dc_mlx5_dv_init_qpairs(qp) != 0)) {
 		SPDK_ERRLOG("Failed to initialize qpairs\n");
 		/* Set errno to be compliant with rdma_accept behaviour */
 		errno = ECONNABORTED;
 		return -1;
 	}
+	qp->poller_ctx->activated = true;
 	return 0;
 }
 

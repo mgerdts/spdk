@@ -583,6 +583,7 @@ nvme_rdma_process_event(struct nvme_rdma_qpair *rqpair,
 	if (rqpair->evt != NULL) {
 		rc = nvme_rdma_qpair_process_cm_event(rqpair);
 		if (rc) {
+			SPDK_DEBUGLOG(SPDK_LOG_NVME,"1. rc = %d\n", rc);
 			return rc;
 		}
 	}
@@ -597,17 +598,20 @@ nvme_rdma_process_event(struct nvme_rdma_qpair *rqpair,
 	}
 
 	if (rc) {
+		SPDK_DEBUGLOG(SPDK_LOG_NVME,"2. rc = %d\n", rc);
 		return rc;
 	}
 
 	if (rqpair->evt == NULL) {
+		SPDK_DEBUGLOG(SPDK_LOG_NVME,"3. rc = %d\n", rc);
 		return -EADDRNOTAVAIL;
 	}
 
 	rc = nvme_rdma_validate_cm_event(evt, rqpair->evt);
 
 	rc2 = nvme_rdma_qpair_process_cm_event(rqpair);
-	/* bad message takes precedence over the other error codes from processing the event. */
+	SPDK_DEBUGLOG(SPDK_LOG_NVME,"4. rc = %d, rc2 = %d\n", rc, rc2);
+/* bad message takes precedence over the other error codes from processing the event. */
 	return rc == 0 ? rc2 : rc;
 }
 
