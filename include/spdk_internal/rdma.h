@@ -135,5 +135,7 @@ spdk_rdma_receive_qp(struct spdk_rdma_qp *spdk_rdma_qp);
 
 void spdk_rdma_qp_set_remote_dctn(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dctn);
 uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp);
+bool spdk_rdma_is_corresponded_qp(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_wc *wc);
+void spdk_rdma_qp_set_remote_dci(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dci_qp_num);
 
 #endif /* SPDK_RDMA_H */

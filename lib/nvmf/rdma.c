@@ -205,6 +205,27 @@ SPDK_TRACE_REGISTER_FN(nvmf_trace, "nvmf_rdma", TRACE_GROUP_NVMF_RDMA)
 					OWNER_NONE, OBJECT_NONE, 0, 0, "");
 }
 
+#ifdef DEBUG
+static const char *CM_EVENT_STR[] = {
+	"RDMA_CM_EVENT_ADDR_RESOLVED",
+	"RDMA_CM_EVENT_ADDR_ERROR",
+	"RDMA_CM_EVENT_ROUTE_RESOLVED",
+	"RDMA_CM_EVENT_ROUTE_ERROR",
+	"RDMA_CM_EVENT_CONNECT_REQUEST",
+	"RDMA_CM_EVENT_CONNECT_RESPONSE",
+	"RDMA_CM_EVENT_CONNECT_ERROR",
+	"RDMA_CM_EVENT_UNREACHABLE",
+	"RDMA_CM_EVENT_REJECTED",
+	"RDMA_CM_EVENT_ESTABLISHED",
+	"RDMA_CM_EVENT_DISCONNECTED",
+	"RDMA_CM_EVENT_DEVICE_REMOVAL",
+	"RDMA_CM_EVENT_MULTICAST_JOIN",
+	"RDMA_CM_EVENT_MULTICAST_ERROR",
+	"RDMA_CM_EVENT_ADDR_CHANGE",
+	"RDMA_CM_EVENT_TIMEWAIT_EXIT"
+};
+#endif /* DEBUG */
+
 enum spdk_nvmf_rdma_wr_type {
 	RDMA_WR_TYPE_RECV,
 	RDMA_WR_TYPE_SEND,
@@ -398,6 +419,7 @@ struct spdk_nvmf_rdma_qpair {
 	/* Indicate that nvmf_rdma_close_qpair is called */
 	bool					to_close;
 	uint32_t                                remote_dctn; /*FIXME - find how to keep it until we createg rdma_qp*/
+	uint32_t                                remote_dci_qp_num; /*FIXME - the same as ^^^^^^ */
 };
 
 struct spdk_nvmf_rdma_poller_stat {
@@ -990,7 +1012,8 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
     
 	spdk_rdma_qp_set_poller_context(rqpair->rdma_qp, rqpair->poller->ctx);
 	spdk_rdma_qp_set_remote_dctn(rqpair->rdma_qp, rqpair->remote_dctn); /*FIXME very ugly. rqpair bad temp storage*/
-
+	spdk_rdma_qp_set_remote_dci(rqpair->rdma_qp, rqpair->remote_dci_qp_num);
+	
 	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2),
 					  qp_init_attr.cap.max_send_wr);
 	rqpair->max_send_sge = spdk_min(NVMF_DEFAULT_TX_SGE, qp_init_attr.cap.max_send_sge);
@@ -1198,6 +1221,31 @@ nvmf_rdma_event_reject(struct rdma_cm_id *id, enum spdk_nvmf_rdma_transport_erro
 	rdma_reject(id, &rej_data, sizeof(rej_data));
 }
 
+
+static void print_rdma_cm_event(struct rdma_cm_event *event)
+{
+#define ARRAY_ENTRY(VALUE) [VALUE] = #VALUE
+	char *ibv_qp_names[] = {
+		ARRAY_ENTRY(IBV_QPT_RC),
+		ARRAY_ENTRY(IBV_QPT_UC),
+		ARRAY_ENTRY(IBV_QPT_UD),
+		ARRAY_ENTRY(IBV_QPT_RAW_PACKET),
+		ARRAY_ENTRY(IBV_QPT_XRC_SEND),
+		ARRAY_ENTRY(IBV_QPT_XRC_RECV),
+		ARRAY_ENTRY(IBV_QPT_DRIVER)
+	};
+
+	assert(event != NULL);
+
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Dump connect event:\n");
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "\tid: %p\n", event->id);
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "\tqp_type: %s\n", ibv_qp_names[event->id->qp_type]);	
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "\ttype: %s\n", CM_EVENT_STR[event->event]);
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "\t status: %d\n", event->status);
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "\tif UD qp_num: %"PRIu32"\n", event->param.ud.qp_num);
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "\tif CONN qp_num: %"PRIu32"\n", event->param.conn.qp_num);
+}
+
 static int
 nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *event)
 {
@@ -1214,6 +1262,9 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	assert(event->id != NULL); /* Impossible. Can't even reject the connection. */
 	assert(event->id->verbs != NULL); /* Impossible. No way to handle this. */
 
+
+	print_rdma_cm_event(event);
+	
 	rdma_param = &event->param.conn;
 	if (rdma_param->private_data == NULL ||
 	    rdma_param->private_data_len < sizeof(struct spdk_nvmf_rdma_request_private_data)) {
@@ -1291,6 +1342,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	rqpair->qpair.transport = transport;
 	rqpair->qpair.trid = port->trid;
 	rqpair->remote_dctn = private_data->dctn;
+	rqpair->remote_dci_qp_num = event->param.conn.qp_num;
 	STAILQ_INIT(&rqpair->ibv_events);
 	/* use qid from the private data to determine the qpair type
 	   qid will be set to the appropriate value when the controller is created */
@@ -2828,7 +2880,7 @@ nvmf_rdma_disconnect(struct rdma_cm_event *evt)
 
 	return 0;
 }
-
+/*
 #ifdef DEBUG
 static const char *CM_EVENT_STR[] = {
 	"RDMA_CM_EVENT_ADDR_RESOLVED",
@@ -3615,12 +3667,15 @@ get_rdma_qpair_from_wc(struct spdk_nvmf_rdma_poller *rpoller, struct ibv_wc *wc)
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	/* @todo: improve QP search */
 	SPDK_NOTICELOG("Looking for wc with qp_num: %"PRIu32"\n", wc->qp_num);
-//	SPDK_NOTICELOG("\t ah:%p\n", 
+	SPDK_NOTICELOG("\t src_qp: %"PRIu32"\n",wc->src_qp); 
 	TAILQ_FOREACH(rqpair, &rpoller->qpairs, link) {
 		SPDK_NOTICELOG("\tDCI qp_num: %"PRIu32"\n",spdk_rdma_send_qp_num(rqpair->rdma_qp));
 		SPDK_NOTICELOG("\tDCT qp_num: %"PRIu32"\n",spdk_rdma_recv_qp_num(rqpair->rdma_qp));
-		if (wc->qp_num == spdk_rdma_recv_qp_num(rqpair->rdma_qp) ||
+		/*FIXME if (wc->qp_num == spdk_rdma_recv_qp_num(rqpair->rdma_qp) ||
 		    wc->qp_num == spdk_rdma_send_qp_num(rqpair->rdma_qp)) {
+			return rqpair;
+			}*/
+		if (spdk_rdma_is_corresponded_qp(rqpair->rdma_qp, wc)) {
 			return rqpair;
 		}
 	}

@@ -646,6 +646,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 			return -1;
 		}
 		assert(rqpair->cq);
+		attr.pd                 = rqpair->resources->poller->pd;
 	} else {
 		struct ibv_srq_init_attr srq_init_attr = {0};
 
@@ -661,12 +662,10 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 		rqpair->srq = ibv_create_srq(rqpair->cm_id->pd, &srq_init_attr);
 
 /*		rqpair->srq = ibv_create_srq(rctrlr->pd, &srq_init_attr);*/
-
+		attr.pd                 = rqpair->cm_id->pd;
 	}
 
 
-	attr.pd =		rctrlr->pd;
-	SPDK_NOTICELOG("Strange value: pd: %p\n", rctrlr->pd);
 	attr.send_cq		= rqpair->cq;
 	attr.recv_cq		= rqpair->cq;
 	attr.srq		= rqpair->srq;
@@ -691,6 +690,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	if ((rqpair->resources && rqpair->resources->poller && !rqpair->resources->poller->ctx) ||
 	    !rqpair->resources) {
 		poller_ctx = spdk_rdma_create_poller_context(rqpair->cm_id, &attr);
+//		rqpair->resources->poller->ctx = poller_ctx;
 		if (!poller_ctx) {
 			return -1;
 		}
@@ -1101,12 +1101,34 @@ static int
 nvme_rdma_register_reqs(struct nvme_rdma_qpair *rqpair)
 {
 	int i;
-	int rc;
+	int rc = 0;
 	uint32_t lkey;
+	struct ibv_pd *pd = spdk_rdma_qp_pd(rqpair->rdma_qp);
 
-	rc = nvme_rdma_reg_mr(rqpair->cm_id, &rqpair->cmd_mr,
-			      rqpair->cmds, rqpair->num_entries * sizeof(*rqpair->cmds));
-
+///    case for no poll
+	if (!rqpair->resources || !rqpair->resources->poller) {
+		rc = nvme_rdma_reg_mr(rqpair->cm_id, &rqpair->cmd_mr,
+				      rqpair->cmds, rqpair->num_entries * sizeof(*rqpair->cmds));
+	} else {
+		struct ibv_pd *pd = rqpair->resources->poller->pd;
+		SPDK_NOTICELOG("res->poller->pd: %p\n",pd);
+		if (!g_nvme_hooks.get_rkey) {
+			rqpair->cmd_mr.mr = ibv_reg_mr(pd,
+						    rqpair->cmds,
+						    rqpair->num_entries * sizeof(*rqpair->cmds),
+						    IBV_ACCESS_LOCAL_WRITE);
+			if (rqpair->cmd_mr.mr == NULL) {
+				SPDK_ERRLOG("Unable to register mr: %s (%d)\n",
+					    spdk_strerror(errno), errno);
+				rc = -1;
+			}
+		} else {
+			rqpair->cmd_mr.key = g_nvme_hooks.get_rkey(pd,
+								   rqpair->cmds,
+								   rqpair->num_entries * sizeof(*rqpair->cmds));
+		}
+	}
+	
 	if (rc < 0) {
 		goto fail;
 	}
@@ -2406,7 +2428,7 @@ nvme_rdma_cq_process_completions(struct ibv_cq *cq, uint32_t batch_size,
 			if (wc[i].status) {
 				rqpair = rdma_req->req ? nvme_rdma_qpair(rdma_req->req->qpair) : NULL;
 				if (!rqpair) {
-					rqpair = rdma_qpair != NULL ? rdma_qpair : nvme_rdma_poll_group_get_qpair_by_id(group,
+					rqpair = rdma_qpair != NULL ? rdma_qpair : nvme_rdma_poll_group_get_qpair_by_id(group, /*FIXME find proper qp_num in this function */
 							wc[i].qp_num);
 				}
 				assert(rqpair);
@@ -2631,7 +2653,10 @@ nvme_rdma_poller_create(struct nvme_rdma_poll_group *group, struct ibv_context *
 		memset(&srq_init_attr, 0, sizeof(struct ibv_srq_init_attr));
 		srq_init_attr.attr.max_wr = g_transport_opts.srq_depth;
 		srq_init_attr.attr.max_sge = spdk_min(dev_attr.max_sge, NVME_RDMA_DEFAULT_RX_SGE);
+	       
 		poller->srq = ibv_create_srq(poller->pd, &srq_init_attr);
+		SPDK_NOTICELOG("Created poller->srq: %p with poller->pd: %p\n",poller->srq, poller->pd);
+
 		if (!poller->srq) {
 			SPDK_ERRLOG("Unable to create shared receive queue, errno %d\n", errno);
 			ibv_dealloc_pd(poller->pd);
