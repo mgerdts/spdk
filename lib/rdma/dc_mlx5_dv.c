@@ -404,6 +404,7 @@ spdk_dc_qp_accept(struct spdk_dc_mlx5_dv_qp *qp, struct rdma_conn_param *conn_pa
 	
 	accept_data = conn_param->private_data;
 	accept_data->dctn = qp->poller_ctx->qp_dct->qp_num;
+	accept_data->dci_qp_num = qp->poller_ctx->qp_dci->qp_num;
 	SPDK_NOTICELOG("Sending dctn: %"PRIu32"\n",accept_data->dctn);
 	
 	/* NVMEoF target must move qpair to RTS state */

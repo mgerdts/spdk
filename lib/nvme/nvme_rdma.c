@@ -327,6 +327,10 @@ static struct spdk_nvme_transport_opts g_transport_opts = {
 };
 struct nvme_rdma_qpair *nvme_rdma_poll_group_get_qpair_by_id(struct nvme_rdma_poll_group *group,
 		uint32_t qp_num);
+static
+struct nvme_rdma_qpair *nvme_rdma_poll_group_get_qpair_by_wc(struct nvme_rdma_poll_group *group,
+		struct ibv_wc *wc);
+
 
 static inline void *
 nvme_rdma_calloc(size_t nmemb, size_t size)
@@ -453,8 +457,11 @@ nvme_rdma_qpair_process_cm_event(struct nvme_rdma_qpair *rqpair)
 					      rqpair->num_entries, accept_data->crqsize);
 				rqpair->num_entries = spdk_min(rqpair->num_entries, accept_data->crqsize);
 				SPDK_DEBUGLOG(SPDK_LOG_NVME,"Got dctn: %d\n", accept_data->dctn);
+				SPDK_DEBUGLOG(SPDK_LOG_NVME,"Got dctn: %d\n", accept_data->dci_qp_num);
+
 				/*FIXME to spdk_rdma_qp_complete_connect(rqpair->rdma_qp) */
-				spdk_rdma_qp_set_remote_dctn(rqpair->rdma_qp, accept_data->dctn); 
+				spdk_rdma_qp_set_remote_dctn(rqpair->rdma_qp, accept_data->dctn);
+				spdk_rdma_qp_set_remote_dci(rqpair->rdma_qp, accept_data->dci_qp_num);
 			}
 			break;
 		case RDMA_CM_EVENT_DISCONNECTED:
@@ -1227,7 +1234,10 @@ nvme_rdma_connect(struct nvme_rdma_qpair *rqpair)
 	request_data.hsqsize = rqpair->num_entries - 1;
 	request_data.cntlid = ctrlr->cntlid;
 	request_data.dctn = spdk_rdma_qp_get_local_dctn(rqpair->rdma_qp); /* FIXME - something like prepare request in provider*/
+	request_data.dci_qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp);
         SPDK_NOTICELOG("Sending dctn: %"PRIu32"\n",request_data.dctn); 					     
+        SPDK_NOTICELOG("Sending dci: %"PRIu32"\n",request_data.dci_qp_num); 					     
+
 	param.private_data = &request_data;
 	param.private_data_len = sizeof(request_data);
 	param.retry_count = ctrlr->opts.transport_retry_count;
@@ -2383,7 +2393,7 @@ nvme_rdma_cq_process_completions(struct ibv_cq *cq, uint32_t batch_size,
 			rqpair = rdma_rsp->rqpair;
 			if (!rqpair) {
 				/* @todo: qpnum is not guaranteed to be valid if status is not success */
-				rqpair = nvme_rdma_poll_group_get_qpair_by_id(group, wc[i].qp_num);
+				rqpair = nvme_rdma_poll_group_get_qpair_by_wc(group, &wc[i]);
 			}
 			assert(rqpair);
 			assert(rqpair->resources->current_num_recvs > 0);
@@ -2775,6 +2785,38 @@ nvme_rdma_poll_group_get_qpair_by_id(struct nvme_rdma_poll_group *group, uint32_
 	STAILQ_FOREACH(rqpair_tracker, &group->destroyed_qpairs, link) {
 		rqpair = rqpair_tracker->destroyed_qpair_tracker;
 		if (rqpair->rdma_qp->qp->qp_num == qp_num) {
+			return rqpair;
+		}
+	}
+
+	return NULL;
+}
+
+static
+struct nvme_rdma_qpair *
+nvme_rdma_poll_group_get_qpair_by_wc(struct nvme_rdma_poll_group *group, struct ibv_wc *wc)
+{
+	struct spdk_nvme_qpair *qpair;
+	struct nvme_rdma_destroyed_qpair *rqpair_tracker;
+	struct nvme_rdma_qpair *rqpair;
+	SPDK_NOTICELOG("Here will problem\n"); /*FIXME*/
+	STAILQ_FOREACH(qpair, &group->group.disconnected_qpairs, poll_group_stailq) {
+		rqpair = nvme_rdma_qpair(qpair);
+		if (spdk_rdma_is_corresponded_qp(rqpair->rdma_qp, wc)) {
+			return rqpair;
+		}
+	}
+
+	STAILQ_FOREACH(qpair, &group->group.connected_qpairs, poll_group_stailq) {
+		rqpair = nvme_rdma_qpair(qpair);
+		if (spdk_rdma_is_corresponded_qp(rqpair->rdma_qp, wc)) {
+			return rqpair;
+		}
+	}
+
+	STAILQ_FOREACH(rqpair_tracker, &group->destroyed_qpairs, link) {
+		rqpair = rqpair_tracker->destroyed_qpair_tracker;
+		if (spdk_rdma_is_corresponded_qp(rqpair->rdma_qp, wc)) {
 			return rqpair;
 		}
 	}

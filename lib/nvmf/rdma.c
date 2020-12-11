@@ -1280,6 +1280,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 		return -1;
 	}
 	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "dctn received: %d\n", private_data->dctn);
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "dci received: %d\n", private_data->dci_qp_num);
 	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Connect Recv on fabric intf name %s, dev_name %s\n",
 		      event->id->verbs->device->name, event->id->verbs->device->dev_name);
 
@@ -1342,7 +1343,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	rqpair->qpair.transport = transport;
 	rqpair->qpair.trid = port->trid;
 	rqpair->remote_dctn = private_data->dctn;
-	rqpair->remote_dci_qp_num = event->param.conn.qp_num;
+	rqpair->remote_dci_qp_num = private_data->dci_qp_num;
 	STAILQ_INIT(&rqpair->ibv_events);
 	/* use qid from the private data to determine the qpair type
 	   qid will be set to the appropriate value when the controller is created */
@@ -1352,6 +1353,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 
 	spdk_nvmf_tgt_new_qpair(transport->tgt, &rqpair->qpair);
 	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Host Send dctn: %d\n", private_data->dctn);
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "Host Send dci: %d\n", private_data->dci_qp_num);
 	
 	return 0;
 }
