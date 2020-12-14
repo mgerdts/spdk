@@ -1,3 +1,4 @@
+- pkg: add spdk_top  [e418021]
 - rdma: Fix io_buffer alignment [896e4bcbf]
 - spdk.spec: add git sha1 sum to description [745c7e19a]
 - spdk.spec: rhel8 compatibility [79c0d5352]
