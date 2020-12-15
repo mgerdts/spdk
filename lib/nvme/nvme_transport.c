@@ -470,6 +470,7 @@ nvme_transport_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
 				 struct spdk_nvme_qpair *qpair)
 {
 	int rc;
+	SPDK_DEBUGLOG(SPDK_LOG_NVME, "start qpair id: %"PRIu16"\n", qpair->id);
 
 	rc = tgroup->transport->ops.poll_group_remove(tgroup, qpair);
 	if (rc == 0) {

@@ -1975,10 +1975,13 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 	struct nvme_rdma_ctrlr *rctrlr = NULL;
 	struct nvme_rdma_cm_event_entry *entry, *tmp;
 
+
+	SPDK_DEBUGLOG(SPDK_LOG_NVME, "start, rqpair: %p, id: %"PRIu16"\n", rqpair, qpair->id);
+
 	nvme_rdma_unregister_mem(rqpair);
 	nvme_rdma_unregister_reqs(rqpair);
 	if (!rqpair->srq && rqpair->resources) {
-		nvme_rdma_destroy_resources(rqpair->resources);
+		nvme_rdma_destroy_resources(rqpair->resources); /*FIXME especially for admin qp*/
 		rqpair->resources = NULL;
 	}
 
@@ -2889,6 +2892,7 @@ nvme_rdma_poll_group_disconnect_qpair(struct spdk_nvme_qpair *qpair)
 	struct nvme_rdma_destroyed_qpair	*destroyed_qpair;
 	enum nvme_qpair_state			state;
 
+	SPDK_DEBUGLOG(SPDK_LOG_NVME, "start, rqpair: %p, id: %"PRIu16"\n", rqpair, qpair->id);
 	if (rqpair->poll_group_disconnect_in_progress) {
 		return -EINPROGRESS;
 	}

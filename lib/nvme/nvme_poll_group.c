@@ -91,6 +91,7 @@ spdk_nvme_poll_group_remove(struct spdk_nvme_poll_group *group, struct spdk_nvme
 {
 	struct spdk_nvme_transport_poll_group *tgroup;
 
+	SPDK_DEBUGLOG(SPDK_LOG_NVME, "starting for qpair with id: %"PRIu16"\n", qpair->id);
 	STAILQ_FOREACH(tgroup, &group->tgroups, link) {
 		if (tgroup->transport == qpair->transport) {
 			return nvme_transport_poll_group_remove(tgroup, qpair);

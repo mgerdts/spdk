@@ -69,7 +69,6 @@ struct spdk_dc_mlx5_dv_qp {
 };
 
 #define DC_KEY 0xDC00DC00DC00DC00 /*FIXME ???*/
-#define PING_SQ_DEPTH 64  /*FIXME ???*/
 
 static int 
 dc_mlx5_dv_init_dci(struct spdk_dc_mlx5_dv_poller_context *poller_ctx, struct rdma_cm_id *cm_id)
@@ -319,9 +318,8 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 	/* create DCI */
 	attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
 	attr_ex.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_READ;
-/*	attr_ex.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_READ;*/
-	attr_ex.cap.max_send_wr = PING_SQ_DEPTH;
-	attr_ex.cap.max_send_sge = 1;
+	attr_ex.cap.max_send_wr = 128; /* FIXME */
+	attr_ex.cap.max_send_sge = 30; /*FIXME  must be configured in runtime */
 	attr_ex.srq = NULL;
 
 	attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
