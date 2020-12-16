@@ -64,6 +64,7 @@ const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma;
 #define DEFAULT_NVMF_RDMA_CQ_SIZE	4096
 #define MAX_WR_PER_QP(queue_depth)	(queue_depth * 3 + 2)
 
+static int64_t request_transfer_pending = 0;
 static int g_spdk_nvmf_ibv_query_mask =
 	IBV_QP_STATE |
 	IBV_QP_PKEY_INDEX |
@@ -1091,6 +1092,8 @@ request_transfer_in(struct spdk_nvmf_request *req)
 	rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
 	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
 
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "transfer pending: %"PRId64
+		      ", qid:%"PRIu16"\n", ++request_transfer_pending,rqpair->qpair.qid);
 	assert(req->xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER);
 	assert(rdma_req != NULL);
 
@@ -1118,6 +1121,9 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 	rsp = &req->rsp->nvme_cpl;
 	rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
 	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+
+	SPDK_DEBUGLOG(SPDK_LOG_RDMA, "transfer pending: %"PRId64
+		      ", qid:%"PRIu16"\n", ++request_transfer_pending,rqpair->qpair.qid);
 
 	/* Advance our sq_head pointer */
 	if (qpair->sq_head == qpair->sq_head_max) {
@@ -2186,6 +2192,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
 				rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING;
 			} else {
+				SPDK_DEBUGLOG(SPDK_LOG_RDMA, "1. going to READY_TO_COMPLETE\n");
 				rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE;
 			}
 			if (spdk_unlikely(rdma_req->req.dif.dif_insert_or_strip)) {
@@ -2206,6 +2213,8 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 							    error_blk.err_offset);
 						rsp->status.sct = SPDK_NVME_SCT_MEDIA_ERROR;
 						rsp->status.sc = nvmf_rdma_dif_error_to_compl_status(error_blk.err_type);
+						SPDK_DEBUGLOG(SPDK_LOG_RDMA, "2. going to READY_TO_COMPLETE\n");
+
 						rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE;
 						STAILQ_REMOVE(&rqpair->pending_rdma_write_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
 					}
@@ -2234,16 +2243,26 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			/* The data transfer will be kicked off from
 			 * RDMA_REQUEST_STATE_READY_TO_COMPLETE state.
 			 */
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "3. going to READY_TO_COMPLETE\n");
+
 			rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE;
 			break;
 		case RDMA_REQUEST_STATE_READY_TO_COMPLETE:
 			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair->cm_id);
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "1. READY_TO_COMPLETE\n");
+
 			rc = request_transfer_out(&rdma_req->req, &data_posted);
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "2. READY_TO_COMPLETE\n");
+
 			assert(rc == 0); /* No good way to handle this currently */
 			if (rc) {
+				SPDK_DEBUGLOG(SPDK_LOG_RDMA, "3. READY_TO_COMPLETE\n");
+
 				rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			} else {
+				SPDK_DEBUGLOG(SPDK_LOG_RDMA, "4. READY_TO_COMPLETE\n");
+
 				rdma_req->state = data_posted ? RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST :
 						  RDMA_REQUEST_STATE_COMPLETING;
 			}
@@ -3826,13 +3845,16 @@ _poller_submit_sends(struct spdk_nvmf_rdma_transport *rtransport,
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 	struct ibv_send_wr		*bad_wr = NULL;
 	int				rc;
-
 	while (!STAILQ_EMPTY(&rpoller->qpairs_pending_send)) {
 		rqpair = STAILQ_FIRST(&rpoller->qpairs_pending_send);
+		SPDK_DEBUGLOG(SPDK_LOG_RDMA, "transfer pending: %"PRId64
+			      ", qid:%"PRIu16"\n", --request_transfer_pending,rqpair->qpair.qid);
+
 		rc = spdk_rdma_qp_flush_send_wrs(rqpair->rdma_qp, &bad_wr);
 
 		/* bad wr always points to the first wr that failed. */
 		if (rc) {
+			SPDK_DEBUGLOG(SPDK_LOG_RDMA, "rc: %d\n", rc);
 			_qp_reset_failed_sends(rtransport, rqpair, bad_wr, rc);
 		}
 		STAILQ_REMOVE_HEAD(&rpoller->qpairs_pending_send, send_link);

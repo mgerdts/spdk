@@ -55,6 +55,7 @@ struct spdk_dc_mlx5_dv_poller_context {
 	struct ibv_qp *srq; /*FIXME now owning. Just pointer to SRQ*/
 	struct ibv_qp *qp_dct;
 	bool   activated;
+	struct spdk_dc_mlx5_dv_qp *last_qp;	
 };
 
 struct spdk_dc_mlx5_dv_qp {
@@ -66,6 +67,8 @@ struct spdk_dc_mlx5_dv_qp {
 	struct ibv_ah *ah;
 	/* we don't expect concurent usage of spdk_dc_mlx5_dv_qp */
 	__be32 dctn;
+	struct ibv_send_wr *bad_wr;
+	int    last_flush_rc;
 };
 
 #define DC_KEY 0xDC00DC00DC00DC00 /*FIXME ???*/
@@ -544,8 +547,12 @@ spdk_dc_qp_disconnect(struct spdk_dc_mlx5_dv_qp *qp)
 }
 
 static
+int
+spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **bad_wr);
+
+static
 bool
-spdk_dc_qp_queue_send_wrs(struct  spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *first)
+spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *first)
 {
 	struct ibv_send_wr *tmp;
 	struct spdk_dc_mlx5_dv_poller_context *poller_ctx;
@@ -557,11 +564,27 @@ spdk_dc_qp_queue_send_wrs(struct  spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fi
 	poller_ctx = qp->poller_ctx;
 
 	is_first = qp->common.send_wrs.first == NULL;
+	/* SPDK_NOTICELOG("ah: %p\n", qp->ah); */
+	/* SPDK_NOTICELOG("Sending from qpair with dci: %"PRIu32"\n", poller_ctx->qp_dci->qp_num); */
+	/* SPDK_NOTICELOG("remote dctn: %"PRIu32"\n", qp->remote_dctn); */
+	/* SPDK_NOTICELOG("remote_dc_key: %"PRIu64"\n", qp->remote_dc_key); */
+
+	struct spdk_dc_mlx5_dv_qp *last_qp = poller_ctx->last_qp;
+	if (last_qp && last_qp != qp) {
+		struct ibv_send_wr *bad_wr = NULL;
+		last_qp->last_flush_rc = spdk_dc_qp_flush_send_wrs(last_qp, &bad_wr);
+		SPDK_NOTICELOG("last_qp->last_flush_rc got value: %d\n", last_qp->last_flush_rc);
+		if (last_qp->last_flush_rc) {
+			last_qp->bad_wr = bad_wr;
+		}
+	}
 
 	if (is_first) {
+		SPDK_NOTICELOG("pending trace in is_first case - ibv_wr_start call\n");
 		ibv_wr_start(poller_ctx->qp_dci_qpex);
 		qp->common.send_wrs.first = first;
 	} else {
+		SPDK_NOTICELOG("pending trace in else case\n");
 		qp->common.send_wrs.last->next = first;
 	}
 
@@ -586,10 +609,6 @@ spdk_dc_qp_queue_send_wrs(struct  spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fi
 			SPDK_ERRLOG("Unexpected opcode %d\n", tmp->opcode);
 			assert(0);
 		}
-		SPDK_NOTICELOG("ah: %p\n", qp->ah);
-		SPDK_NOTICELOG("Sending from qpair with dci: %"PRIu32"\n", poller_ctx->qp_dci->qp_num);
-		SPDK_NOTICELOG("remote dctn: %"PRIu32"\n", qp->remote_dctn);
-		SPDK_NOTICELOG("remote_dc_key: %"PRIu64"\n", qp->remote_dc_key);
 
 		mlx5dv_wr_set_dc_addr(poller_ctx->qp_dci_mqpex,
 				      qp->ah, qp->remote_dctn,
@@ -598,7 +617,7 @@ spdk_dc_qp_queue_send_wrs(struct  spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fi
 
 		qp->common.send_wrs.last = tmp;
 	}
-
+	poller_ctx->last_qp = qp;
 	return is_first;
 }
 
@@ -612,17 +631,29 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 	assert(qp);
 	assert(qp->poller_ctx);
 
-	if (spdk_unlikely(qp->common.send_wrs.first == NULL)) {
-		return 0;
-        }
-
-	rc =  ibv_wr_complete(qp->poller_ctx->qp_dci_qpex);
-
-	if (spdk_unlikely(rc)) {
-		/* If ibv_wr_complete reports an error that means that no WRs are posted to NIC */
-		*bad_wr = qp->common.send_wrs.first;
+	if (spdk_unlikely(qp->last_flush_rc)) {
+		SPDK_NOTICELOG("Happened spdk_unlikely(qp->last_flush_rc)\n");
+		/*As the previous complete operation was failed let's
+		  return the whole list of wrs for reprocessing without
+		  any attempts to post them to NIC */
+		struct ibv_send_wr *last;
+		last = qp->bad_wr;
+		while (last->next != NULL) {
+			last = last->next;
+		}
+		last->next = qp->common.send_wrs.first;
+		*bad_wr = qp->bad_wr;
+		rc = qp->last_flush_rc;
+		ibv_wr_abort(qp->poller_ctx->qp_dci_qpex);
+	} else if (spdk_unlikely(qp->common.send_wrs.first == NULL)) {
+		rc = 0;
+	} else {
+		rc =  ibv_wr_complete(qp->poller_ctx->qp_dci_qpex);
+		if (spdk_unlikely(rc)) {
+			/* If ibv_wr_complete reports an error that means that no WRs are posted to NIC */
+			*bad_wr = qp->common.send_wrs.first;
+		}
 	}
-
 	qp->common.send_wrs.first = NULL;
 	return rc;
 }
@@ -649,7 +680,7 @@ void spdk_rdma_qp_destroy(struct spdk_rdma_qp *spdk_rdma_qp) {
 	return spdk_dc_qp_destroy(qp);
 }
 
-int spdk_rdma_qp_disconnect(struct spdk_rdma_qp *spdk_rdma_qp) { 
+int spdk_rdma_qp_disconnect(struct spdk_rdma_qp *spdk_rdma_qp) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
 	return spdk_dc_qp_disconnect(qp);
 }
