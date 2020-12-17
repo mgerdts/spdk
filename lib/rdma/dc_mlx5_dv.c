@@ -184,7 +184,6 @@ dc_mlx5_dv_init_dct(struct spdk_dc_mlx5_dv_poller_context *poller_ctx, struct rd
 	int rc = 0;
 	struct ibv_qp *qp = poller_ctx->qp_dct;        
 
-	SPDK_NOTICELOG("DCT qp_num before modifications :%"PRIu32"\n", qp->qp_num);
 	/* modify QP to INIT */
 	{
 		attr_mask = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
@@ -254,7 +253,6 @@ dc_mlx5_dv_init_dct(struct spdk_dc_mlx5_dv_poller_context *poller_ctx, struct rd
 		}
 
 	}
-	SPDK_NOTICELOG("DCT qp_num after modifications :%"PRIu32"\n", qp->qp_num);
 	return rc;
 }
 
@@ -314,9 +312,6 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 		SPDK_ERRLOG("DCT creation failed. errno %s (%d)\n", spdk_strerror(errno), errno);
 		goto exit_free_qps;
 	}
-	SPDK_NOTICELOG("DCT qp_num:%"PRIu32"\n", poller_ctx->qp_dct->qp_num);
-	SPDK_NOTICELOG("DCT pd:%p\n", attr_ex.pd);
-	SPDK_NOTICELOG("DCT srq:%p\n", qp_attr->srq);
 	
 	/* create DCI */
 	attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
@@ -335,7 +330,6 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 		SPDK_ERRLOG("DCI creation failed. errno %s (%d)\n", spdk_strerror(errno), errno);
 		goto exit_destroy_dct;
 	}
-	SPDK_NOTICELOG("DCI qp_num:%"PRIu32"\n", poller_ctx->qp_dci->qp_num);
 	poller_ctx->qp_dci_qpex = ibv_qp_to_qp_ex(poller_ctx->qp_dci);
 	if (!poller_ctx->qp_dci_qpex) {
 		SPDK_ERRLOG("ibv_qp_to_qp_ex(DC). errno %s (%d)\n", spdk_strerror(errno), errno);
@@ -401,12 +395,9 @@ spdk_dc_qp_accept(struct spdk_dc_mlx5_dv_qp *qp, struct rdma_conn_param *conn_pa
 		return NULL;
 	}
 
-	SPDK_NOTICELOG("created ah (%p)\n", qp->ah);
-	
 	accept_data = conn_param->private_data;
 	accept_data->dctn = qp->poller_ctx->qp_dct->qp_num;
 	accept_data->dci_qp_num = qp->poller_ctx->qp_dci->qp_num;
-	SPDK_NOTICELOG("Sending dctn: %"PRIu32"\n",accept_data->dctn);
 	
 	/* NVMEoF target must move qpair to RTS state */
 	/* if (dc_mlx5_dv_init_qpairs(qp) != 0) { */
@@ -450,15 +441,11 @@ spdk_dc_qp_complete_connect(struct spdk_dc_mlx5_dv_qp *qp)
 		rc = errno;
 		return rc;
 	}
-	SPDK_NOTICELOG("created ah (%p)\n", qp->ah);
-	SPDK_NOTICELOG("with    pd (%p)\n", qp->poller_ctx->qp_dci->pd);
 
 	rc = rdma_establish(qp->common.cm_id);
-
 	if (rc) {
 		SPDK_ERRLOG("rdma_establish failed, errno %s (%d)\n", spdk_strerror(errno), errno);
 	}
-	SPDK_NOTICELOG("Complete_connect\n");
 	return rc;
 }
 
@@ -564,27 +551,20 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fir
 	poller_ctx = qp->poller_ctx;
 
 	is_first = qp->common.send_wrs.first == NULL;
-	/* SPDK_NOTICELOG("ah: %p\n", qp->ah); */
-	/* SPDK_NOTICELOG("Sending from qpair with dci: %"PRIu32"\n", poller_ctx->qp_dci->qp_num); */
-	/* SPDK_NOTICELOG("remote dctn: %"PRIu32"\n", qp->remote_dctn); */
-	/* SPDK_NOTICELOG("remote_dc_key: %"PRIu64"\n", qp->remote_dc_key); */
 
 	struct spdk_dc_mlx5_dv_qp *last_qp = poller_ctx->last_qp;
 	if (last_qp && last_qp != qp) {
 		struct ibv_send_wr *bad_wr = NULL;
 		last_qp->last_flush_rc = spdk_dc_qp_flush_send_wrs(last_qp, &bad_wr);
-		SPDK_NOTICELOG("last_qp->last_flush_rc got value: %d\n", last_qp->last_flush_rc);
 		if (last_qp->last_flush_rc) {
 			last_qp->bad_wr = bad_wr;
 		}
 	}
 
 	if (is_first) {
-		SPDK_NOTICELOG("pending trace in is_first case - ibv_wr_start call\n");
 		ibv_wr_start(poller_ctx->qp_dci_qpex);
 		qp->common.send_wrs.first = first;
 	} else {
-		SPDK_NOTICELOG("pending trace in else case\n");
 		qp->common.send_wrs.last->next = first;
 	}
 
@@ -632,7 +612,6 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 	assert(qp->poller_ctx);
 
 	if (spdk_unlikely(qp->last_flush_rc)) {
-		SPDK_NOTICELOG("Happened spdk_unlikely(qp->last_flush_rc)\n");
 		/*As the previous complete operation was failed let's
 		  return the whole list of wrs for reprocessing without
 		  any attempts to post them to NIC */
@@ -736,8 +715,6 @@ struct ibv_pd *
 spdk_rdma_qp_pd(struct spdk_rdma_qp *spdk_rdma_qp)
 {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-        SPDK_NOTICELOG("DCI pd: %p\n",qp->poller_ctx->qp_dci->pd);
-        SPDK_NOTICELOG("DCT pd: %p\n",qp->poller_ctx->qp_dct->pd);
 	return qp->poller_ctx->qp_dct->pd;
 }
 
@@ -773,7 +750,6 @@ spdk_rdma_send_qp(struct spdk_rdma_qp *spdk_rdma_qp)
 
 void spdk_rdma_qp_set_remote_dctn(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dctn) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-	SPDK_NOTICELOG("qp: %p gets dctn: %"PRIu32"\n", qp, dctn);
 	qp->remote_dctn = dctn;      
 }
 
@@ -789,7 +765,5 @@ uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp) {
 
 bool spdk_rdma_is_corresponded_qp(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_wc *wc) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-	SPDK_NOTICELOG("qp->remote_dci: %"PRIu32" qp->poller_ctx->qp_dct->qp_num: %"PRIu32" wc->qp_num: %"PRIu32"\n",
-		       qp->remote_dci, qp->poller_ctx->qp_dct->qp_num, wc->qp_num);
 	return (qp->remote_dci == wc->src_qp) && (wc->qp_num == qp->poller_ctx->qp_dct->qp_num);	
 }

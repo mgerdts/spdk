@@ -704,7 +704,6 @@ static void
 nvme_check_io(struct ns_worker_ctx *ns_ctx)
 {
 	int64_t rc;
-
 	rc = spdk_nvme_poll_group_process_completions(ns_ctx->u.nvme.group, 0, perf_disconnect_cb);
 	if (rc < 0) {
 		fprintf(stderr, "NVMe io qpair process completion error\n");
@@ -813,7 +812,6 @@ static void
 nvme_cleanup_ns_worker_ctx(struct ns_worker_ctx *ns_ctx)
 {
 	int i;
-
 	for (i = 0; i < ns_ctx->u.nvme.num_all_qpairs; i++) {
 		spdk_nvme_poll_group_remove(ns_ctx->u.nvme.group, ns_ctx->u.nvme.qpair[i]);
 		spdk_nvme_ctrlr_free_io_qpair(ns_ctx->u.nvme.qpair[i]);
