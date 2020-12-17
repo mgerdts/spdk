@@ -43,6 +43,7 @@
 #include "spdk/string.h"
 #include "spdk/trace.h"
 #include "spdk/util.h"
+#include "spdk/thread.h"
 
 #include "spdk_internal/assert.h"
 #include "spdk_internal/log.h"
@@ -1201,9 +1202,7 @@ nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpai
 	 * created using rdma cm API. */
 	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
 	static int qp_num_cnt;
-//	ctrlr_event_data.qp_num = spdk_rdma_recv_qp_num(rqpair->rdma_qp); /* FIXME check if proper */
-	ctrlr_event_data.qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp) + qp_num_cnt++; /* FIXME check if proper */
-
+	ctrlr_event_data.qp_num = (uint32_t)spdk_thread_get_id(spdk_get_thread()) * 10000 + qp_num_cnt++;
 	/*rqpair->rdma_qp->qp->qp_num; *//* DCTN in DC case ??? */
 
 	rc = spdk_rdma_qp_accept(rqpair->rdma_qp, &ctrlr_event_data);
@@ -2901,27 +2900,6 @@ nvmf_rdma_disconnect(struct rdma_cm_event *evt)
 
 	return 0;
 }
-/*
-#ifdef DEBUG
-static const char *CM_EVENT_STR[] = {
-	"RDMA_CM_EVENT_ADDR_RESOLVED",
-	"RDMA_CM_EVENT_ADDR_ERROR",
-	"RDMA_CM_EVENT_ROUTE_RESOLVED",
-	"RDMA_CM_EVENT_ROUTE_ERROR",
-	"RDMA_CM_EVENT_CONNECT_REQUEST",
-	"RDMA_CM_EVENT_CONNECT_RESPONSE",
-	"RDMA_CM_EVENT_CONNECT_ERROR",
-	"RDMA_CM_EVENT_UNREACHABLE",
-	"RDMA_CM_EVENT_REJECTED",
-	"RDMA_CM_EVENT_ESTABLISHED",
-	"RDMA_CM_EVENT_DISCONNECTED",
-	"RDMA_CM_EVENT_DEVICE_REMOVAL",
-	"RDMA_CM_EVENT_MULTICAST_JOIN",
-	"RDMA_CM_EVENT_MULTICAST_ERROR",
-	"RDMA_CM_EVENT_ADDR_CHANGE",
-	"RDMA_CM_EVENT_TIMEWAIT_EXIT"
-};
-#endif /* DEBUG */
 
 static void
 nvmf_rdma_disconnect_qpairs_on_port(struct spdk_nvmf_rdma_transport *rtransport,
