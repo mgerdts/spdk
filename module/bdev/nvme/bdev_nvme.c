@@ -2922,12 +2922,48 @@ bdev_nvme_no_pi_readv(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 	return rc;
 }
 
+static inline int
+bdev_nvme_map_io_mkey_type(enum spdk_bdev_ext_io_opts_mem_types mem_type_in,
+			   enum spdk_nvme_ns_cmd_ext_io_opts_mem_types *mem_type_out)
+{
+	int rc = 0;
+
+	switch (mem_type_in) {
+	case SPDK_BDEV_EXT_IO_OPTS_MEM_TYPE_MEMORY_KEY:
+		*mem_type_out =  SPDK_NVME_NS_CMD_EXT_IO_OPTS_MEM_TYPE_MEMORY_KEY;
+		break;
+	default:
+		SPDK_ERRLOG("Unknown get_mkey ctx type %d\n", mem_type_in);
+		assert(0);
+		rc = -1;
+	}
+
+	return rc;
+}
+
+static int bdev_nvme_ns_cmd_io_get_mkey(void *cb_arg, void *address, size_t length, void *pd,
+					uint32_t *mkey)
+{
+	struct nvme_bdev_io *bio = cb_arg;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	int rc;
+
+	assert(bdev_io->internal.ext_opts.mem_type->type == SPDK_BDEV_EXT_IO_OPTS_MEM_TYPE_MEMORY_KEY &&
+	       bdev_io->internal.ext_opts.mem_type->u.mkey.get_mkey_cb != NULL);
+
+	rc = bdev_io->internal.ext_opts.mem_type->u.mkey.get_mkey_cb(
+		     bdev_io->internal.ext_opts.mem_type->u.mkey.get_mkey_cb_arg, address, length, pd, mkey);
+
+	return rc;
+}
+
 static int
 bdev_nvme_readv(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt,
 		void *md, uint64_t lba_count, uint64_t lba, uint32_t flags)
 {
 	int rc;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
 
 	SPDK_DEBUGLOG(bdev_nvme, "read %" PRIu64 " blocks with offset %#" PRIx64 "\n",
 		      lba_count, lba);
@@ -2937,7 +2973,27 @@ bdev_nvme_readv(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 	bio->iovpos = 0;
 	bio->iov_offset = 0;
 
-	if (iovcnt == 1) {
+	if (bdev_io->internal.ext_opts.comp_mask) {
+		struct spdk_nvme_ns_cmd_ext_io_opts opts;
+		struct spdk_nvme_ns_cmd_ext_io_opts_mem_type mem_type;
+
+		opts.comp_mask = bdev_io->internal.ext_opts.comp_mask;
+
+		if (bdev_io->internal.ext_opts.comp_mask & SPDK_BDEV_EXT_IO_OPTS_MEM_TYPE) {
+			opts.mem_type = &mem_type;
+			if (bdev_nvme_map_io_mkey_type(bdev_io->internal.mem_type.type, &opts.mem_type->type) != 0) {
+				return -EINVAL;
+			}
+			if (mem_type.type == SPDK_NVME_NS_CMD_EXT_IO_OPTS_MEM_TYPE_MEMORY_KEY) {
+				mem_type.u.mkey.get_mkey_cb = bdev_nvme_ns_cmd_io_get_mkey;
+			}
+		}
+
+		rc = spdk_nvme_ns_cmd_readv_with_md_ext(ns, qpair, lba, lba_count,
+							bdev_nvme_readv_done, bio, flags,
+							bdev_nvme_queued_reset_sgl, bdev_nvme_queued_next_sge,
+							md, 0, 0, &opts);
+	} else if (iovcnt == 1) {
 		rc = spdk_nvme_ns_cmd_read_with_md(ns, qpair, iov[0].iov_base, md, lba,
 						   lba_count,
 						   bdev_nvme_readv_done, bio,
@@ -2963,6 +3019,7 @@ bdev_nvme_writev(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		 uint32_t flags)
 {
 	int rc;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
 
 	SPDK_DEBUGLOG(bdev_nvme, "write %" PRIu64 " blocks with offset %#" PRIx64 "\n",
 		      lba_count, lba);
@@ -2972,7 +3029,27 @@ bdev_nvme_writev(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 	bio->iovpos = 0;
 	bio->iov_offset = 0;
 
-	if (iovcnt == 1) {
+	if (bdev_io->internal.ext_opts.comp_mask) {
+		struct spdk_nvme_ns_cmd_ext_io_opts opts;
+		struct spdk_nvme_ns_cmd_ext_io_opts_mem_type mem_type;
+
+		opts.comp_mask = bdev_io->internal.ext_opts.comp_mask;
+
+		if (bdev_io->internal.ext_opts.comp_mask & SPDK_BDEV_EXT_IO_OPTS_MEM_TYPE) {
+			opts.mem_type = &mem_type;
+			if (bdev_nvme_map_io_mkey_type(bdev_io->internal.mem_type.type, &opts.mem_type->type) != 0) {
+				return -EINVAL;
+			}
+			if (mem_type.type == SPDK_NVME_NS_CMD_EXT_IO_OPTS_MEM_TYPE_MEMORY_KEY) {
+				mem_type.u.mkey.get_mkey_cb = bdev_nvme_ns_cmd_io_get_mkey;
+			}
+		}
+
+		rc = spdk_nvme_ns_cmd_writev_with_md_ext(ns, qpair, lba, lba_count,
+				bdev_nvme_readv_done, bio, flags,
+				bdev_nvme_queued_reset_sgl, bdev_nvme_queued_next_sge,
+				md, 0, 0, &opts);
+	} else if (iovcnt == 1) {
 		rc = spdk_nvme_ns_cmd_write_with_md(ns, qpair, iov[0].iov_base, md, lba,
 						    lba_count,
 						    bdev_nvme_writev_done, bio,
