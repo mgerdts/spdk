@@ -1,5 +1,11 @@
 # Changelog
 
+## v21.07: (Upcoming Release)
+
+### bdev
+
+New API `spdk_bdev_get_ext_caps` has been added, it allows to get extended bdev capabilities.
+
 ## v21.04: ZNS NVMe bdev, PMR, ADQ initiator, RPM
 
 ### accel
