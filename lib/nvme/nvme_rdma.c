@@ -1386,6 +1386,7 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 	uint32_t remaining_size;
 	uint32_t sge_length;
 	int rc, max_num_sgl, num_sgl_desc;
+	uint32_t mkey = 0;
 
 	assert(req->payload_size != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
@@ -1410,13 +1411,25 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 				    sge_length, NVME_RDMA_MAX_KEYED_SGL_LENGTH);
 			return -1;
 		}
-		rc = spdk_rdma_get_translation(rqpair->mr_map, virt_addr, sge_length, &mem_translation);
-		if (spdk_unlikely(rc)) {
-			SPDK_ERRLOG("Memory translation failed, rc %d\n", rc);
-			return -1;
+
+		if (req->payload.get_sge_mkey) {
+			rc = req->payload.get_sge_mkey(req->payload.contig_or_cb_arg, virt_addr, sge_length,
+						       rqpair->rdma_qp->qp->pd, &mkey);
+			if (spdk_unlikely(rc)) {
+				SPDK_ERRLOG("Memory translation failed, rc %d\n", rc);
+				return -1;
+			}
+		} else {
+			rc = spdk_rdma_get_translation(rqpair->mr_map, virt_addr, sge_length, &mem_translation);
+			if (spdk_unlikely(rc)) {
+				SPDK_ERRLOG("Memory translation failed, rc %d\n", rc);
+				return -1;
+			}
+
+			mkey = spdk_rdma_memory_translation_get_rkey(&mem_translation);
 		}
 
-		cmd->sgl[num_sgl_desc].keyed.key = spdk_rdma_memory_translation_get_rkey(&mem_translation);
+		cmd->sgl[num_sgl_desc].keyed.key = mkey;
 		cmd->sgl[num_sgl_desc].keyed.type = SPDK_NVME_SGL_TYPE_KEYED_DATA_BLOCK;
 		cmd->sgl[num_sgl_desc].keyed.subtype = SPDK_NVME_SGL_SUBTYPE_ADDRESS;
 		cmd->sgl[num_sgl_desc].keyed.length = sge_length;
@@ -1486,6 +1499,7 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 {
 	struct nvme_request *req = rdma_req->req;
 	struct spdk_rdma_memory_translation mem_translation;
+	uint32_t mkey = 0;
 	uint32_t length;
 	void *virt_addr;
 	int rc;
@@ -1510,15 +1524,25 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 		length = req->payload_size;
 	}
 
-	rc = spdk_rdma_get_translation(rqpair->mr_map, virt_addr, length, &mem_translation);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("Memory translation failed, rc %d\n", rc);
-		return -1;
+	if (req->payload.get_sge_mkey) {
+		rc = req->payload.get_sge_mkey(req->payload.contig_or_cb_arg, virt_addr, length,
+					       rqpair->rdma_qp->qp->pd, &mkey);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("Memory translation failed, rc %d\n", rc);
+			return -1;
+		}
+	} else {
+		rc = spdk_rdma_get_translation(rqpair->mr_map, virt_addr, length, &mem_translation);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("Memory translation failed, rc %d\n", rc);
+			return -1;
+		}
+		mkey = spdk_rdma_memory_translation_get_lkey(&mem_translation);
 	}
 
 	rdma_req->send_sgl[1].addr = (uint64_t)virt_addr;
 	rdma_req->send_sgl[1].length = length;
-	rdma_req->send_sgl[1].lkey = spdk_rdma_memory_translation_get_lkey(&mem_translation);
+	rdma_req->send_sgl[1].lkey = mkey;
 
 	rdma_req->send_wr.num_sge = 2;
 
