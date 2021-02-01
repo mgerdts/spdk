@@ -55,7 +55,7 @@ struct spdk_dc_mlx5_dv_poller_context {
 	struct ibv_qp *srq; /*FIXME now owning. Just pointer to SRQ*/
 	struct ibv_qp *qp_dct;
 	bool   activated;
-	struct spdk_dc_mlx5_dv_qp *last_qp;	
+	struct spdk_dc_mlx5_dv_qp *last_qp;
 };
 
 struct spdk_dc_mlx5_dv_qp {
@@ -483,7 +483,14 @@ spdk_dc_qp_destroy(struct spdk_dc_mlx5_dv_qp *qp)
 		SPDK_WARNLOG("Destroying qpair with queued Work Requests\n");
 	}
 
-	/*FIXME to add atomic counter and call poller_context_destroy if needed*/
+	if (qp->bad_wr != NULL) {
+		SPDK_WARNLOG("Destroying qpair with non-processed bad WR\n");
+	}
+
+	if (qp->poller_ctx->last_qp == qp) {
+		qp->poller_ctx->last_qp = NULL;
+	}
+
 	free(qp);
 }
 

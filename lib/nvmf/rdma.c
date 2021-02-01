@@ -2839,7 +2839,8 @@ nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 	/* Judge whether the device is emulated by Software RoCE.
 	 * And it will not send last_wqe event
 	 */
-	if (rqpair->srq != NULL && rqpair->device->attr.vendor_id != 0 &&
+	/*FIXME temporary disabling last_wqe_reached waiting*/
+	if (false && rqpair->srq != NULL && rqpair->device->attr.vendor_id != 0 &&
 	    rqpair->last_wqe_reached == false) {
 		return;
 	}
