@@ -421,7 +421,7 @@ struct spdk_nvmf_rdma_qpair {
 	/* Indicate that nvmf_rdma_close_qpair is called */
 	bool					to_close;
 	uint32_t                                remote_dctn; /*FIXME - find how to keep it until we createg rdma_qp*/
-	uint32_t                                remote_dci_qp_num; /*FIXME - the same as ^^^^^^ */
+	uint32_t                                assigned_id; /*FIXME - the same as ^^^^^^ */
 };
 
 struct spdk_nvmf_rdma_poller_stat {
@@ -1013,7 +1013,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 
 	spdk_rdma_qp_set_poller_context(rqpair->rdma_qp, rqpair->poller->ctx);
 	spdk_rdma_qp_set_remote_dctn(rqpair->rdma_qp, rqpair->remote_dctn); /*FIXME very ugly. rqpair bad temp storage*/
-	spdk_rdma_qp_set_remote_dci(rqpair->rdma_qp, rqpair->remote_dci_qp_num);
+	spdk_rdma_qp_assign_id(rqpair->rdma_qp, rqpair->assigned_id);
 
 	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2),
 					  qp_init_attr.cap.max_send_wr);
@@ -1337,8 +1337,8 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	rqpair->listen_id = event->listen_id;
 	rqpair->qpair.transport = transport;
 	rqpair->qpair.trid = port->trid;
-	rqpair->remote_dctn = private_data->dctn;
-	rqpair->remote_dci_qp_num = private_data->dci_qp_num;
+	rqpair->remote_dctn = private_data->dctn; /*FIXME ugly temporary storing*/ 
+	rqpair->assigned_id = private_data->assigned_id;
 	STAILQ_INIT(&rqpair->ibv_events);
 	/* use qid from the private data to determine the qpair type
 	   qid will be set to the appropriate value when the controller is created */

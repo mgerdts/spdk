@@ -56,13 +56,15 @@ struct spdk_dc_mlx5_dv_poller_context {
 	struct ibv_qp *qp_dct;
 	bool   activated;
 	struct spdk_dc_mlx5_dv_qp *last_qp;
+	uint32_t qpair_counter;
 };
 
 struct spdk_dc_mlx5_dv_qp {
 	struct spdk_rdma_qp common; 
 	struct spdk_dc_mlx5_dv_poller_context *poller_ctx;
 	uint32_t remote_dctn;
-	uint32_t remote_dci;
+	uint32_t remote_qp_id;
+	uint32_t assigned_id;
 	uint64_t remote_dc_key;
 	struct ibv_ah *ah;
 	/* we don't expect concurent usage of spdk_dc_mlx5_dv_qp */
@@ -369,6 +371,17 @@ spdk_dc_mlx5_dv_create_qp(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_att
 	return qp;
 }
 
+static uint32_t
+spdk_dc_generate_qpair_id(struct spdk_dc_mlx5_dv_qp *qp) {
+	qp->remote_qp_id = qp->poller_ctx->qpair_counter++;
+	return qp->remote_qp_id;
+}
+
+static void
+spdk_dc_qp_assign_id(struct spdk_dc_mlx5_dv_qp *qp, uint32_t assigned_id) {
+	qp->assigned_id = assigned_id;
+}
+
 static
 int
 spdk_dc_qp_accept(struct spdk_dc_mlx5_dv_qp *qp, struct rdma_conn_param *conn_param)
@@ -397,7 +410,7 @@ spdk_dc_qp_accept(struct spdk_dc_mlx5_dv_qp *qp, struct rdma_conn_param *conn_pa
 
 	accept_data = conn_param->private_data;
 	accept_data->dctn = qp->poller_ctx->qp_dct->qp_num;
-	accept_data->dci_qp_num = qp->poller_ctx->qp_dci->qp_num;
+	accept_data->assigned_id = spdk_dc_generate_qpair_id(qp);
 	
 	/* NVMEoF target must move qpair to RTS state */
 	/* if (dc_mlx5_dv_init_qpairs(qp) != 0) { */
@@ -581,7 +594,7 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fir
 
 		switch (tmp->opcode) {
 		case IBV_WR_SEND:
-			ibv_wr_send(poller_ctx->qp_dci_qpex);
+			ibv_wr_send_imm(poller_ctx->qp_dci_qpex, qp->assigned_id);
 			break;
 		case IBV_WR_SEND_WITH_INV:
 			ibv_wr_send_inv(poller_ctx->qp_dci_qpex, tmp->invalidate_rkey);
@@ -760,11 +773,6 @@ void spdk_rdma_qp_set_remote_dctn(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dc
 	qp->remote_dctn = dctn;      
 }
 
-void spdk_rdma_qp_set_remote_dci(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dci_qp_num) {
-	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-	qp->remote_dci = dci_qp_num;      
-}
-
 uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
 	return qp->poller_ctx->qp_dct->qp_num;
@@ -772,5 +780,16 @@ uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp) {
 
 bool spdk_rdma_is_corresponded_qp(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_wc *wc) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-	return (qp->remote_dci == wc->src_qp) && (wc->qp_num == qp->poller_ctx->qp_dct->qp_num);	
+	return qp->remote_qp_id == wc->imm_data;
+}
+
+uint32_t spdk_rdma_generate_qpair_id(struct spdk_rdma_qp *spdk_rdma_qp) {
+	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+	return spdk_dc_generate_qpair_id(qp);
+}
+
+void spdk_rdma_qp_assign_id(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t assigned_id)
+{
+	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+	spdk_dc_qp_assign_id(qp, assigned_id);
 }

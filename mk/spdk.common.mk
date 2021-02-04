@@ -147,7 +147,7 @@ COMMON_CFLAGS += -I$(CONFIG_PMDK_DIR)/src/include
 endif
 
 ifeq ($(CONFIG_RDMA),y)
-SYS_LIBS += -libverbs -lrdmacm
+SYS_LIBS += -libverbs -lrdmacm -lmlx5
 COMMON_CFLAGS +=-I/hpc/local/work/denisn/dc/rdma-core/build/include 
 endif
 

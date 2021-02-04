@@ -579,10 +579,10 @@ if [[ $sys_name == "FreeBSD" ]]; then
 fi
 
 if [ "${CONFIG[RDMA]}" = "y" ]; then
-  if [[ ! "${CONFIG[RDMA_PROV]}" == "verbs" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv_dc" ]]; then
-    echo "Invalid RDMA provider specified, must be \"verbs\" or \"mlx5_dv\" or \"mlx5_dv_dc\""
-    exit 1
-  fi
+	if [[ ! "${CONFIG[RDMA_PROV]}" == "verbs" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv" ]] && [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv_dc" ]]; then
+		echo "Invalid RDMA provider specified, must be \"verbs\" or \"mlx5_dv\" or \"mlx5_dv_dc\""
+		exit 1
+	fi
 
 	if ! echo -e '#include <infiniband/verbs.h>\n#include <rdma/rdma_verbs.h>\n' \
 		'int main(void) { return 0; }\n' \
@@ -592,7 +592,7 @@ if [ "${CONFIG[RDMA]}" = "y" ]; then
 		exit 1
 	fi
 
-	if echo -e '#include <infiniband/verbs.h>\n' \
+	if [[ ! "${CONFIG[RDMA_PROV]}" == "mlx5_dv_dc" ]] && echo -e '#include <infiniband/verbs.h>\n' \
 		'int main(void) { return !!IBV_WR_SEND_WITH_INV; }\n' \
 		| ${BUILD_CMD[@]} -c - 2>/dev/null; then
 		CONFIG[RDMA_SEND_WITH_INVAL]="y"

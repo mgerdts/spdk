@@ -137,5 +137,7 @@ bool spdk_rdma_is_corresponded_qp(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_
 void spdk_rdma_qp_set_remote_dci(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t dci_qp_num);
 struct ibv_qp *spdk_rdma_receive_qp(struct spdk_rdma_qp *spdk_rdma_qp);
 struct ibv_qp *spdk_rdma_send_qp(struct spdk_rdma_qp *spdk_rdma_qp);
+uint32_t spdk_rdma_generate_qpair_id(struct spdk_rdma_qp *spdk_rdma_qp);
+void spdk_rdma_qp_assign_id(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t assigned_id);
 
 #endif /* SPDK_RDMA_H */

@@ -459,7 +459,7 @@ nvme_rdma_qpair_process_cm_event(struct nvme_rdma_qpair *rqpair)
 
 				/*FIXME to spdk_rdma_qp_complete_connect(rqpair->rdma_qp) */
 				spdk_rdma_qp_set_remote_dctn(rqpair->rdma_qp, accept_data->dctn);
-				spdk_rdma_qp_set_remote_dci(rqpair->rdma_qp, accept_data->dci_qp_num);
+				spdk_rdma_qp_assign_id(rqpair->rdma_qp, accept_data->assigned_id);
 			}
 			break;
 		case RDMA_CM_EVENT_DISCONNECTED:
@@ -1223,7 +1223,7 @@ nvme_rdma_connect(struct nvme_rdma_qpair *rqpair)
 	request_data.hsqsize = rqpair->num_entries - 1;
 	request_data.cntlid = ctrlr->cntlid;
 	request_data.dctn = spdk_rdma_qp_get_local_dctn(rqpair->rdma_qp); /* FIXME - something like prepare request in provider*/
-	request_data.dci_qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp);
+	request_data.assigned_id = spdk_rdma_generate_qpair_id(rqpair->rdma_qp); /*FIXME - see above */
 	param.private_data = &request_data;
 	param.private_data_len = sizeof(request_data);
 	param.retry_count = ctrlr->opts.transport_retry_count;
