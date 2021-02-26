@@ -676,3 +676,14 @@ enum spdk_nvme_transport_type nvme_transport_get_trtype(const struct spdk_nvme_t
 {
 	return transport->ops.type;
 }
+
+int nvme_transport_get_caps(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *caps)
+{
+	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
+
+	assert(transport != NULL);
+	if (transport->ops.get_caps) {
+		return transport->ops.get_caps(ctrlr, caps);
+	}
+	return -ENOTSUP;
+}

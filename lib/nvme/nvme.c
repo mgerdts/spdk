@@ -1562,4 +1562,9 @@ spdk_nvme_connect_async(const struct spdk_nvme_transport_id *trid,
 	return probe_ctx;
 }
 
+int spdk_nvme_get_caps(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *caps)
+{
+	return nvme_transport_get_caps(ctrlr, caps);
+}
+
 SPDK_LOG_REGISTER_COMPONENT(nvme)

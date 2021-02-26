@@ -3881,11 +3881,11 @@ spdk_bdev_writev_blocks_with_md_ext(struct spdk_bdev_desc *desc, struct spdk_io_
 				    spdk_bdev_io_completion_cb cb, void *cb_arg,
 				    struct spdk_bdev_ext_io_opts *opts)
 {
-	if (!spdk_bdev_is_md_separate(spdk_bdev_desc_get_bdev(desc))) {
+	if (md && !spdk_bdev_is_md_separate(spdk_bdev_desc_get_bdev(desc))) {
 		return -EINVAL;
 	}
 
-	if (!_bdev_io_check_md_buf(iov, md)) {
+	if (md && !_bdev_io_check_md_buf(iov, md)) {
 		return -EINVAL;
 	}
 

@@ -74,6 +74,7 @@ struct spdk_sock_request {
 		uint32_t			offset;
 	} internal;
 
+	uint32_t *mkeys;
 	int				iovcnt;
 	/* struct iovec			iov[]; */
 };
@@ -139,6 +140,14 @@ struct spdk_sock_impl_opts {
 };
 
 /**
+ * SPDK socket capabilities. The structure is used to get capabilities specific for a socket instance
+ */
+struct spdk_sock_caps {
+	bool zcopy_send;
+	void *ibv_pd;
+};
+
+/**
  * Spdk socket initialization options.
  *
  * A pointer to this structure will be used by spdk_sock_listen_ext() or spdk_sock_connect_ext() to
@@ -161,6 +170,8 @@ struct spdk_sock_opts {
 	 * Used to enable or disable zero copy on socket layer.
 	 */
 	bool zcopy;
+
+	uint16_t queue_depth;
 };
 
 /**
@@ -316,6 +327,23 @@ ssize_t spdk_sock_writev(struct spdk_sock *sock, struct iovec *iov, int iovcnt);
  * \param req The write request to submit.
  */
 void spdk_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req);
+
+typedef int (*spdk_sock_io_get_mkey)(void *cb_arg, void *address, size_t length, void *pd,
+				     uint32_t *mkey);
+
+/**
+ * Write data to the given socket asynchronously, calling
+ * the provided callback when the data has been written.
+ *
+ * \param sock Socket to write to.
+ * \param req The write request to submit.
+ * \param mapped_iovs Determines whether iov entry's mkey should be retrieved using the given \b get_mkey_cb
+ * or using standard SPDK translation approach. Value `true` means use \b get_mkey_cb
+ * \param get_mkey_cb Callback to get an mkey per iov entry
+ * \param cb_arg Argument passed to \b get_mkey_cb
+ */
+int spdk_sock_writev_async_ext(struct spdk_sock *sock, struct spdk_sock_request *req,
+			       bool *mapped_iovs, spdk_sock_io_get_mkey get_mkey_cb, void *cb_arg);
 
 /**
  * Read message from the given socket to the I/O vector array.
@@ -512,6 +540,8 @@ int spdk_sock_set_default_impl(const char *impl_name);
  * \param w JSON write context
  */
 void spdk_sock_write_config_json(struct spdk_json_write_ctx *w);
+
+int spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps);
 
 #ifdef __cplusplus
 }

@@ -117,7 +117,7 @@ struct nvme_tcp_pdu {
 	 * any unwanted padding */
 	struct spdk_sock_request			sock_req;
 	struct iovec					iov[NVME_TCP_MAX_SGL_DESCRIPTORS * 2];
-
+	uint32_t				mkeys[NVME_TCP_MAX_SGL_DESCRIPTORS * 2];
 	struct iovec					data_iov[NVME_TCP_MAX_SGL_DESCRIPTORS];
 	uint32_t					data_iovcnt;
 	uint32_t					data_len;

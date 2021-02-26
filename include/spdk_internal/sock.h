@@ -125,6 +125,8 @@ struct spdk_net_impl {
 	int (*get_opts)(struct spdk_sock_impl_opts *opts, size_t *len);
 	int (*set_opts)(const struct spdk_sock_impl_opts *opts, size_t len);
 
+	int (*get_caps)(struct spdk_sock *sock, struct spdk_sock_caps *caps);
+
 	STAILQ_ENTRY(spdk_net_impl) link;
 };
 

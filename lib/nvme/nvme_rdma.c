@@ -2731,6 +2731,14 @@ nvme_rdma_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 	free(stats);
 }
 
+static int
+nvme_rdma_get_caps(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *caps)
+{
+	caps->flags |= SPDK_NVME_CAP_EXT_MEMORY_TYPE_MKEY;
+
+	return 0;
+}
+
 void
 spdk_nvme_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
 {
@@ -2774,6 +2782,7 @@ const struct spdk_nvme_transport_ops rdma_ops = {
 	.poll_group_destroy = nvme_rdma_poll_group_destroy,
 	.poll_group_get_stats = nvme_rdma_poll_group_get_stats,
 	.poll_group_free_stats = nvme_rdma_poll_group_free_stats,
+	.get_caps = nvme_rdma_get_caps
 };
 
 SPDK_NVME_TRANSPORT_REGISTER(rdma, &rdma_ops);

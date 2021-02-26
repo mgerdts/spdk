@@ -233,6 +233,10 @@ sock_init_opts(struct spdk_sock_opts *opts, struct spdk_sock_opts *opts_user)
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, zcopy)) {
 		opts->zcopy = opts_user->zcopy;
 	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, queue_depth)) {
+		opts->queue_depth = opts_user->queue_depth;
+	}
 }
 
 struct spdk_sock *
@@ -698,6 +702,7 @@ sock_get_impl_by_name(const char *impl_name)
 
 	assert(impl_name != NULL);
 	STAILQ_FOREACH(impl, &g_net_impls, link) {
+		SPDK_NOTICELOG("\t impl %s\n", impl->name);
 		if (0 == strcmp(impl_name, impl->name)) {
 			return impl;
 		}
@@ -835,6 +840,7 @@ int spdk_sock_set_default_impl(const char *impl_name)
 
 	impl = sock_get_impl_by_name(impl_name);
 	if (!impl) {
+		SPDK_ERRLOG("no impls %s\n", impl_name);
 		errno = EINVAL;
 		return -1;
 	}
@@ -853,6 +859,19 @@ int spdk_sock_set_default_impl(const char *impl_name)
 	g_default_impl = impl;
 
 	return 0;
+}
+
+int
+spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
+{
+	assert(sock);
+	assert(caps);
+
+	if (sock->net_impl->get_caps) {
+		return sock->net_impl->get_caps(sock, caps);
+	}
+
+	return -ENOTSUP;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(sock)

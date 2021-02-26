@@ -1133,10 +1133,15 @@ static void
 bdev_nvme_get_ext_caps(void *ctx, struct spdk_bdev_capability *caps)
 {
 	struct nvme_bdev *nbdev = ctx;
+	struct spdk_nvme_capability nvme_caps = {};
+	int rc;
 
-	if (nbdev->nvme_ns->ctrlr->connected_trid->trtype == SPDK_NVME_TRANSPORT_RDMA) {
-		/* RDMA transport can work with data represented by memory key */
-		caps->flags |= SPDK_BDEV_CAP_EXT_MEMORY_TYPE_MKEY;
+	rc = spdk_nvme_get_caps(nbdev->nvme_ns->ctrlr->ctrlr, &nvme_caps);
+	if (rc == 0) {
+		SPDK_NOTICELOG("bdev %s flags %"PRIx64"\n", spdk_bdev_get_name(&nbdev->disk), nvme_caps.flags);
+		if (nvme_caps.flags & SPDK_NVME_CAP_EXT_MEMORY_TYPE_MKEY) {
+			caps->flags |= SPDK_BDEV_CAP_EXT_MEMORY_TYPE_MKEY;
+		}
 	}
 }
 

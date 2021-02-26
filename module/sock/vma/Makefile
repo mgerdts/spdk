@@ -31,18 +31,17 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y = posix
-DIRS-y += vma
-ifeq ($(OS), Linux)
-DIRS-$(CONFIG_URING) += uring
-endif
+CFLAGS += -I/hpc/local/work/alexeymar/repo/libvma-pro/_install/include/mellanox
 
-.PHONY: all clean $(DIRS-y)
+SO_VER := 3
+SO_MINOR := 0
 
-all: $(DIRS-y)
-clean: $(DIRS-y)
+LIBNAME = sock_vma
+C_SRCS = vma.c
 
-include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
+
+include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk

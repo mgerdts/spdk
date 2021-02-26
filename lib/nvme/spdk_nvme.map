@@ -228,5 +228,7 @@
 	spdk_opal_get_locking_range_info;
 	spdk_opal_free_locking_range_info;
 
+	spdk_nvme_get_caps;
+
 	local: *;
 };

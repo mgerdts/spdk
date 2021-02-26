@@ -109,6 +109,8 @@ SOCK_MODULES_LIST += sock_uring
 endif
 endif
 
+SOCK_MODULES_LIST += sock_vma
+
 ACCEL_MODULES_LIST = accel_ioat ioat
 ifeq ($(CONFIG_IDXD),y)
 ACCEL_MODULES_LIST += accel_idxd idxd

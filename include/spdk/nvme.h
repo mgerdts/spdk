@@ -3545,6 +3545,24 @@ void spdk_nvme_print_command(uint16_t qid, struct spdk_nvme_cmd *cmd);
  */
 void spdk_nvme_print_completion(uint16_t qid, struct spdk_nvme_cpl *cpl);
 
+
+enum spdk_nvme_capability_type {
+	/** Bdev supports indirect memory access using Memory Key.
+	 * That means that the user of ext bdev API can fill spdk_bdev_ext_io_opts_mem_type
+	 * structure and set SPDK_BDEV_EXT_IO_OPTS_MEM_TYPE flag in spdk_bdev_ext_io_opts structure.
+	 * That also means that bdev can work with regular memory buffers */
+	SPDK_NVME_CAP_EXT_MEMORY_TYPE_MKEY = 1u << 0u,
+};
+
+struct spdk_nvme_capability {
+	/** Size of this structure in bytes, should be set by the user */
+	size_t size;
+	/** bitwise combination of \ref spdk_bdev_capability_type */
+	uint64_t flags;
+};
+
+int spdk_nvme_get_caps(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *caps);
+
 struct ibv_context;
 struct ibv_pd;
 struct ibv_mr;
@@ -3774,6 +3792,7 @@ struct spdk_nvme_transport_ops {
 
 	void (*poll_group_free_stats)(struct spdk_nvme_transport_poll_group *tgroup,
 				      struct spdk_nvme_transport_poll_group_stat *stats);
+	int (*get_caps)(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *caps);
 };
 
 /**
