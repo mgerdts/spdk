@@ -109,7 +109,9 @@ SOCK_MODULES_LIST += sock_uring
 endif
 endif
 
+ifeq ($(CONFIG_VMA),y)
 SOCK_MODULES_LIST += sock_vma
+endif
 
 ACCEL_MODULES_LIST = accel_ioat ioat
 ifeq ($(CONFIG_IDXD),y)

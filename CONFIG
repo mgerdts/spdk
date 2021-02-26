@@ -172,3 +172,7 @@ CONFIG_RAID5=n
 
 # Build with IDXD support
 CONFIG_IDXD=n
+
+# Build with libvma suport.
+CONFIG_VMA=n
+CONFIG_VMA_DIR=

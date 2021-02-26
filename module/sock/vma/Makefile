@@ -1,8 +1,7 @@
 #
 #  BSD LICENSE
 #
-#  Copyright (c) Intel Corporation.
-#  All rights reserved.
+#  Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -34,13 +33,13 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-CFLAGS += -I/hpc/local/work/igori/libvma-pro/build-master/install/include/mellanox/
-
-SO_VER := 3
+SO_VER := 1
 SO_MINOR := 0
 
 LIBNAME = sock_vma
 C_SRCS = vma.c
+
+CFLAGS += -I$(CONFIG_VMA_DIR)/include
 
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 

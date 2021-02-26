@@ -35,10 +35,10 @@ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
 DIRS-y = posix
-DIRS-y += vma
 ifeq ($(OS), Linux)
 DIRS-$(CONFIG_URING) += uring
 endif
+DIRS-$(CONFIG_VMA) += vma
 
 .PHONY: all clean $(DIRS-y)
 

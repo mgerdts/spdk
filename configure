@@ -98,6 +98,8 @@ function usage() {
 	echo "                           No path required."
 	echo " wpdk                      Build using WPDK to provide support for Windows (experimental)."
 	echo "                           The argument must be a directory containing lib and include."
+	echo " vma                       Build vma socket layer."
+	echo "                           Path to libvma installation directory is required. Example: /opt/libvma"
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -451,6 +453,15 @@ for i in "$@"; do
 			;;
 		--without-idxd)
 			CONFIG[IDXD]=n
+			;;
+		--with-vma=*)
+			check_dir "$i"
+			CONFIG[VMA_DIR]=$(readlink -f ${i#*=})
+			CONFIG[VMA]=y
+			;;
+		--without-vma)
+			CONFIG[VMA_DIR]=
+			CONFIG[VMA]=n
 			;;
 		--)
 			break

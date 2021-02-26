@@ -46,6 +46,7 @@
 #endif
 
 #include <infiniband/verbs.h>
+#include <mellanox/vma_extra.h>
 
 #include "spdk/log.h"
 #include "spdk/pipe.h"
@@ -53,8 +54,6 @@
 #include "spdk/util.h"
 #include "spdk/string.h"
 #include "spdk_internal/sock.h"
-
-#include <vma_extra.h>
 
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32
@@ -1364,7 +1363,7 @@ static struct spdk_net_impl g_vma_net_impl = {
 	.group_impl_close	= vma_sock_group_impl_close,
 	.get_opts	= vma_sock_impl_get_opts,
 	.set_opts	= vma_sock_impl_set_opts,
-	.get_caps = vma_sock_get_caps
+	.get_caps	= vma_sock_get_caps
 };
 
 SPDK_NET_IMPL_REGISTER(vma, &g_vma_net_impl, DEFAULT_SOCK_PRIORITY);
