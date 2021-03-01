@@ -110,6 +110,7 @@ static struct spdk_sock_impl_opts g_spdk_vma_sock_impl_opts = {
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
+static struct vma_api_t *g_vma_api;
 
 static int
 get_addr_str(struct sockaddr *sa, char *host, size_t hlen)
@@ -394,6 +395,11 @@ vma_sock_create(const char *ip, int port,
 	bool enable_zero_copy = true;
 
 	assert(opts != NULL);
+
+	if (!g_vma_api) {
+		g_vma_api = vma_get_api();
+		SPDK_NOTICELOG("Got VMA API %p\n", g_vma_api);
+	}
 
 	if (ip == NULL) {
 		return NULL;
