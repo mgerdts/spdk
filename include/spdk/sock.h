@@ -137,6 +137,11 @@ struct spdk_sock_impl_opts {
 	 * Enable or disable use of zero copy flow on send for client sockets. Used by posix socket module.
 	 */
 	bool enable_zerocopy_send_client;
+
+	/**
+	 * Enable or disable use of zero copy flow on receive. Used by vma socket module.
+	 */
+	bool enable_zerocopy_recv;
 };
 
 /**

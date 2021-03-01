@@ -90,6 +90,7 @@ struct spdk_vma_sock {
 	struct ibv_pd *pd;
 	bool			pending_recv;
 	bool			zcopy;
+	bool			recv_zcopy;
 	int			so_priority;
 	TAILQ_ENTRY(spdk_vma_sock)	link;
 };
@@ -107,6 +108,7 @@ static struct spdk_sock_impl_opts g_spdk_vma_sock_impl_opts = {
 	.enable_zerocopy_send = true,
 	.enable_quickack = false,
 	.enable_placement_id = false,
+	.enable_zerocopy_recv = false,
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
@@ -315,6 +317,11 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 	}
 
 #endif
+
+	if (enable_zero_copy && g_spdk_vma_sock_impl_opts.enable_zerocopy_recv) {
+		SPDK_NOTICELOG("Sock %d: use zerocopy recv\n", sock->fd);
+		sock->recv_zcopy = true;
+	}
 
 #if defined(__linux__)
 	flag = 1;
@@ -1296,6 +1303,7 @@ vma_sock_impl_get_opts(struct spdk_sock_impl_opts *opts, size_t *len)
 	GET_FIELD(enable_zerocopy_send);
 	GET_FIELD(enable_quickack);
 	GET_FIELD(enable_placement_id);
+	GET_FIELD(enable_zerocopy_recv);
 
 #undef GET_FIELD
 #undef FIELD_OK
@@ -1326,6 +1334,7 @@ vma_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	SET_FIELD(enable_zerocopy_send);
 	SET_FIELD(enable_quickack);
 	SET_FIELD(enable_placement_id);
+	SET_FIELD(enable_zerocopy_recv);
 
 #undef SET_FIELD
 #undef FIELD_OK

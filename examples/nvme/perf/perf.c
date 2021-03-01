@@ -336,6 +336,7 @@ perf_set_sock_zcopy(const char *impl_name, bool enable)
 
 	sock_opts.enable_zerocopy_send = enable;
 	sock_opts.enable_zerocopy_send_client = enable;
+	sock_opts.enable_zerocopy_recv = enable;
 
 	if (spdk_sock_impl_set_opts(impl_name, &sock_opts, opts_size)) {
 		fprintf(stderr, "Failed to %s zcopy send for sock impl %s: error %d (%s)\n",
