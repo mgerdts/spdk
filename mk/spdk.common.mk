@@ -148,7 +148,10 @@ endif
 
 ifeq ($(CONFIG_RDMA),y)
 SYS_LIBS += -libverbs -lrdmacm -lmlx5
-COMMON_CFLAGS +=-I/hpc/local/work/denisn/dc/rdma-core/build/include 
+ifneq ($(strip $(CONFIG_RDMA_PATH)),)
+CFLAGS += -I$(CONFIG_RDMA_PATH)/include
+LDFLAGS += -L$(CONFIG_RDMA_PATH)/lib
+endif
 endif
 
 ifeq ($(CONFIG_URING),y)
