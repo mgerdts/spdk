@@ -57,6 +57,7 @@
 
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32
+#define VMA_PACKETS_BUF_SIZE 128
 
 #if defined(SO_ZEROCOPY) && defined(MSG_ZEROCOPY)
 #define SPDK_ZEROCOPY
@@ -92,6 +93,14 @@ struct spdk_vma_sock {
 	bool			zcopy;
 	bool			recv_zcopy;
 	int			so_priority;
+
+	char			vma_packets_buf[VMA_PACKETS_BUF_SIZE];
+	struct vma_packets_t	*packets;
+	struct vma_packet_t	*cur_packet;
+	size_t			cur_packet_idx;
+	size_t			cur_iov_idx;
+	size_t			cur_offset;
+
 	TAILQ_ENTRY(spdk_vma_sock)	link;
 };
 
@@ -740,12 +749,166 @@ vma_sock_flush(struct spdk_sock *sock)
 	return _sock_flush_ext(sock);
 }
 
+static inline struct vma_packet_t *
+next_packet(struct vma_packet_t *packet)
+{
+	return (struct vma_packet_t *)((char *)packet +
+				       sizeof(struct vma_packet_t) +
+				       packet->sz_iov * sizeof(struct iovec));
+}
+
+static ssize_t
+vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
+{
+	int flags = 0;
+	int ret;
+
+	ret = g_vma_api->recvfrom_zcopy(sock->fd, sock->vma_packets_buf,
+					sizeof(sock->vma_packets_buf), &flags, NULL, NULL);
+	if (ret < 0) {
+		if (spdk_unlikely(errno != EAGAIN && errno != EWOULDBLOCK)) {
+			SPDK_ERRLOG("recvfrom_zcopy failed, errno %d\n", errno);
+		}
+
+		return ret;
+	} else if (ret == 0) {
+		return 0;
+	}
+
+	if (!(flags & MSG_VMA_ZCOPY)) {
+		SPDK_WARNLOG("Zcopy receive was not performed. Got %d bytes.\n", ret);
+		return -1;
+	}
+
+	sock->packets = (struct vma_packets_t *)sock->vma_packets_buf;
+	SPDK_DEBUGLOG(vma, "Sock %d: got %lu packets, total %d bytes\n",
+		      sock->fd, sock->packets->n_packet_num, ret);
+	sock->cur_packet = sock->packets->pkts;
+	sock->cur_packet_idx = 0;
+	sock->cur_iov_idx = 0;
+	sock->cur_offset = 0;
+
+	return ret;
+}
+
+static inline void
+packets_advance(struct spdk_vma_sock *sock, size_t len)
+{
+	SPDK_DEBUGLOG(vma, "Sock %d: advance packets by %lu bytes\n", sock->fd, len);
+	while (len > 0) {
+		struct iovec *iov = &sock->cur_packet->iov[sock->cur_iov_idx];
+		int iov_len = iov->iov_len - sock->cur_offset;
+
+		if ((int)len < iov_len) {
+			sock->cur_offset += len;
+			len = 0;
+		} else {
+			len -= iov_len;
+
+			/* Next iov */
+			sock->cur_offset = 0;
+			sock->cur_iov_idx++;
+			if (sock->cur_iov_idx >= sock->cur_packet->sz_iov) {
+				/* Next packet */
+				sock->cur_iov_idx = 0;
+				sock->cur_packet_idx++;
+				sock->cur_packet = next_packet(sock->cur_packet);
+				if (sock->cur_packet_idx >= sock->packets->n_packet_num) {
+					int ret;
+					/* No more packets */
+					SPDK_DEBUGLOG(vma, "Sock %d: free %lu packets\n",
+						      sock->fd, sock->packets->n_packet_num);
+					ret = g_vma_api->free_packets(sock->fd,
+								      sock->packets->pkts,
+								      sock->packets->n_packet_num);
+					if (ret < 0) {
+						SPDK_ERRLOG("Free VMA packets failed, err %d\n", errno);
+					}
+					sock->packets = NULL;
+					sock->cur_packet = NULL;
+					sock->cur_packet_idx = 0;
+				}
+			}
+		}
+	}
+
+	assert(len == 0);
+}
+
+static size_t
+packets_next_chunk(struct spdk_vma_sock *sock, void **buf, size_t max_len)
+{
+	if (sock->packets) {
+		struct iovec *iov = &sock->cur_packet->iov[sock->cur_iov_idx];
+		size_t len = iov->iov_len - sock->cur_offset;
+
+		assert(max_len > 0);
+		assert(len > 0);
+		len = spdk_min(len, max_len);
+		*buf = iov->iov_base + sock->cur_offset;
+		return len;
+	}
+
+	return 0;
+}
+
+static int
+readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
+{
+	int ret;
+
+	if (sock->recv_zcopy) {
+		int i;
+		size_t offset = 0;
+
+		if (!sock->packets) {
+			ret = vma_sock_recvfrom_zcopy(sock);
+			if (ret <= 0) {
+				SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d, errno %d\n",
+					      sock->fd, ret, errno);
+				return ret;
+			}
+		}
+
+		assert(sock->packets);
+		ret = 0;
+		i = 0;
+		while (i < iovcnt) {
+			void *buf;
+			size_t len;
+			struct iovec *iov = &iovs[i];
+			size_t iov_len = iov->iov_len - offset;
+
+			len = packets_next_chunk(sock, &buf, iov_len);
+			if (len == 0) {
+				/* No more data */
+				SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
+				return ret;
+			}
+
+			memcpy(iov->iov_base + offset, buf, len);
+			packets_advance(sock, len);
+			ret += len;
+			offset += len;
+			if (offset >= iov->iov_len) {
+				offset = 0;
+				i++;
+			}
+		}
+		SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
+	} else {
+		ret = readv(sock->fd, iovs, iovcnt);
+	}
+
+	return ret;
+}
+
 static ssize_t
 vma_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 {
 	struct spdk_vma_sock *sock = __vma_sock(_sock);
 
-	return readv(sock->fd, iov, iovcnt);
+	return readv_wrapper(sock, iov, iovcnt);
 }
 
 static ssize_t
@@ -1382,3 +1545,5 @@ static struct spdk_net_impl g_vma_net_impl = {
 };
 
 SPDK_NET_IMPL_REGISTER(vma, &g_vma_net_impl, DEFAULT_SOCK_PRIORITY);
+
+SPDK_LOG_REGISTER_COMPONENT(vma)
