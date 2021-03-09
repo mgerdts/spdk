@@ -139,5 +139,6 @@ struct ibv_qp *spdk_rdma_receive_qp(struct spdk_rdma_qp *spdk_rdma_qp);
 struct ibv_qp *spdk_rdma_send_qp(struct spdk_rdma_qp *spdk_rdma_qp);
 uint32_t spdk_rdma_generate_qpair_id(struct spdk_rdma_qp *spdk_rdma_qp);
 void spdk_rdma_qp_assign_id(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t assigned_id);
+void spdk_rdma_notify_qp_on_send_completion(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t wrs_released);
 
 #endif /* SPDK_RDMA_H */

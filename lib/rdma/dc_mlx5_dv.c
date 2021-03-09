@@ -31,6 +31,8 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <sys/queue.h>
+
 #include <rdma/rdma_cma.h>
 #include <infiniband/mlx5dv.h>
 
@@ -46,6 +48,13 @@
 
 struct spdk_rdma_poller_context {};
 
+struct spdk_dc_mlx5_dv_qp;
+
+struct qp_list_entry {
+	struct spdk_dc_mlx5_dv_qp *qp;
+	CIRCLEQ_ENTRY(qp_list_entry) entries;
+};
+
 struct spdk_dc_mlx5_dv_poller_context {      
 	struct spdk_rdma_poller_context common;
 	struct ibv_qp *qp_dci;
@@ -56,7 +65,18 @@ struct spdk_dc_mlx5_dv_poller_context {
 	struct ibv_qp *qp_dct;
 	bool   activated;
 	struct spdk_dc_mlx5_dv_qp *last_qp;
+
 	uint32_t qpair_counter;
+        uint32_t wrs_send_started;
+	uint32_t wrs_read_started;
+	uint32_t wrs_write_started;
+
+	CIRCLEQ_HEAD(, qp_list_entry) qps;
+	struct qp_list_entry *current_qpe; /*FIXME join with *last_qp*/
+	uint32_t registered_qp;
+	uint32_t available_in_dci;
+	uint32_t max_send_wr;
+	bool send_started;
 };
 
 struct spdk_dc_mlx5_dv_qp {
@@ -70,10 +90,12 @@ struct spdk_dc_mlx5_dv_qp {
 	/* we don't expect concurent usage of spdk_dc_mlx5_dv_qp */
 	__be32 dctn;
 	struct ibv_send_wr *bad_wr;
+	struct ibv_send_wr *not_sent_yet;
 	int    last_flush_rc;
 };
 
 #define DC_KEY 0xDC00DC00DC00DC00 /*FIXME ???*/
+#define MAX_SEND_WR 1024 /*FIXME*/
 
 static int 
 dc_mlx5_dv_init_dci(struct spdk_dc_mlx5_dv_poller_context *poller_ctx, struct rdma_cm_id *cm_id)
@@ -286,9 +308,9 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 
 	struct spdk_dc_mlx5_dv_poller_context *poller_ctx = NULL;
 
+	char *wr_str = getenv("MAX_SEND_WR");
 	/* create DCT */
 
-	
 	struct ibv_qp_init_attr_ex attr_ex = {
 		.qp_type = IBV_QPT_DRIVER,
 		.send_cq = qp_attr->send_cq,
@@ -308,7 +330,9 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 		SPDK_ERRLOG("poller context memory allocation failed\n");
 		goto exit_ok;
 	}
-//	SPDK_NOTICELOG("
+
+	poller_ctx->max_send_wr = wr_str ? strtoul(wr_str, NULL, 0) : MAX_SEND_WR;
+
 	poller_ctx->qp_dct = mlx5dv_create_qp(cm_id->verbs, &attr_ex, &attr_dv);
 	if (!poller_ctx->qp_dct) {
 		SPDK_ERRLOG("DCT creation failed. errno %s (%d)\n", spdk_strerror(errno), errno);
@@ -318,7 +342,7 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 	/* create DCI */
 	attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
 	attr_ex.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_READ;
-	attr_ex.cap.max_send_wr = 128; /* FIXME */
+	attr_ex.cap.max_send_wr = MAX_SEND_WR; /* FIXME */
 	attr_ex.cap.max_send_sge = 30; /*FIXME  must be configured in runtime */
 	attr_ex.srq = NULL;
 
@@ -342,6 +366,9 @@ spdk_dc_mlx5_dv_create_poller_context(struct rdma_cm_id *cm_id, struct spdk_rdma
 		SPDK_ERRLOG("mlx5dv_qp_ex_from_ibv_qp_ex(DC). errno %s (%d)\n", spdk_strerror(errno), errno);
 	}
 	
+	CIRCLEQ_INIT(&poller_ctx->qps);
+	poller_ctx->available_in_dci = poller_ctx->max_send_wr;
+
 	goto exit_ok;
 exit_destroy_dci:
 	/*FIXME destroy DCI*/
@@ -352,7 +379,6 @@ exit_free_qps:
 	poller_ctx=NULL;
 exit_ok:
 	return poller_ctx; 
-    
 }
 
 static
@@ -462,11 +488,53 @@ spdk_dc_qp_complete_connect(struct spdk_dc_mlx5_dv_qp *qp)
 	return rc;
 }
 
+static void  spdk_dc_poller_context_enqueqe_qp(struct spdk_dc_mlx5_dv_poller_context *poller_ctx,
+					       struct spdk_dc_mlx5_dv_qp *spdk_rdma_qp)
+{
+	struct qp_list_entry *qpe;
+	assert(poller_ctx);
+	assert(spdk_rdma_qp);
+
+	qpe = malloc(sizeof(struct qp_list_entry));
+	qpe->qp = spdk_rdma_qp;
+	CIRCLEQ_INSERT_TAIL(&poller_ctx->qps, qpe, entries);
+	poller_ctx->registered_qp++;
+	if (poller_ctx->registered_qp == 1) {
+		poller_ctx->current_qpe = qpe;
+	}
+}
+
+static void  spdk_dc_poller_context_dequeqe_qp(struct spdk_dc_mlx5_dv_poller_context *poller_ctx,
+					       struct spdk_dc_mlx5_dv_qp *spdk_rdma_qp)
+{
+	struct qp_list_entry *qpe;
+	assert(poller_ctx);
+	assert(spdk_rdma_qp);
+
+	if (poller_ctx->current_qpe->qp == spdk_rdma_qp) {
+		poller_ctx->current_qpe = CIRCLEQ_LOOP_NEXT(&poller_ctx->qps,
+							    poller_ctx->current_qpe,
+							    entries);
+		if (poller_ctx->current_qpe->qp == spdk_rdma_qp) {
+			poller_ctx->current_qpe == NULL;
+		}
+	}
+	CIRCLEQ_FOREACH(qpe, &poller_ctx->qps, entries) {
+		if (qpe->qp == spdk_rdma_qp) {
+			poller_ctx->registered_qp--;
+			CIRCLEQ_REMOVE(&poller_ctx->qps, qpe, entries);
+			break;
+		}
+	}
+}
+
 static
 void
 spdk_dc_poller_context_destroy(struct spdk_dc_mlx5_dv_poller_context *poller_ctx)
 {
 	int rc;
+	struct qp_list_entry *qpe;
+	struct qp_list_entry *qpe_tmp;
 
 	assert(poller_ctx != NULL);
 
@@ -482,6 +550,14 @@ spdk_dc_poller_context_destroy(struct spdk_dc_mlx5_dv_poller_context *poller_ctx
 		if (rc) {
 			SPDK_ERRLOG("Failed to destroy DCT ibv qp %p, rc %d\n", poller_ctx->qp_dct, rc);
 		}
+	}
+	/* empty qp's list from poller context if any */
+	/* FIXME make sure that it is already empty at this moment */
+	qpe = CIRCLEQ_FIRST(&poller_ctx->qps);
+	while (qpe != (void *)&poller_ctx->qps) {
+		qpe_tmp = CIRCLEQ_NEXT(qpe, entries);
+		free(qpe);
+		qpe = qpe_tmp;
 	}
 	free(poller_ctx);
 }
@@ -503,6 +579,8 @@ spdk_dc_qp_destroy(struct spdk_dc_mlx5_dv_qp *qp)
 	if (qp->poller_ctx->last_qp == qp) {
 		qp->poller_ctx->last_qp = NULL;
 	}
+
+	spdk_dc_poller_context_dequeqe_qp(qp->poller_ctx, qp);
 
 	free(qp);
 }
@@ -557,21 +635,61 @@ static
 int
 spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **bad_wr);
 
+
 static
 bool
-spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *first)
+spdk_dc_qp_queue_prepare_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *first)
+{
+	struct ibv_send_wr *last;
+	bool rc;
+
+	assert(qp);
+	assert(qp->poller_ctx);
+	assert(first);
+
+	last = first;
+	while (last->next != NULL) {
+		last = last->next;
+	}
+
+	if (qp->common.send_wrs.first == NULL && qp->not_sent_yet == NULL) {
+		qp->common.send_wrs.first = first;
+		qp->not_sent_yet = first;
+		qp->common.send_wrs.last = last;
+		rc = true;
+	} else if (qp->common.send_wrs.first != NULL && qp->not_sent_yet != NULL) {
+		qp->common.send_wrs.last->next = first;
+		qp->common.send_wrs.last = last;
+		rc = false;
+	} else if (qp->common.send_wrs.first == NULL && qp->not_sent_yet != NULL) {
+		qp->common.send_wrs.last->next = first;
+		qp->common.send_wrs.last = last;
+		qp->common.send_wrs.first = qp->not_sent_yet;
+		rc = false;
+	} else /*(qp->common.send_wrs.first != NULL && qp->not_sent_yet == NULL)*/ {
+		qp->not_sent_yet = first;
+		qp->common.send_wrs.last = last;
+		/*?????*/
+		rc = false;
+	}
+	return rc;
+}
+
+static
+bool
+spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *first, uint32_t *depth)
 {
 	struct ibv_send_wr *tmp;
 	struct spdk_dc_mlx5_dv_poller_context *poller_ctx;
-	bool is_first;
-
 	assert(qp);
 	assert(first);
 	assert(qp->poller_ctx);
 	poller_ctx = qp->poller_ctx;
 
-	is_first = qp->common.send_wrs.first == NULL;
-
+	if (!poller_ctx->send_started) {
+		poller_ctx->send_started = 1;
+		ibv_wr_start(qp->poller_ctx->qp_dci_qpex);
+	}
 	struct spdk_dc_mlx5_dv_qp *last_qp = poller_ctx->last_qp;
 	if (last_qp && last_qp != qp) {
 		struct ibv_send_wr *bad_wr = NULL;
@@ -580,30 +698,25 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fir
 			last_qp->bad_wr = bad_wr;
 		}
 	}
-
-	if (is_first) {
-		ibv_wr_start(poller_ctx->qp_dci_qpex);
-		qp->common.send_wrs.first = first;
-	} else {
-		qp->common.send_wrs.last->next = first;
-	}
-
-	for (tmp = first; tmp != NULL; tmp = tmp->next) {
+	for (tmp = first; tmp != NULL && *depth; tmp = tmp->next, (*depth)--) {
 		poller_ctx->qp_dci_qpex->wr_id = tmp->wr_id;
 		poller_ctx->qp_dci_qpex->wr_flags = tmp->send_flags;
-
 		switch (tmp->opcode) {
 		case IBV_WR_SEND:
 			ibv_wr_send_imm(poller_ctx->qp_dci_qpex, qp->assigned_id);
+			poller_ctx->wrs_send_started++;
 			break;
-		case IBV_WR_SEND_WITH_INV:
-			ibv_wr_send_inv(poller_ctx->qp_dci_qpex, tmp->invalidate_rkey);
-			break;
+		/* case IBV_WR_SEND_WITH_INV: */
+		/* 	SPDK_NOTICELOG("Impossible!!!\n"); */
+		/* 	ibv_wr_send_inv(poller_ctx->qp_dci_qpex, tmp->invalidate_rkey); */
+		/* 	break; */
 		case IBV_WR_RDMA_READ:
 			ibv_wr_rdma_read(poller_ctx->qp_dci_qpex, tmp->wr.rdma.rkey, tmp->wr.rdma.remote_addr);
+			poller_ctx->wrs_read_started++;
 			break;
 		case IBV_WR_RDMA_WRITE:
 			ibv_wr_rdma_write(poller_ctx->qp_dci_qpex, tmp->wr.rdma.rkey, tmp->wr.rdma.remote_addr);
+			poller_ctx->wrs_write_started++;
 			break;
 		default:
 			SPDK_ERRLOG("Unexpected opcode %d\n", tmp->opcode);
@@ -614,12 +727,33 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fir
 				      qp->ah, qp->remote_dctn,
 				      qp->remote_dc_key);
 		ibv_wr_set_sge_list(poller_ctx->qp_dci_qpex, tmp->num_sge, tmp->sg_list);
-
-		qp->common.send_wrs.last = tmp;
+		qp->not_sent_yet = tmp->next;
+		//qp->common.send_wrs.last = tmp; /*FIXME strange place */
 	}
-	poller_ctx->last_qp = qp;
-	return is_first;
+	return true;
 }
+
+static void spdk_dc_poller_context_submit_wrs(struct spdk_dc_mlx5_dv_poller_context *poller_ctx)
+{
+	uint32_t registered_qp = poller_ctx->registered_qp;
+
+	assert(poller_ctx->current_qpe);
+
+	while (registered_qp-- && poller_ctx->available_in_dci) {
+		if (poller_ctx->current_qpe->qp->not_sent_yet) {
+			spdk_dc_qp_queue_send_wrs(poller_ctx->current_qpe->qp,
+						  poller_ctx->current_qpe->qp->not_sent_yet,
+						  &poller_ctx->available_in_dci);
+		}
+		poller_ctx->current_qpe = CIRCLEQ_LOOP_NEXT(&poller_ctx->qps,
+							    poller_ctx->current_qpe,
+							    entries);
+	}
+exit:
+	return;
+}
+
+
 
 static
 int
@@ -644,16 +778,25 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 		*bad_wr = qp->bad_wr;
 		rc = qp->last_flush_rc;
 		ibv_wr_abort(qp->poller_ctx->qp_dci_qpex);
-	} else if (spdk_unlikely(qp->common.send_wrs.first == NULL)) {
+	} else if (spdk_unlikely(qp->poller_ctx->send_started == 0 &&
+				 qp->poller_ctx->available_in_dci == MAX_SEND_WR)) {
 		rc = 0;
 	} else {
 		rc =  ibv_wr_complete(qp->poller_ctx->qp_dci_qpex);
+		qp->poller_ctx->send_started = 0;
+
 		if (spdk_unlikely(rc)) {
 			/* If ibv_wr_complete reports an error that means that no WRs are posted to NIC */
 			*bad_wr = qp->common.send_wrs.first;
 		}
+		qp->poller_ctx->wrs_send_started = 
+			qp->poller_ctx->wrs_read_started = 
+			qp->poller_ctx->wrs_write_started = 0;
 	}
 	qp->common.send_wrs.first = NULL;
+/*	if (qp->poller_ctx->available_in_dci != qp->poller_ctx->max_send_wr) {
+			spdk_dc_poller_context_submit_wrs(qp->poller_ctx);
+			}*/
 	return rc;
 }
 
@@ -686,7 +829,9 @@ int spdk_rdma_qp_disconnect(struct spdk_rdma_qp *spdk_rdma_qp) {
 
 bool spdk_rdma_qp_queue_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_wr *first) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-	return spdk_dc_qp_queue_send_wrs(qp, first);
+	spdk_dc_qp_queue_prepare_send_wrs(qp, first);
+	spdk_dc_poller_context_submit_wrs(qp->poller_ctx);
+	return true;
 }
 
 int spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_wr **bad_wr) {
@@ -714,6 +859,7 @@ int spdk_rdma_qp_set_poller_context(struct spdk_rdma_qp *spdk_rdma_qp,
 		errno = ECONNABORTED;
 		return -1;
 	}
+	spdk_dc_poller_context_enqueqe_qp(poller_ctx, qp);
 	qp->poller_ctx->activated = true;
 	return 0;
 }
@@ -780,6 +926,7 @@ uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp) {
 
 bool spdk_rdma_is_corresponded_qp(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_wc *wc) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+	SPDK_NOTICELOG("looking for %d in qp: %p with remote qp_id: %d\n", wc->imm_data, qp, qp->remote_qp_id);
 	return qp->remote_qp_id == wc->imm_data;
 }
 
@@ -792,4 +939,10 @@ void spdk_rdma_qp_assign_id(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t assigned
 {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
 	spdk_dc_qp_assign_id(qp, assigned_id);
+}
+
+void spdk_rdma_notify_qp_on_send_completion(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t wrs_released) {
+	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+	qp->poller_ctx->available_in_dci += wrs_released;
+	spdk_dc_poller_context_submit_wrs(qp->poller_ctx);
 }

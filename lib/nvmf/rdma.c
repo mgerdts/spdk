@@ -422,6 +422,7 @@ struct spdk_nvmf_rdma_qpair {
 	bool					to_close;
 	uint32_t                                remote_dctn; /*FIXME - find how to keep it until we createg rdma_qp*/
 	uint32_t                                assigned_id; /*FIXME - the same as ^^^^^^ */
+	uint32_t                                in_pending_send_state;
 };
 
 struct spdk_nvmf_rdma_poller_stat {
@@ -448,7 +449,7 @@ struct spdk_nvmf_rdma_poller {
 
 	/* Shared receive queue */
 	struct ibv_srq				*srq;
-    struct spdk_rdma_poller_context    *ctx;
+	struct spdk_rdma_poller_context         *ctx;
 
 	struct spdk_nvmf_rdma_resources		*resources;
 	struct spdk_nvmf_rdma_poller_stat	stat;
@@ -1096,7 +1097,10 @@ request_transfer_in(struct spdk_nvmf_request *req)
 	assert(rdma_req != NULL);
 
 	if (spdk_rdma_qp_queue_send_wrs(rqpair->rdma_qp, &rdma_req->data.wr)) {
-		STAILQ_INSERT_TAIL(&rqpair->poller->qpairs_pending_send, rqpair, send_link);
+		if (rqpair->in_pending_send_state == 0) {
+			STAILQ_INSERT_TAIL(&rqpair->poller->qpairs_pending_send, rqpair, send_link);
+			rqpair->in_pending_send_state = 1;
+		}
 	}
 
 	rqpair->current_read_depth += rdma_req->num_outstanding_data_wr;
@@ -1154,7 +1158,10 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 		num_outstanding_data_wr = rdma_req->num_outstanding_data_wr;
 	}
 	if (spdk_rdma_qp_queue_send_wrs(rqpair->rdma_qp, first)) {
-		STAILQ_INSERT_TAIL(&rqpair->poller->qpairs_pending_send, rqpair, send_link);
+		if (rqpair->in_pending_send_state == 0) {
+			STAILQ_INSERT_TAIL(&rqpair->poller->qpairs_pending_send, rqpair, send_link);
+			rqpair->in_pending_send_state = 1;
+		}
 	}
 
 	/* +1 for the rsp wr */
@@ -3731,7 +3738,7 @@ _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
 	struct spdk_nvmf_rdma_wr	*bad_rdma_wr;
 	struct spdk_nvmf_rdma_request	*prev_rdma_req = NULL, *cur_rdma_req = NULL;
 
-	SPDK_ERRLOG("Failed to post a send for the qpair %p with errno %d\n", rqpair, -rc);
+	SPDK_ERRLOG("Failed to post a send for the qpair %p with errno %d (rdma_qp %p)\n", rqpair, -rc, rqpair->rdma_qp);
 	for (; bad_wr != NULL; bad_wr = bad_wr->next) {
 		bad_rdma_wr = (struct spdk_nvmf_rdma_wr *)bad_wr->wr_id;
 		assert(rqpair->current_send_depth > 0);
@@ -3801,6 +3808,7 @@ _poller_submit_sends(struct spdk_nvmf_rdma_transport *rtransport,
 			_qp_reset_failed_sends(rtransport, rqpair, bad_wr, rc);
 		}
 		STAILQ_REMOVE_HEAD(&rpoller->qpairs_pending_send, send_link);
+		rqpair->in_pending_send_state = 0;
 	}
 }
 
@@ -3882,6 +3890,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			/* RDMA_WRITE operation completed. +1 since it was chained with rsp WR */
 			rqpair->current_send_depth -= rdma_req->num_outstanding_data_wr + 1;
+			spdk_rdma_notify_qp_on_send_completion(rqpair->rdma_qp, rdma_req->num_outstanding_data_wr + 1);
 			rdma_req->num_outstanding_data_wr = 0;
 
 			nvmf_rdma_request_process(rtransport, rdma_req);
@@ -3933,6 +3942,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			assert(rdma_req->num_outstanding_data_wr > 0);
 
 			rqpair->current_send_depth--;
+			spdk_rdma_notify_qp_on_send_completion(rqpair->rdma_qp, 1);
 			rdma_req->num_outstanding_data_wr--;
 			if (!wc[i].status) {
 				assert(wc[i].opcode == IBV_WC_RDMA_READ);
