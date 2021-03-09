@@ -88,6 +88,74 @@ bs_get_snapshot_entry(struct spdk_blob_store *bs, spdk_blob_id blobid)
 	return snapshot_entry;
 }
 
+static inline int
+blob_dirty_extent_pages_resize_to(struct spdk_blob *blob, uint32_t newsize)
+{
+	int err;
+
+	err = spdk_bit_array_resize(&blob->dirty_extent_pages, newsize);
+	if (err != 0) {
+		SPDK_ERRLOG("Failed to resize dirty_extent_pages from %u to %u bits: %d",
+		    blob->dirty_extent_pages ? spdk_bit_array_capacity(blob->dirty_extent_pages) : 0,
+		    newsize, err);
+	}
+	assert(err == 0);
+	return err;
+}
+
+static inline int
+blob_dirty_extent_pages_resize(struct spdk_blob *blob)
+{
+	return blob_dirty_extent_pages_resize_to(blob, blob->active.num_extent_pages);
+}
+
+static inline int
+blob_dirty_extent_page(struct spdk_blob *blob, uint32_t extent_page)
+{
+	assert(spdk_get_thread() == blob->bs->md_thread);
+	if (!blob->use_extent_table) {
+		return 0;
+	}
+	if (blob->dirty_extent_pages == NULL ||
+	    extent_page >= spdk_bit_array_capacity(blob->dirty_extent_pages)) {
+		int err;
+
+		err = blob_dirty_extent_pages_resize_to(blob, extent_page + 1);
+		if (err != 0) {
+			return err;
+		}
+	}
+	spdk_bit_array_set(blob->dirty_extent_pages, extent_page);
+	return 0;
+}
+
+static inline int
+blob_dirty_extent_page_by_ptr(struct spdk_blob *blob, const uint32_t *extent_page)
+{
+	if (!blob->use_extent_table) {
+		return 0;
+	}
+	return blob_dirty_extent_page(blob, (extent_page - blob->active.extent_pages));
+}
+
+static inline int
+blob_dirty_extent_page_by_cluster(struct spdk_blob *blob, uint64_t cluster)
+{
+	if (!blob->use_extent_table) {
+		return 0;
+	}
+	return blob_dirty_extent_page(blob, bs_cluster_to_extent_table_id(cluster));
+}
+
+static inline int
+blob_dirty_extent_page_by_cluster_id(struct spdk_blob *blob, uint32_t cluster_id)
+{
+	if (!blob->use_extent_table) {
+		return 0;
+	}
+	return blob_dirty_extent_page_by_cluster(blob, blob->active.clusters[cluster_id]);
+}
+
 static void
 bs_claim_md_page(struct spdk_blob_store *bs, uint32_t page)
 {
@@ -139,11 +207,17 @@ static int
 blob_insert_cluster(struct spdk_blob *blob, uint32_t cluster_num, uint64_t cluster)
 {
 	uint64_t *cluster_lba = &blob->active.clusters[cluster_num];
+	int err;
 
 	blob_verify_md_op(blob);
 
 	if (*cluster_lba != 0) {
 		return -EEXIST;
+	}
+
+	err = blob_dirty_extent_page_by_cluster(blob, cluster_num);
+	if (err != 0) {
+		return err;
 	}
 
 	*cluster_lba = bs_cluster_to_lba(blob->bs, cluster);
@@ -337,6 +411,8 @@ blob_free(struct spdk_blob *blob)
 		blob->back_bs_dev->destroy(blob->back_bs_dev);
 	}
 
+	spdk_bit_array_free(&blob->dirty_extent_pages);
+
 	free(blob);
 }
 
@@ -484,6 +560,7 @@ blob_mark_clean(struct spdk_blob *blob)
 	free(blob->clean.pages);
 
 	blob->clean.num_extent_pages = blob->active.num_extent_pages;
+	blob->clean.extent_pages_array_size = blob->active.extent_pages_array_size;
 	blob->clean.extent_pages = blob->active.extent_pages;
 	blob->clean.num_clusters = blob->active.num_clusters;
 	blob->clean.clusters = blob->active.clusters;
@@ -652,6 +729,7 @@ blob_parse_page(const struct spdk_blob_md_page *page, struct spdk_blob *blob)
 			uint32_t num_extent_pages = blob->active.num_extent_pages;
 			uint32_t i, j;
 			size_t extent_pages_length;
+			int err;
 
 			desc_extent_table = (struct spdk_blob_md_descriptor_extent_table *)desc;
 			extent_pages_length = desc_extent_table->length - sizeof(desc_extent_table->num_clusters);
@@ -685,6 +763,11 @@ blob_parse_page(const struct spdk_blob_md_page *page, struct spdk_blob *blob)
 			blob->active.extent_pages = tmp;
 			blob->active.extent_pages_array_size = num_extent_pages;
 
+			err = blob_dirty_extent_pages_resize(blob);
+			if (err != 0) {
+				return err;
+			}
+
 			blob->remaining_clusters_in_et = desc_extent_table->num_clusters;
 
 			/* Extent table entries contain md page numbers for extent pages.
@@ -695,6 +778,7 @@ blob_parse_page(const struct spdk_blob_md_page *page, struct spdk_blob *blob)
 					assert(desc_extent_table->extent_page[i].num_pages == 1);
 					blob->active.extent_pages[blob->active.num_extent_pages++] =
 						desc_extent_table->extent_page[i].page_idx;
+					blob_dirty_extent_page(blob, blob->active.num_extent_pages - 1);
 				} else if (spdk_blob_is_thin_provisioned(blob)) {
 					for (j = 0; j < desc_extent_table->extent_page[i].num_pages; j++) {
 						blob->active.extent_pages[blob->active.num_extent_pages++] = 0;
@@ -755,6 +839,7 @@ blob_parse_page(const struct spdk_blob_md_page *page, struct spdk_blob *blob)
 				if (desc_extent->cluster_idx[i] != 0) {
 					blob->active.clusters[blob->active.num_clusters++] = bs_cluster_to_lba(blob->bs,
 							desc_extent->cluster_idx[i]);
+					blob_dirty_extent_page_by_cluster_id(blob, blob->active.num_clusters - 1);
 				} else if (spdk_blob_is_thin_provisioned(blob)) {
 					blob->active.clusters[blob->active.num_clusters++] = 0;
 				} else {
@@ -1671,6 +1756,7 @@ blob_persist_clear_extents_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrn
 		free(blob->active.extent_pages);
 		blob->active.extent_pages = NULL;
 		blob->active.extent_pages_array_size = 0;
+		spdk_bit_array_free(&blob->dirty_extent_pages);
 	} else if (blob->active.num_extent_pages != blob->active.extent_pages_array_size) {
 #ifndef __clang_analyzer__
 		void *tmp;
@@ -1681,6 +1767,7 @@ blob_persist_clear_extents_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrn
 		blob->active.extent_pages = tmp;
 #endif
 		blob->active.extent_pages_array_size = blob->active.num_extent_pages;
+		bserrno = blob_dirty_extent_pages_resize(blob);
 	}
 
 	blob_persist_complete(seq, ctx, bserrno);
@@ -1964,6 +2051,7 @@ blob_resize(struct spdk_blob *blob, uint64_t sz)
 	uint32_t	*ep_tmp;
 	uint64_t	new_num_ep = 0, current_num_ep = 0;
 	struct spdk_blob_store *bs;
+	int		err;
 
 	bs = blob->bs;
 
@@ -2029,6 +2117,16 @@ blob_resize(struct spdk_blob *blob, uint64_t sz)
 			       sizeof(*blob->active.extent_pages) * (new_num_ep - blob->active.extent_pages_array_size));
 			blob->active.extent_pages = ep_tmp;
 			blob->active.extent_pages_array_size = new_num_ep;
+
+			err = blob_dirty_extent_pages_resize(blob);
+			if (err != 0) {
+				return err;
+			}
+		}
+	} else if (blob->use_extent_table && sz > 0) {
+		/* Rewrite the last extent page if it references clusters that are being freed. */
+		if (bs_cluster_to_extent_table_id(sz - 1) == bs_cluster_to_extent_table_id(sz)) {
+			blob_dirty_extent_page_by_cluster(blob, sz - 1);
 		}
 	}
 
@@ -2122,9 +2220,14 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 	int				rc;
 
 	if (ctx->extent_page != NULL) {
+		if (bserrno == 0) {
+			spdk_bit_array_clear(blob->dirty_extent_pages, ctx->extent_page->sequence_num);
+		}
 		spdk_free(ctx->extent_page);
 		ctx->extent_page = NULL;
 	}
+
+	blob_verify_md_op(blob);
 
 	if (bserrno != 0) {
 		blob_persist_complete(seq, ctx, bserrno);
@@ -2139,9 +2242,11 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 			assert(spdk_blob_is_thin_provisioned(blob));
 			continue;
 		}
-		/* Writing out new extent page for the first time. Either active extent pages is larger
-		 * than clean extent pages or there was no extent page assigned due to thin provisioning. */
-		if (i >= blob->clean.extent_pages_array_size || blob->clean.extent_pages[i] == 0) {
+		/* Write out the new or updated extent page. A new extent page is needed when the blob is
+		 * resized by enough that existing extent pages are to small to reference all blobs. An extent
+		 * page is updated when when new clusters are allocated due to thin provisioning or due to
+		 * resize where new clusters are referenced by an existing extent page. */
+		if (spdk_bit_array_get(blob->dirty_extent_pages, i)) {
 			blob->state = SPDK_BLOB_STATE_DIRTY;
 			assert(spdk_bit_array_get(blob->bs->used_md_pages, extent_page_id));
 			ctx->next_extent_page = i + 1;
@@ -2162,6 +2267,40 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 		}
 		assert(blob->clean.extent_pages[i] != 0);
 	}
+
+	/* XXX-mg Resolve this in code reivew or before
+	 *
+	 * Without the fix in blob_mark_clean(), the code above was performing unconditional writes
+	 * of all extent pages.  That guaranteed that by the time the loop above returns that
+	 * blob->state had been set to dirty at least once.  Thus, if some application called
+	 * spdk_blob_sync_md() in rapid succession, the blob_mark_clean() bug would lead to
+	 * blob->state being dirty by the time it reached here.
+	 *
+	 * With the blob_mark_clean() fix, an application that does something like the following
+	 * has a race condition.
+	 *
+	 * 1.	blob->state = SPDK_BLOB_STATE_DIRTY;
+	 * 2.	spdk_blob_sync_md(blob, blob_op_complete, NULL);
+	 * 3.	blob->state = SPDK_BLOB_STATE_DIRTY;
+	 * 4.	spdk_blob_sync_md(blob, blob_op_complete, NULL);
+	 *
+	 * Each spdk_blob_sync_md() queues a metadata sync.  The first metadata sync (2) is likely
+	 * to set blob->state to clean in blob_persist_generate_new_md() after blob->state is set to
+	 * dirty (3).  Thus, it is quite likely that when the blob_persist_generate_new_md()
+	 * associated with the second sync (4) executes, blob->state is clean, which fails
+	 * assert(blob->state == SPDK_BLOB_STATE_DIRTY) in blob_serialize().
+	 *
+	 * Both syncs need to execute, so we can't just call blob_persist_complete() now.  Instead,
+	 * we set blob->state to dirty so that we can march on.
+	 *
+	 * A couple questions:
+	 *
+	 *  1. Should we instead just get rid of the assert() in blob_serialize()?
+	 *  2. What does blob->state hope to accomplish?  Can it realistically do that with the data
+	 *     races that come with async operations?  Should dirty and clean be merged into a
+	 *     "running" state?
+	 */
+	blob->state = SPDK_BLOB_STATE_DIRTY;
 
 	blob_persist_generate_new_md(ctx);
 }
@@ -5634,6 +5773,7 @@ bs_snapshot_swap_cluster_maps(struct spdk_blob *blob1, struct spdk_blob *blob2)
 {
 	uint64_t *cluster_temp;
 	uint32_t *extent_page_temp;
+	struct spdk_bit_array *bit_array_temp;
 
 	cluster_temp = blob1->active.clusters;
 	blob1->active.clusters = blob2->active.clusters;
@@ -5642,6 +5782,10 @@ bs_snapshot_swap_cluster_maps(struct spdk_blob *blob1, struct spdk_blob *blob2)
 	extent_page_temp = blob1->active.extent_pages;
 	blob1->active.extent_pages = blob2->active.extent_pages;
 	blob2->active.extent_pages = extent_page_temp;
+
+	bit_array_temp = blob1->dirty_extent_pages;
+	blob1->dirty_extent_pages = blob2->dirty_extent_pages;
+	blob2->dirty_extent_pages = bit_array_temp;
 }
 
 static void
@@ -5734,6 +5878,7 @@ bs_snapshot_freeze_cpl(void *cb_arg, int rc)
 	struct spdk_blob *origblob = ctx->original.blob;
 	struct spdk_blob *newblob = ctx->new.blob;
 	int bserrno;
+	uint32_t i;
 
 	if (rc != 0) {
 		bs_clone_snapshot_newblob_cleanup(ctx, rc);
@@ -5762,6 +5907,13 @@ bs_snapshot_freeze_cpl(void *cb_arg, int rc)
 	/* swap cluster maps */
 	bs_snapshot_swap_cluster_maps(newblob, origblob);
 
+	/* force all active extent pages to be written on next md sync */
+	for (i = 0; i < newblob->active.num_extent_pages; i++) {
+		if (newblob->active.extent_pages[i] != 0) {
+			blob_dirty_extent_page(newblob, i);
+		}
+	}
+
 	/* Set the clear method on the new blob to match the original. */
 	blob_set_clear_method(newblob, origblob->clear_method);
 
@@ -5787,6 +5939,8 @@ bs_snapshot_newblob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 				 newblob->active.num_clusters * sizeof(*newblob->active.clusters)));
 	assert(spdk_mem_all_zero(newblob->active.extent_pages,
 				 newblob->active.num_extent_pages * sizeof(*newblob->active.extent_pages)));
+	assert(newblob->dirty_extent_pages == NULL ||
+	       spdk_bit_array_find_first_set(newblob->dirty_extent_pages, 0) == UINT32_MAX);
 
 	blob_freeze_io(origblob, bs_snapshot_freeze_cpl, ctx);
 }
@@ -6520,6 +6674,7 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 {
 	struct delete_snapshot_ctx *ctx = cb_arg;
 	uint64_t i;
+	int err;
 
 	/* Temporarily override md_ro flag for clone for MD modification */
 	ctx->clone_md_ro = ctx->clone->md_ro;
@@ -6536,12 +6691,24 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 	for (i = 0; i < ctx->snapshot->active.num_clusters && i < ctx->clone->active.num_clusters; i++) {
 		if (ctx->clone->active.clusters[i] == 0) {
 			ctx->clone->active.clusters[i] = ctx->snapshot->active.clusters[i];
+			err = blob_dirty_extent_page_by_cluster_id(ctx->clone, i);
+			if (err != 0) {
+				ctx->bserrno = err;
+				delete_snapshot_cleanup_clone(ctx, 0);
+				return;
+			}
 		}
 	}
 	for (i = 0; i < ctx->snapshot->active.num_extent_pages &&
 	     i < ctx->clone->active.num_extent_pages; i++) {
 		if (ctx->clone->active.extent_pages[i] == 0) {
 			ctx->clone->active.extent_pages[i] = ctx->snapshot->active.extent_pages[i];
+			err = blob_dirty_extent_page(ctx->clone, i);
+			if (err != 0) {
+				ctx->bserrno = err;
+				delete_snapshot_cleanup_clone(ctx, 0);
+				return;
+			}
 		}
 	}
 
@@ -7108,6 +7275,8 @@ blob_insert_cluster_msg(void *arg)
 		ctx->blob->state = SPDK_BLOB_STATE_DIRTY;
 		blob_sync_md(ctx->blob, blob_insert_cluster_msg_cb, ctx);
 	} else {
+		int err;
+
 		/* It is possible for original thread to allocate extent page for
 		 * different cluster in the same extent page. In such case proceed with
 		 * updating the existing extent page, but release the additional one. */
@@ -7118,6 +7287,11 @@ blob_insert_cluster_msg(void *arg)
 		}
 		/* Extent page already allocated.
 		 * Every cluster allocation, requires just an update of single extent page. */
+		err = blob_dirty_extent_page_by_ptr(ctx->blob, extent_page);
+		if (err != 0) {
+			ctx->rc = err;
+			return;
+		}
 		blob_insert_extent(ctx->blob, *extent_page, ctx->cluster_num,
 				   blob_insert_cluster_msg_cb, ctx);
 	}
@@ -7370,6 +7544,8 @@ blob_set_xattr(struct spdk_blob *blob, const char *name, const void *value,
 	} else {
 		xattrs = &blob->xattrs;
 	}
+
+	blob->state = SPDK_BLOB_STATE_DIRTY;
 
 	TAILQ_FOREACH(xattr, xattrs, link) {
 		if (!strcmp(name, xattr->name)) {

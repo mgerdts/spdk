@@ -172,6 +172,9 @@ struct spdk_blob {
 	/* Number of data clusters retrived from extent table,
 	 * that many have to be read from extent pages. */
 	uint64_t	remaining_clusters_in_et;
+
+	/* The extent pages that are dirty */
+	struct spdk_bit_array		*dirty_extent_pages;
 };
 
 struct spdk_blob_store {
