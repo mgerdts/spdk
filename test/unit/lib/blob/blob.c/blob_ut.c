@@ -6471,6 +6471,14 @@ blob_simultaneous_operations(void)
 	 * Force sync to actually occur by marking blob dirty each time.
 	 * Execution of sync should not be enough to complete the operation,
 	 * since disk I/O is required to complete it. */
+	/* XXX-mg
+	 * This test is problematic.  spdk_blob_sync_md() kicks off an async
+	 * task to sync the metadata.  At some time in the future it sets
+	 * blob->state to clean, but that is quite unlikely to happen before
+	 * blob->state is set to dirty the second time below.  That is, the
+	 * first async task is likely to set blob->state to clean after the
+	 * setup for the second async task.
+	 */
 	g_bserrno = -1;
 
 	blob->state = SPDK_BLOB_STATE_DIRTY;

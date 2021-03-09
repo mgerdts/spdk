@@ -88,6 +88,47 @@ bs_get_snapshot_entry(struct spdk_blob_store *bs, spdk_blob_id blobid)
 	return snapshot_entry;
 }
 
+static inline void
+blob_dirty_extent_page_by_id(struct spdk_blob *blob, uint64_t extent_page_id)
+{
+	assert(spdk_get_thread() == blob->bs->md_thread);
+	if (!blob->use_extent_table) {
+		return;
+	}
+	if (blob->use_extent_table && blob->dirty_extent_pages != NULL &&
+	    spdk_bit_array_capacity(blob->dirty_extent_pages) > extent_page_id)
+	{
+		spdk_bit_array_set(blob->dirty_extent_pages, extent_page_id);
+	}
+}
+
+static inline void
+blob_dirty_extent_page_by_ptr(struct spdk_blob *blob, const uint32_t *extent_page)
+{
+	if (!blob->use_extent_table) {
+		return;
+	}
+	blob_dirty_extent_page_by_id(blob, (extent_page - blob->active.extent_pages));
+}
+
+static inline void
+blob_dirty_extent_page_by_cluster(struct spdk_blob *blob, uint64_t cluster)
+{
+	if (!blob->use_extent_table) {
+		return;
+	}
+	blob_dirty_extent_page_by_id(blob, bs_cluster_to_extent_table_id(cluster));
+}
+
+static inline void
+blob_dirty_extent_page_by_cluster_id(struct spdk_blob *blob, uint32_t cluster_id)
+{
+	if (!blob->use_extent_table) {
+		return;
+	}
+	blob_dirty_extent_page_by_cluster(blob, blob->active.clusters[cluster_id]);
+}
+
 static void
 bs_claim_md_page(struct spdk_blob_store *bs, uint32_t page)
 {
@@ -145,6 +186,8 @@ blob_insert_cluster(struct spdk_blob *blob, uint32_t cluster_num, uint64_t clust
 	if (*cluster_lba != 0) {
 		return -EEXIST;
 	}
+
+	blob_dirty_extent_page_by_cluster(blob, cluster);
 
 	*cluster_lba = bs_cluster_to_lba(blob->bs, cluster);
 	return 0;
@@ -337,6 +380,10 @@ blob_free(struct spdk_blob *blob)
 		blob->back_bs_dev->destroy(blob->back_bs_dev);
 	}
 
+	if (blob->dirty_extent_pages != NULL) {
+		spdk_bit_array_free(&blob->dirty_extent_pages);
+	}
+
 	free(blob);
 }
 
@@ -484,6 +531,7 @@ blob_mark_clean(struct spdk_blob *blob)
 	free(blob->clean.pages);
 
 	blob->clean.num_extent_pages = blob->active.num_extent_pages;
+	blob->clean.extent_pages_array_size = blob->active.extent_pages_array_size;
 	blob->clean.extent_pages = blob->active.extent_pages;
 	blob->clean.num_clusters = blob->active.num_clusters;
 	blob->clean.clusters = blob->active.clusters;
@@ -652,6 +700,7 @@ blob_parse_page(const struct spdk_blob_md_page *page, struct spdk_blob *blob)
 			uint32_t num_extent_pages = blob->active.num_extent_pages;
 			uint32_t i, j;
 			size_t extent_pages_length;
+			int err;
 
 			desc_extent_table = (struct spdk_blob_md_descriptor_extent_table *)desc;
 			extent_pages_length = desc_extent_table->length - sizeof(desc_extent_table->num_clusters);
@@ -702,6 +751,10 @@ blob_parse_page(const struct spdk_blob_md_page *page, struct spdk_blob *blob)
 				} else {
 					return -EINVAL;
 				}
+			}
+			err = spdk_bit_array_resize(&blob->dirty_extent_pages, num_extent_pages);
+			if (err != 0) {
+				return err;
 			}
 		} else if (desc->type == SPDK_MD_DESCRIPTOR_TYPE_EXTENT_PAGE) {
 			struct spdk_blob_md_descriptor_extent_page	*desc_extent;
@@ -1653,6 +1706,10 @@ blob_persist_clear_extents_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrn
 	struct spdk_blob		*blob = ctx->blob;
 	struct spdk_blob_store		*bs = blob->bs;
 	size_t				i;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+	int				err;
+#pragma GCC diagnostic pop
 
 	if (bserrno != 0) {
 		blob_persist_complete(seq, ctx, bserrno);
@@ -1671,6 +1728,8 @@ blob_persist_clear_extents_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrn
 		free(blob->active.extent_pages);
 		blob->active.extent_pages = NULL;
 		blob->active.extent_pages_array_size = 0;
+		err = spdk_bit_array_resize(&blob->dirty_extent_pages, 1);
+		assert(err == 0);
 	} else if (blob->active.num_extent_pages != blob->active.extent_pages_array_size) {
 #ifndef __clang_analyzer__
 		void *tmp;
@@ -1681,6 +1740,8 @@ blob_persist_clear_extents_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrn
 		blob->active.extent_pages = tmp;
 #endif
 		blob->active.extent_pages_array_size = blob->active.num_extent_pages;
+		err = spdk_bit_array_resize(&blob->dirty_extent_pages, blob->active.num_extent_pages);
+		assert(err == 0);
 	}
 
 	blob_persist_complete(seq, ctx, bserrno);
@@ -2034,6 +2095,14 @@ blob_resize(struct spdk_blob *blob, uint64_t sz)
 
 	blob->state = SPDK_BLOB_STATE_DIRTY;
 
+	if (blob->use_extent_table) {
+		int err;
+		err = spdk_bit_array_resize(&blob->dirty_extent_pages, blob->active.num_extent_pages);
+		if (err != 0) {
+			return err;
+		}
+	}
+
 	if (spdk_blob_is_thin_provisioned(blob) == false) {
 		cluster = 0;
 		lfmd = 0;
@@ -2126,6 +2195,8 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 		ctx->extent_page = NULL;
 	}
 
+	blob_verify_md_op(blob);
+
 	if (bserrno != 0) {
 		blob_persist_complete(seq, ctx, bserrno);
 		return;
@@ -2141,7 +2212,9 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 		}
 		/* Writing out new extent page for the first time. Either active extent pages is larger
 		 * than clean extent pages or there was no extent page assigned due to thin provisioning. */
-		if (i >= blob->clean.extent_pages_array_size || blob->clean.extent_pages[i] == 0) {
+		if (i >= blob->clean.extent_pages_array_size || blob->clean.extent_pages[i] == 0 ||
+		    spdk_bit_array_get(blob->dirty_extent_pages, i)) {
+			spdk_bit_array_clear(blob->dirty_extent_pages, i);
 			blob->state = SPDK_BLOB_STATE_DIRTY;
 			assert(spdk_bit_array_get(blob->bs->used_md_pages, extent_page_id));
 			ctx->next_extent_page = i + 1;
@@ -2162,6 +2235,40 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 		}
 		assert(blob->clean.extent_pages[i] != 0);
 	}
+
+	/* XXX-mg Resolve this in code reivew or before
+	 *
+	 * Without the fix in blob_mark_clean(), the code above was performing unconditional writes
+	 * of all extent pages.  That guaranteed that by the time the loop above returns that
+	 * blob->state had been set to dirty at least once.  Thus, if some application called
+	 * spdk_blob_sync_md() in rapid succession, the blob_mark_clean() bug would lead to
+	 * blob->state being dirty by the time it reached here.
+	 *
+	 * With the blob_mark_clean() fix, an application that does something like the following
+	 * has a race condition.
+	 *
+	 * 1.	blob->state = SPDK_BLOB_STATE_DIRTY;
+	 * 2.	spdk_blob_sync_md(blob, blob_op_complete, NULL);
+	 * 3.	blob->state = SPDK_BLOB_STATE_DIRTY;
+	 * 4.	spdk_blob_sync_md(blob, blob_op_complete, NULL);
+	 *
+	 * Each spdk_blob_sync_md() queues a metadata sync.  The first metadata sync (2) is likely
+	 * to set blob->state to clean in blob_persist_generate_new_md() after blob->state is set to
+	 * dirty (3).  Thus, it is quite likely that when the blob_persist_generate_new_md()
+	 * associated with the second sync (4) executes, blob->state is clean, which fails
+	 * assert(blob->state == SPDK_BLOB_STATE_DIRTY) in blob_serialize().
+	 *
+	 * Both syncs need to execute, so we can't just call blob_persist_complete() now.  Instead,
+	 * we set blob->state to dirty so that we can march on.
+	 *
+	 * A couple questions:
+	 *
+	 *  1. Should we instead just get rid of the assert() in blob_serialize()?
+	 *  2. What does blob->state hope to accomplish?  Can it realistically do that with the data
+	 *     races that come with async operations?  Should dirty and clean be merged into a
+	 *     "running" state?
+	 */
+	blob->state = SPDK_BLOB_STATE_DIRTY;
 
 	blob_persist_generate_new_md(ctx);
 }
@@ -5634,6 +5741,7 @@ bs_snapshot_swap_cluster_maps(struct spdk_blob *blob1, struct spdk_blob *blob2)
 {
 	uint64_t *cluster_temp;
 	uint32_t *extent_page_temp;
+	struct spdk_bit_array *bit_array_temp;
 
 	cluster_temp = blob1->active.clusters;
 	blob1->active.clusters = blob2->active.clusters;
@@ -5642,6 +5750,10 @@ bs_snapshot_swap_cluster_maps(struct spdk_blob *blob1, struct spdk_blob *blob2)
 	extent_page_temp = blob1->active.extent_pages;
 	blob1->active.extent_pages = blob2->active.extent_pages;
 	blob2->active.extent_pages = extent_page_temp;
+
+	bit_array_temp = blob1->dirty_extent_pages;
+	blob1->dirty_extent_pages = blob2->dirty_extent_pages;
+	blob2->dirty_extent_pages = bit_array_temp;
 }
 
 static void
@@ -6536,12 +6648,14 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 	for (i = 0; i < ctx->snapshot->active.num_clusters && i < ctx->clone->active.num_clusters; i++) {
 		if (ctx->clone->active.clusters[i] == 0) {
 			ctx->clone->active.clusters[i] = ctx->snapshot->active.clusters[i];
+			blob_dirty_extent_page_by_cluster_id(ctx->clone, i);
 		}
 	}
 	for (i = 0; i < ctx->snapshot->active.num_extent_pages &&
 	     i < ctx->clone->active.num_extent_pages; i++) {
 		if (ctx->clone->active.extent_pages[i] == 0) {
 			ctx->clone->active.extent_pages[i] = ctx->snapshot->active.extent_pages[i];
+			blob_dirty_extent_page_by_id(ctx->clone, i);
 		}
 	}
 
@@ -7118,6 +7232,7 @@ blob_insert_cluster_msg(void *arg)
 		}
 		/* Extent page already allocated.
 		 * Every cluster allocation, requires just an update of single extent page. */
+		blob_dirty_extent_page_by_ptr(ctx->blob, extent_page);
 		blob_insert_extent(ctx->blob, *extent_page, ctx->cluster_num,
 				   blob_insert_cluster_msg_cb, ctx);
 	}
@@ -7370,6 +7485,15 @@ blob_set_xattr(struct spdk_blob *blob, const char *name, const void *value,
 	} else {
 		xattrs = &blob->xattrs;
 	}
+
+	/* XXX-mg This doesn't seem right. I don't understand why dirtying an extent page fixes
+	 * blobfs_sync_ut cache_read_after_write unit test, but just setting blob->state to dirty
+	 * doesn't do the trick.
+	 *
+	 * Without this hack, cache_read_after_write fails, then blobfs_sync_ut hangs.
+	 */
+	blob_dirty_extent_page_by_id(blob, 0);
+	blob->state = SPDK_BLOB_STATE_DIRTY;
 
 	TAILQ_FOREACH(xattr, xattrs, link) {
 		if (!strcmp(name, xattr->name)) {
