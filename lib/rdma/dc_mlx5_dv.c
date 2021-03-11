@@ -778,8 +778,7 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 		*bad_wr = qp->bad_wr;
 		rc = qp->last_flush_rc;
 		ibv_wr_abort(qp->poller_ctx->qp_dci_qpex);
-	} else if (spdk_unlikely(qp->poller_ctx->send_started == 0 &&
-				 qp->poller_ctx->available_in_dci == MAX_SEND_WR)) {
+	} else if (spdk_unlikely(qp->poller_ctx->send_started == 0)) {
 		rc = 0;
 	} else {
 		rc =  ibv_wr_complete(qp->poller_ctx->qp_dci_qpex);
@@ -926,7 +925,6 @@ uint32_t spdk_rdma_qp_get_local_dctn(struct spdk_rdma_qp *spdk_rdma_qp) {
 
 bool spdk_rdma_is_corresponded_qp(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_wc *wc) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
-	SPDK_NOTICELOG("looking for %d in qp: %p with remote qp_id: %d\n", wc->imm_data, qp, qp->remote_qp_id);
 	return qp->remote_qp_id == wc->imm_data;
 }
 
