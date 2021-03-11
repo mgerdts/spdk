@@ -67,9 +67,6 @@ struct spdk_dc_mlx5_dv_poller_context {
 	struct spdk_dc_mlx5_dv_qp *last_qp;
 
 	uint32_t qpair_counter;
-        uint32_t wrs_send_started;
-	uint32_t wrs_read_started;
-	uint32_t wrs_write_started;
 
 	CIRCLEQ_HEAD(, qp_list_entry) qps;
 	struct qp_list_entry *current_qpe; /*FIXME join with *last_qp*/
@@ -704,7 +701,6 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fir
 		switch (tmp->opcode) {
 		case IBV_WR_SEND:
 			ibv_wr_send_imm(poller_ctx->qp_dci_qpex, qp->assigned_id);
-			poller_ctx->wrs_send_started++;
 			break;
 		/* case IBV_WR_SEND_WITH_INV: */
 		/* 	SPDK_NOTICELOG("Impossible!!!\n"); */
@@ -712,11 +708,9 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr *fir
 		/* 	break; */
 		case IBV_WR_RDMA_READ:
 			ibv_wr_rdma_read(poller_ctx->qp_dci_qpex, tmp->wr.rdma.rkey, tmp->wr.rdma.remote_addr);
-			poller_ctx->wrs_read_started++;
 			break;
 		case IBV_WR_RDMA_WRITE:
 			ibv_wr_rdma_write(poller_ctx->qp_dci_qpex, tmp->wr.rdma.rkey, tmp->wr.rdma.remote_addr);
-			poller_ctx->wrs_write_started++;
 			break;
 		default:
 			SPDK_ERRLOG("Unexpected opcode %d\n", tmp->opcode);
@@ -788,9 +782,6 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 			/* If ibv_wr_complete reports an error that means that no WRs are posted to NIC */
 			*bad_wr = qp->common.send_wrs.first;
 		}
-		qp->poller_ctx->wrs_send_started = 
-			qp->poller_ctx->wrs_read_started = 
-			qp->poller_ctx->wrs_write_started = 0;
 	}
 	qp->common.send_wrs.first = NULL;
 /*	if (qp->poller_ctx->available_in_dci != qp->poller_ctx->max_send_wr) {
