@@ -407,6 +407,38 @@ spdk_sock_readv(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 }
 
 ssize_t
+spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf)
+{
+	if (sock == NULL || sock->flags.closed) {
+		errno = EBADF;
+		return -1;
+	}
+
+	if (!sock->net_impl->recv_zcopy) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	return sock->net_impl->recv_zcopy(sock, len, sock_buf);
+}
+
+int
+spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf)
+{
+	if (sock == NULL) {
+		errno = EBADF;
+		return -1;
+	}
+
+	if (!sock->net_impl->free_bufs) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	return sock->net_impl->free_bufs(sock, sock_buf);
+}
+
+ssize_t
 spdk_sock_writev(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 {
 	if (sock == NULL || sock->flags.closed) {
