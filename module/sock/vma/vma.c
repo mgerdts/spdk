@@ -58,6 +58,8 @@
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32
 #define VMA_PACKETS_BUF_SIZE 128
+/* @todo: make pool sizes configurable */
+#define RECV_ZCOPY_PACKETS_POOL_SIZE 1024
 
 #if defined(SO_ZEROCOPY) && defined(MSG_ZEROCOPY)
 #define SPDK_ZEROCOPY
@@ -84,6 +86,12 @@ struct vma_pd_attr {
 };
 #endif
 
+struct vma_sock_packet {
+	struct vma_packet_t *vma_packet;
+	int refs;
+	STAILQ_ENTRY(vma_sock_packet) link;
+};
+
 struct spdk_vma_sock {
 	struct spdk_sock	base;
 	int			fd;
@@ -95,9 +103,9 @@ struct spdk_vma_sock {
 	int			so_priority;
 
 	char			vma_packets_buf[VMA_PACKETS_BUF_SIZE];
-	struct vma_packets_t	*packets;
-	struct vma_packet_t	*cur_packet;
-	size_t			cur_packet_idx;
+	struct vma_sock_packet	*packets;
+	STAILQ_HEAD(, vma_sock_packet)	free_packets;
+	STAILQ_HEAD(, vma_sock_packet)	received_packets;
 	size_t			cur_iov_idx;
 	size_t			cur_offset;
 
@@ -328,8 +336,24 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 #endif
 
 	if (enable_zero_copy && g_spdk_vma_sock_impl_opts.enable_zerocopy_recv) {
+		int i;
+
 		SPDK_NOTICELOG("Sock %d: use zerocopy recv\n", sock->fd);
 		sock->recv_zcopy = true;
+
+		sock->packets = calloc(RECV_ZCOPY_PACKETS_POOL_SIZE,
+				       sizeof(struct vma_sock_packet));
+		if (!sock->packets) {
+			SPDK_ERRLOG("Failed to allocated packets pool for socket %d\n", fd);
+			goto err_free_sock;
+		}
+
+		STAILQ_INIT(&sock->free_packets);
+		for (i = 0; i < RECV_ZCOPY_PACKETS_POOL_SIZE; ++i) {
+			STAILQ_INSERT_TAIL(&sock->free_packets, &sock->packets[i], link);
+		}
+
+		STAILQ_INIT(&sock->received_packets);
 	}
 
 #if defined(__linux__)
@@ -344,6 +368,10 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 #endif
 
 	return sock;
+
+ err_free_sock:
+	free(sock);
+	return NULL;
 }
 
 static bool
@@ -646,6 +674,7 @@ vma_sock_close(struct spdk_sock *_sock)
 	 * memory. */
 	close(sock->fd);
 
+	free(sock->packets);
 	free(sock);
 
 	return 0;
@@ -760,8 +789,11 @@ next_packet(struct vma_packet_t *packet)
 static ssize_t
 vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 {
+	struct vma_packets_t *vma_packets;
+	struct vma_packet_t *vma_packet;
 	int flags = 0;
 	int ret;
+	size_t i;
 
 	ret = g_vma_api->recvfrom_zcopy(sock->fd, sock->vma_packets_buf,
 					sizeof(sock->vma_packets_buf), &flags, NULL, NULL);
@@ -780,23 +812,46 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 		return -1;
 	}
 
-	sock->packets = (struct vma_packets_t *)sock->vma_packets_buf;
+	vma_packets = (struct vma_packets_t *)sock->vma_packets_buf;
 	SPDK_DEBUGLOG(vma, "Sock %d: got %lu packets, total %d bytes\n",
-		      sock->fd, sock->packets->n_packet_num, ret);
-	sock->cur_packet = sock->packets->pkts;
-	sock->cur_packet_idx = 0;
+		      sock->fd, vma_packets->n_packet_num, ret);
+
+	/* Wrap all VMA packets and link to received packets list */
+	vma_packet = &vma_packets->pkts[0];
+	for (i = 0; i < vma_packets->n_packet_num; ++i) {
+		struct vma_sock_packet *packet = STAILQ_FIRST(&sock->free_packets);
+
+		/* @todo: handle lack of free packets */
+		assert(packet);
+		STAILQ_REMOVE_HEAD(&sock->free_packets, link);
+		/*
+		 * @todo: VMA packet pointer is only valid till next
+		 * recvfrom_zcopy. We should be done with iovs by that
+		 * time, but we need packet_id to free the packet
+		 * later. Need to save it somewhere.It is not clear if
+		 * iovs are required to free the packet.
+		 */
+		packet->vma_packet = vma_packet;
+		STAILQ_INSERT_TAIL(&sock->received_packets, packet, link);
+
+		vma_packet = next_packet(vma_packet);
+	}
+
 	sock->cur_iov_idx = 0;
 	sock->cur_offset = 0;
 
 	return ret;
 }
 
-static inline void
+static void
 packets_advance(struct spdk_vma_sock *sock, size_t len)
 {
 	SPDK_DEBUGLOG(vma, "Sock %d: advance packets by %lu bytes\n", sock->fd, len);
 	while (len > 0) {
-		struct iovec *iov = &sock->cur_packet->iov[sock->cur_iov_idx];
+		struct vma_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
+		/* We don't allow to advance by more than we have data in packets */
+		assert(cur_packet != NULL);
+		struct iovec *iov = &cur_packet->vma_packet->iov[sock->cur_iov_idx];
 		int iov_len = iov->iov_len - sock->cur_offset;
 
 		if ((int)len < iov_len) {
@@ -808,25 +863,25 @@ packets_advance(struct spdk_vma_sock *sock, size_t len)
 			/* Next iov */
 			sock->cur_offset = 0;
 			sock->cur_iov_idx++;
-			if (sock->cur_iov_idx >= sock->cur_packet->sz_iov) {
+			if (sock->cur_iov_idx >= cur_packet->vma_packet->sz_iov) {
 				/* Next packet */
 				sock->cur_iov_idx = 0;
-				sock->cur_packet_idx++;
-				sock->cur_packet = next_packet(sock->cur_packet);
-				if (sock->cur_packet_idx >= sock->packets->n_packet_num) {
+				STAILQ_REMOVE_HEAD(&sock->received_packets, link);
+				if (cur_packet->refs == 0) {
 					int ret;
-					/* No more packets */
-					SPDK_DEBUGLOG(vma, "Sock %d: free %lu packets\n",
-						      sock->fd, sock->packets->n_packet_num);
+
+					SPDK_DEBUGLOG(vma, "Sock %d: free VMA packet %p\n",
+						      sock->fd, cur_packet->vma_packet->packet_id);
+					/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
 					ret = g_vma_api->free_packets(sock->fd,
-								      sock->packets->pkts,
-								      sock->packets->n_packet_num);
+								      cur_packet->vma_packet,
+								      1);
 					if (ret < 0) {
-						SPDK_ERRLOG("Free VMA packets failed, err %d\n", errno);
+						SPDK_ERRLOG("Free VMA packets failed, ret %d, errno %d\n",
+							    ret, errno);
 					}
-					sock->packets = NULL;
-					sock->cur_packet = NULL;
-					sock->cur_packet_idx = 0;
+
+					STAILQ_INSERT_HEAD(&sock->free_packets, cur_packet, link);
 				}
 			}
 		}
@@ -838,8 +893,9 @@ packets_advance(struct spdk_vma_sock *sock, size_t len)
 static size_t
 packets_next_chunk(struct spdk_vma_sock *sock, void **buf, size_t max_len)
 {
-	if (sock->packets) {
-		struct iovec *iov = &sock->cur_packet->iov[sock->cur_iov_idx];
+	if (!STAILQ_EMPTY(&sock->received_packets)) {
+		struct vma_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
+		struct iovec *iov = &cur_packet->vma_packet->iov[sock->cur_iov_idx];
 		size_t len = iov->iov_len - sock->cur_offset;
 
 		assert(max_len > 0);
@@ -861,7 +917,7 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 		int i;
 		size_t offset = 0;
 
-		if (!sock->packets) {
+		if (STAILQ_EMPTY(&sock->received_packets)) {
 			ret = vma_sock_recvfrom_zcopy(sock);
 			if (ret <= 0) {
 				SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d, errno %d\n",
@@ -870,7 +926,7 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 			}
 		}
 
-		assert(sock->packets);
+		assert(!STAILQ_EMPTY(&sock->received_packets));
 		ret = 0;
 		i = 0;
 		while (i < iovcnt) {
@@ -890,11 +946,13 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 			packets_advance(sock, len);
 			ret += len;
 			offset += len;
-			if (offset >= iov->iov_len) {
+			assert(offset <= iov->iov_len);
+			if (offset == iov->iov_len) {
 				offset = 0;
 				i++;
 			}
 		}
+
 		SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
 	} else {
 		ret = readv(sock->fd, iovs, iovcnt);
