@@ -60,6 +60,7 @@
 #define VMA_PACKETS_BUF_SIZE 128
 /* @todo: make pool sizes configurable */
 #define RECV_ZCOPY_PACKETS_POOL_SIZE 1024
+#define RECV_ZCOPY_BUFFERS_POOL_SIZE 4096
 
 #if defined(SO_ZEROCOPY) && defined(MSG_ZEROCOPY)
 #define SPDK_ZEROCOPY
@@ -89,7 +90,13 @@ struct vma_pd_attr {
 struct vma_sock_packet {
 	struct vma_packet_t *vma_packet;
 	int refs;
+	void *vma_packet_id;
 	STAILQ_ENTRY(vma_sock_packet) link;
+};
+
+struct vma_sock_buf {
+	struct spdk_sock_buf sock_buf;
+	struct vma_sock_packet *packet;
 };
 
 struct spdk_vma_sock {
@@ -108,6 +115,8 @@ struct spdk_vma_sock {
 	STAILQ_HEAD(, vma_sock_packet)	received_packets;
 	size_t			cur_iov_idx;
 	size_t			cur_offset;
+	struct vma_sock_buf	*buffers;
+	struct spdk_sock_buf	*free_buffers;
 
 	TAILQ_ENTRY(spdk_vma_sock)	link;
 };
@@ -354,6 +363,18 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 		}
 
 		STAILQ_INIT(&sock->received_packets);
+
+		sock->buffers = calloc(RECV_ZCOPY_BUFFERS_POOL_SIZE,
+				       sizeof(struct vma_sock_buf));
+		if (!sock->buffers) {
+			SPDK_ERRLOG("Failed to allocated buffers pool for socket %d\n", fd);
+			goto err_free_packets;
+		}
+
+		sock->free_buffers = &sock->buffers[0].sock_buf;
+		for (i = 1; i < RECV_ZCOPY_BUFFERS_POOL_SIZE; ++i) {
+			sock->buffers[i - 1].sock_buf.next = &sock->buffers[i].sock_buf;
+		}
 	}
 
 #if defined(__linux__)
@@ -369,6 +390,8 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 
 	return sock;
 
+ err_free_packets:
+	free(sock->packets);
  err_free_sock:
 	free(sock);
 	return NULL;
@@ -675,6 +698,7 @@ vma_sock_close(struct spdk_sock *_sock)
 	close(sock->fd);
 
 	free(sock->packets);
+	free(sock->buffers);
 	free(sock);
 
 	return 0;
@@ -832,8 +856,21 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 		 * iovs are required to free the packet.
 		 */
 		packet->vma_packet = vma_packet;
+		packet->vma_packet_id = vma_packet->packet_id;
+		/*
+		 * While the packet is in received list there is data
+		 * to read from it.  To avoid free of packets with
+		 * unread data we intialize reference counter to 1.
+		 */
+		packet->refs = 1;
 		STAILQ_INSERT_TAIL(&sock->received_packets, packet, link);
-
+#ifdef DEBUG
+		size_t j;
+		for (j = 0; j < vma_packet->sz_iov; ++j) {
+			SPDK_DEBUGLOG(vma, "Sock %d: packet %lu, iov[%lu].len %lu\n",
+				      sock->fd, i, j, vma_packet->iov[j].iov_len);
+		}
+#endif
 		vma_packet = next_packet(vma_packet);
 	}
 
@@ -841,6 +878,26 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 	sock->cur_offset = 0;
 
 	return ret;
+}
+
+static void
+vma_sock_free_packet(struct spdk_vma_sock *sock, struct vma_sock_packet *packet) {
+	int ret;
+	struct vma_packet_t vma_packet;
+
+	SPDK_DEBUGLOG(vma, "Sock %d: free VMA packet %p\n",
+		      sock->fd, packet->vma_packet->packet_id);
+	assert(packet->refs == 0);
+	/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
+	vma_packet.packet_id = packet->vma_packet_id;
+	vma_packet.sz_iov = 0;
+	ret = g_vma_api->free_packets(sock->fd, &vma_packet, 1);
+	if (ret < 0) {
+		SPDK_ERRLOG("Free VMA packets failed, ret %d, errno %d\n",
+			    ret, errno);
+	}
+
+	STAILQ_INSERT_HEAD(&sock->free_packets, packet, link);
 }
 
 static void
@@ -867,21 +924,8 @@ packets_advance(struct spdk_vma_sock *sock, size_t len)
 				/* Next packet */
 				sock->cur_iov_idx = 0;
 				STAILQ_REMOVE_HEAD(&sock->received_packets, link);
-				if (cur_packet->refs == 0) {
-					int ret;
-
-					SPDK_DEBUGLOG(vma, "Sock %d: free VMA packet %p\n",
-						      sock->fd, cur_packet->vma_packet->packet_id);
-					/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
-					ret = g_vma_api->free_packets(sock->fd,
-								      cur_packet->vma_packet,
-								      1);
-					if (ret < 0) {
-						SPDK_ERRLOG("Free VMA packets failed, ret %d, errno %d\n",
-							    ret, errno);
-					}
-
-					STAILQ_INSERT_HEAD(&sock->free_packets, cur_packet, link);
+				if (--cur_packet->refs == 0) {
+					vma_sock_free_packet(sock, cur_packet);
 				}
 			}
 		}
@@ -891,7 +935,10 @@ packets_advance(struct spdk_vma_sock *sock, size_t len)
 }
 
 static size_t
-packets_next_chunk(struct spdk_vma_sock *sock, void **buf, size_t max_len)
+packets_next_chunk(struct spdk_vma_sock *sock,
+		   void **buf,
+		   struct vma_sock_packet **packet,
+		   size_t max_len)
 {
 	if (!STAILQ_EMPTY(&sock->received_packets)) {
 		struct vma_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
@@ -902,6 +949,7 @@ packets_next_chunk(struct spdk_vma_sock *sock, void **buf, size_t max_len)
 		assert(len > 0);
 		len = spdk_min(len, max_len);
 		*buf = iov->iov_base + sock->cur_offset;
+		*packet = cur_packet;
 		return len;
 	}
 
@@ -934,8 +982,9 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 			size_t len;
 			struct iovec *iov = &iovs[i];
 			size_t iov_len = iov->iov_len - offset;
+			struct vma_sock_packet *packet;
 
-			len = packets_next_chunk(sock, &buf, iov_len);
+			len = packets_next_chunk(sock, &buf, &packet, iov_len);
 			if (len == 0) {
 				/* No more data */
 				SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
@@ -1574,6 +1623,107 @@ vma_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
 	return 0;
 }
 
+static struct vma_sock_buf *
+vma_sock_get_buf(struct spdk_vma_sock *sock)
+{
+	struct spdk_sock_buf *sock_buf = sock->free_buffers;
+	/* @todo: we don't handle lack of buffers yet */
+	assert(sock_buf);
+	sock->free_buffers = sock_buf->next;
+	return SPDK_CONTAINEROF(sock_buf, struct vma_sock_buf, sock_buf);
+}
+
+static void
+vma_sock_free_buf(struct spdk_vma_sock *sock, struct vma_sock_buf *buf)
+{
+	buf->sock_buf.next = sock->free_buffers;
+	sock->free_buffers = &buf->sock_buf;
+}
+
+static ssize_t
+vma_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf **sock_buf)
+{
+	struct spdk_vma_sock *sock = __vma_sock(_sock);
+	struct vma_sock_buf *prev_buf = NULL;
+	int ret;
+
+	SPDK_DEBUGLOG(vma, "Sock %d: zcopy recv %lu bytes\n", sock->fd, len);
+	assert(sock->recv_zcopy);
+	*sock_buf = NULL;
+
+	if (STAILQ_EMPTY(&sock->received_packets)) {
+		ret = vma_sock_recvfrom_zcopy(sock);
+		if (ret <= 0) {
+			SPDK_DEBUGLOG(vma, "Sock %d: recv_zcopy ret %d, errno %d\n",
+				      sock->fd, ret, errno);
+			return ret;
+		}
+	}
+
+	assert(!STAILQ_EMPTY(&sock->received_packets));
+	ret = 0;
+	while (len > 0) {
+		void *data;
+		size_t chunk_len;
+		struct vma_sock_buf *buf;
+		struct vma_sock_packet *packet;
+
+		chunk_len = packets_next_chunk(sock, &data, &packet, len);
+		if (chunk_len == 0) {
+			/* No more data */
+			break;
+		}
+
+		assert(chunk_len <= len);
+		buf = vma_sock_get_buf(sock);
+		/* @todo: we don't handle lack of buffers yet */
+		assert(buf);
+		buf->sock_buf.iov.iov_base = data;
+		buf->sock_buf.iov.iov_len = chunk_len;
+		buf->sock_buf.next = NULL;
+		buf->packet = packet;
+		packet->refs++;
+		if (prev_buf) {
+			prev_buf->sock_buf.next = &buf->sock_buf;
+		} else {
+			*sock_buf = &buf->sock_buf;
+		}
+
+		packets_advance(sock, chunk_len);
+		len -= chunk_len;
+		ret += chunk_len;
+		prev_buf = buf;
+		SPDK_DEBUGLOG(vma, "Sock %d: add buffer %p, len %lu, total_len %d\n",
+			      sock->fd, buf, buf->sock_buf.iov.iov_len, ret);
+	}
+
+	SPDK_DEBUGLOG(vma, "Sock %d: recv_zcopy ret %d\n", sock->fd, ret);
+	return ret;
+}
+
+static int
+vma_sock_free_bufs(struct spdk_sock *_sock, struct spdk_sock_buf *sock_buf)
+{
+	struct spdk_vma_sock *sock = __vma_sock(_sock);
+
+	while (sock_buf) {
+		struct vma_sock_buf *buf = SPDK_CONTAINEROF(sock_buf,
+							    struct vma_sock_buf,
+							    sock_buf);
+		struct vma_sock_packet *packet = buf->packet;
+		struct spdk_sock_buf *next = buf->sock_buf.next;
+
+		vma_sock_free_buf(sock, buf);
+		if (--packet->refs == 0) {
+			vma_sock_free_packet(sock, packet);
+		}
+
+		sock_buf = next;
+	}
+
+	return 0;
+}
+
 static struct spdk_net_impl g_vma_net_impl = {
 	.name		= "vma",
 	.getaddr	= vma_sock_getaddr,
@@ -1599,7 +1749,9 @@ static struct spdk_net_impl g_vma_net_impl = {
 	.group_impl_close	= vma_sock_group_impl_close,
 	.get_opts	= vma_sock_impl_get_opts,
 	.set_opts	= vma_sock_impl_set_opts,
-	.get_caps	= vma_sock_get_caps
+	.get_caps	= vma_sock_get_caps,
+	.recv_zcopy	= vma_sock_recv_zcopy,
+	.free_bufs	= vma_sock_free_bufs
 };
 
 SPDK_NET_IMPL_REGISTER(vma, &g_vma_net_impl, DEFAULT_SOCK_PRIORITY);
