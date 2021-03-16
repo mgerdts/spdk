@@ -1705,7 +1705,11 @@ nvme_tcp_read_pdu(struct nvme_tcp_qpair *tqpair, uint32_t *reaped)
 				pdu->ddgst_enable = true;
 			}
 
-			rc = nvme_tcp_read_payload_data(tqpair->sock, pdu);
+			if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
+				rc = nvme_tcp_read_payload_data_zcopy(tqpair->sock, pdu);
+			} else {
+				rc = nvme_tcp_read_payload_data(tqpair->sock, pdu);
+			}
 			if (rc < 0) {
 				nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_ERROR);
 				break;
