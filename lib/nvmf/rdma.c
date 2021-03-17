@@ -1202,8 +1202,7 @@ nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpai
 	 * Fields below are ignored by rdma cm if qpair has been
 	 * created using rdma cm API. */
 	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
-	static int qp_num_cnt;
-	ctrlr_event_data.qp_num = (uint32_t)spdk_thread_get_id(spdk_get_thread()) * 10000 + qp_num_cnt++;
+	rc = spdk_rdma_qp_get_qpn_reservation(rqpair->rdma_qp, &ctrlr_event_data.qp_num);
 	/*rqpair->rdma_qp->qp->qp_num; *//* DCTN in DC case ??? */
 
 	rc = spdk_rdma_qp_accept(rqpair->rdma_qp, &ctrlr_event_data);
