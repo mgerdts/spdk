@@ -165,7 +165,7 @@ struct nvme_rdma_poller {
 	struct ibv_pd			*pd;
 	struct ibv_srq			*srq;
 	struct nvme_rdma_resources	*resources;
-    struct spdk_rdma_poller_context *ctx;
+	struct spdk_rdma_poller_context *ctx;
 	int				required_num_wc;
 	int				current_num_wc;
 	STAILQ_ENTRY(nvme_rdma_poller)	link;
@@ -1235,10 +1235,10 @@ nvme_rdma_connect(struct nvme_rdma_qpair *rqpair)
 	 * created using rdma cm API. */
 	param.srq = 0;
 
-	static uint32_t qp_num_cnt;
-	param.qp_num = qp_num_cnt++;
-
-	//param.qp_num = spdk_rdma_send_qp_num(rqpair->rdma_qp); /*FIXME was rqpair->rdma_qp->qp->qp_num;*/
+	ret = spdk_rdma_qp_get_qpn_reservation(rqpair->rdma_qp, &param.qp_num);
+	if (ret) {
+		return ret;
+	}
 
 	ret = rdma_connect(rqpair->cm_id, &param);
 	if (ret) {

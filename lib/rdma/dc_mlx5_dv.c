@@ -89,6 +89,7 @@ struct spdk_dc_mlx5_dv_qp {
 	struct ibv_send_wr *bad_wr;
 	struct ibv_send_wr *not_sent_yet;
 	int    last_flush_rc;
+	uint32_t qpn_reservation;
 };
 
 #define DC_KEY 0xDC00DC00DC00DC00 /*FIXME ???*/
@@ -624,6 +625,10 @@ spdk_dc_qp_disconnect(struct spdk_dc_mlx5_dv_qp *qp)
 		if (rc) {
 			SPDK_ERRLOG("rdma_disconnect failed, errno %s (%d)\n", spdk_strerror(errno), errno);
 		}
+		rc = mlx5dv_reserved_qpn_dealloc(qp->common.cm_id->verbs,  qp->qpn_reservation);
+		if (rc) {
+			SPDK_ERRLOG("mlx5dv_reserved_qpn_dealloc failed\n");
+		}
 	}
 	return rc;
 }
@@ -788,6 +793,20 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 			spdk_dc_poller_context_submit_wrs(qp->poller_ctx);
 			}*/
 	return rc;
+}
+
+int spdk_rdma_qp_get_qpn_reservation(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t *qpn_reservation)
+{
+	int ret;
+	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+
+	ret = mlx5dv_reserved_qpn_alloc(qp->common.cm_id->verbs, qpn_reservation);
+	if (ret) {
+		SPDK_ERRLOG("mlx5dv_reserved_qpn_alloc failed\n");
+	} else {
+		qp->qpn_reservation = *qpn_reservation;
+	}
+	return ret;
 }
 
 struct spdk_rdma_qp *spdk_rdma_qp_create(struct rdma_cm_id *cm_id,
