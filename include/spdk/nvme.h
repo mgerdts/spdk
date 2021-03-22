@@ -3793,6 +3793,8 @@ struct spdk_nvme_transport_ops {
 	void (*poll_group_free_stats)(struct spdk_nvme_transport_poll_group *tgroup,
 				      struct spdk_nvme_transport_poll_group_stat *stats);
 	int (*get_caps)(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *caps);
+
+	int (*qpair_free_request)(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 };
 
 /**
