@@ -612,6 +612,49 @@ spdk_nvme_ns_cmd_comparev_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpai
 }
 
 int
+spdk_nvme_ns_cmd_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			   uint64_t lba, uint32_t lba_count,
+			   spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			   bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io)
+{
+	/* FIXME: For first dev phase, do not free zcopy buf but call callback here */
+	struct spdk_nvme_cpl cpl;
+
+	assert(nvme_zcopy_io != NULL);
+
+	cpl.status.sc = SPDK_NVME_SC_SUCCESS;
+	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+	cb_fn(cb_arg, &cpl, NULL);
+	return 0;
+}
+
+int
+spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			     uint64_t lba, uint32_t lba_count,
+			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			     uint32_t io_flags, bool populate)
+{
+	/* FIXME: For first dev phase, we will return fake zcopy buf here */
+	struct spdk_nvme_cpl cpl;
+	uint32_t sector_size = _nvme_get_host_buffer_sector_size(ns, io_flags);
+	uint32_t payload_size = lba_count * sector_size;
+	static struct iovec iov; /* iov for test */
+	static struct spdk_nvme_zcopy_io nvme_zcopy_io;
+
+	iov.iov_base = &iov;
+	iov.iov_len = payload_size;
+
+	nvme_zcopy_io.iovs = &iov;
+	nvme_zcopy_io.iovcnt = 1;
+
+	cpl.status.sc = SPDK_NVME_SC_SUCCESS;
+	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+	cb_fn(cb_arg, &cpl, &nvme_zcopy_io);
+
+	return 0;
+}
+
+int
 spdk_nvme_ns_cmd_read(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer,
 		      uint64_t lba,
 		      uint32_t lba_count, spdk_nvme_cmd_cb cb_fn, void *cb_arg,

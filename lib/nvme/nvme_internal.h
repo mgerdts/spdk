@@ -205,6 +205,38 @@ extern pid_t g_spdk_nvme_pid;
 /* This value indicates that a read from a PCIe register is invalid. This can happen when a device is no longer present */
 #define SPDK_NVME_INVALID_REGISTER_VALUE 0xFFFFFFFFu
 
+struct spdk_nvme_zcopy_io {
+	/**
+	 * Array of iovecs allocated for zcopy
+	 */
+	struct iovec			*iovs;
+
+	/**
+	 * Number of iovecs in iovec array.
+	 */
+	int				iovcnt;
+
+	/**
+	 * Callback for zcopy
+	 */
+	spdk_nvme_cmd_zcopy_cb		zcopy_cb_fn;
+
+	/**
+	 * Whether the buffer should be populated with the real data
+	 */
+	uint8_t				populate : 1;
+
+	/**
+	 * Whether the buffer should be committed back to disk
+	 */
+	uint8_t				commit : 1;
+
+	/**
+	 * True if this request is in the 'start' phase of zcopy. False if in 'end'.
+	 */
+	uint8_t				start : 1;
+};
+
 enum nvme_payload_type {
 	NVME_PAYLOAD_TYPE_INVALID = 0,
 
