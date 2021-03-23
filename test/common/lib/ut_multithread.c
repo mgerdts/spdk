@@ -37,6 +37,18 @@
 
 #include "common/lib/test_env.c"
 
+#if 1
+#define MGNL(s) (strchr(s, '\n') ? "" : "\n")
+#define        MGDBG(fmt, ...) printf("MG %33s:%-5d " fmt "%s", __func__, __LINE__, __VA_ARGS__, MGNL(fmt))
+#define        MGDBG0(msg) printf("MG %33s:%-5d " msg "%s", __func__, __LINE__, MGNL(msg))
+#define MGDEBUG_ON
+#define MGDEF(x) x
+#else
+#define MG_TESTALL
+#define MGDBG(fmt, ...)
+#define MGDBG0(msg)
+#define MGDEF(x)
+#endif
 static uint32_t g_ut_num_threads;
 
 int allocate_threads(int num_threads);
@@ -160,6 +172,7 @@ poll_thread_times(uintptr_t thread_id, uint32_t max_polls)
 	now = spdk_get_ticks();
 	while (polls_executed < max_polls) {
 		if (spdk_thread_poll(thread->thread, 1, now) > 0) {
+			MGDBG0("busy = true;");
 			busy = true;
 		}
 		now = spdk_thread_get_last_tsc(thread->thread);
@@ -168,6 +181,7 @@ poll_thread_times(uintptr_t thread_id, uint32_t max_polls)
 
 	set_thread(original_thread_id);
 
+	MGDBG("return busy; (%s)", busy ? "true" : "false");
 	return busy;
 }
 

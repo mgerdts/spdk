@@ -43,6 +43,8 @@
 #include "blob/request.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 
 struct spdk_blob_store *g_bs;
 spdk_blob_id g_blobid;
@@ -147,6 +149,17 @@ bs_op_with_handle_complete(void *cb_arg, struct spdk_blob_store *bs,
 {
 	g_bs = bs;
 	g_bserrno = bserrno;
+}
+
+static void
+blob_op_complete_mg(void *cb_arg, int bserrno)
+{
+	int *ret = cb_arg;
+
+	g_bserrno = bserrno;
+	MGDBG("cb_arg %p (from line %d)", cb_arg, *ret);
+	assert(*ret > 0);
+	*ret *= -1;
 }
 
 static void
@@ -6482,16 +6495,17 @@ blob_simultaneous_operations(void)
 	g_bserrno = -1;
 
 	blob->state = SPDK_BLOB_STATE_DIRTY;
-	spdk_blob_sync_md(blob, blob_op_complete, NULL);
+	int ret1 = __LINE__; spdk_blob_sync_md(blob, blob_op_complete_mg, &ret1);
 	SPDK_CU_ASSERT_FATAL(g_bserrno == -1);
 
 	blob->state = SPDK_BLOB_STATE_DIRTY;
-	spdk_blob_sync_md(blob, blob_op_complete, NULL);
+	int ret2 = __LINE__; spdk_blob_sync_md(blob, blob_op_complete_mg, &ret2);
 	SPDK_CU_ASSERT_FATAL(g_bserrno == -1);
 
 	uint32_t completions = 0;
 	while (completions < 2) {
 		SPDK_CU_ASSERT_FATAL(poll_thread_times(0, 1));
+		MGDBG("g_bserrno = %d completions %u ret1 %d ret2 %d", g_bserrno, completions, ret1, ret2);
 		if (g_bserrno == 0) {
 			g_bserrno = -1;
 			completions++;
@@ -6500,6 +6514,7 @@ blob_simultaneous_operations(void)
 		 * It would mean that either of syncs failed. */
 		SPDK_CU_ASSERT_FATAL(g_bserrno == -1);
 	}
+	MGDBG("g_bserrno = %d completions %u ret1 %d ret2 %d", g_bserrno, completions, ret1, ret2);
 
 	spdk_bs_free_io_channel(channel);
 	poll_threads();
@@ -6717,6 +6732,7 @@ int main(int argc, char **argv)
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
 
+#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -6778,17 +6794,23 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_operation_split_rw_iov);
 	CU_ADD_TEST(suite, blob_io_unit);
 	CU_ADD_TEST(suite, blob_io_unit_compatiblity);
+#endif
 	CU_ADD_TEST(suite_bs, blob_simultaneous_operations);
+#if 0
 	CU_ADD_TEST(suite_bs, blob_persist_test);
+#endif
 
 	allocate_threads(2);
 	set_thread(0);
+	spdk_log_set_flag("all");
 
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
+#if 0
 	g_use_extent_table = false;
 	CU_basic_run_tests();
+#endif
 	num_failures = CU_get_number_of_failures();
 	g_use_extent_table = true;
 	CU_basic_run_tests();

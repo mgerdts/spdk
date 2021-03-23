@@ -1704,9 +1704,25 @@ bs_batch_clear_dev(struct spdk_blob_persist_ctx *ctx, spdk_bs_batch_t *batch, ui
 
 static void blob_persist_check_dirty(struct spdk_blob_persist_ctx *ctx);
 
-static void
-blob_persist_complete(spdk_bs_sequence_t *seq, struct spdk_blob_persist_ctx *ctx, int bserrno)
+static bool
+blob_is_clean(struct spdk_blob *blob)
 {
+	bool is_clean;
+
+	if (blob->dirty_extent_pages != NULL &&
+	    spdk_bit_array_find_first_set(blob->dirty_extent_pages, 0) != UINT32_MAX) {
+		is_clean = false;
+	} else {
+		is_clean = blob->state == SPDK_BLOB_STATE_CLEAN;
+	}
+
+	return is_clean;
+}
+
+static void
+blob_persist_complete(spdk_bs_sequence_t *seq, struct spdk_blob_persist_ctx *_ctx, int bserrno)
+{
+	struct spdk_blob_persist_ctx	*ctx = _ctx;
 	struct spdk_blob_persist_ctx	*next_persist;
 	struct spdk_blob		*blob = ctx->blob;
 
@@ -1714,17 +1730,27 @@ blob_persist_complete(spdk_bs_sequence_t *seq, struct spdk_blob_persist_ctx *ctx
 		blob_mark_clean(blob);
 	}
 
-	assert(ctx == TAILQ_FIRST(&blob->pending_persists));
-	TAILQ_REMOVE(&blob->pending_persists, ctx, link);
+	/* Reap the first pending persist unconditionally, as well as any other
+	 * pending persists that piggy-backed on the first one. */
+	for (;;) {
+		assert(ctx == TAILQ_FIRST(&blob->pending_persists));
+		TAILQ_REMOVE(&blob->pending_persists, ctx, link);
 
-	next_persist = TAILQ_FIRST(&blob->pending_persists);
+		next_persist = TAILQ_FIRST(&blob->pending_persists);
 
-	/* Call user callback */
-	ctx->cb_fn(seq, ctx->cb_arg, bserrno);
+		/* Call user callback */
+		ctx->cb_fn(seq, ctx->cb_arg, bserrno);
 
-	/* Free the memory */
-	spdk_free(ctx->pages);
-	free(ctx);
+		/* Free the memory */
+		spdk_free(ctx->pages);
+		free(ctx);
+
+		if (next_persist == NULL || !blob_is_clean(blob)) {
+			break;
+		}
+		ctx = next_persist;
+		seq = ctx->seq;
+	}
 
 	if (next_persist != NULL) {
 		blob_persist_check_dirty(next_persist);
@@ -2267,40 +2293,6 @@ blob_persist_write_extent_pages(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 		}
 		assert(blob->clean.extent_pages[i] != 0);
 	}
-
-	/* XXX-mg Resolve this in code reivew or before
-	 *
-	 * Without the fix in blob_mark_clean(), the code above was performing unconditional writes
-	 * of all extent pages.  That guaranteed that by the time the loop above returns that
-	 * blob->state had been set to dirty at least once.  Thus, if some application called
-	 * spdk_blob_sync_md() in rapid succession, the blob_mark_clean() bug would lead to
-	 * blob->state being dirty by the time it reached here.
-	 *
-	 * With the blob_mark_clean() fix, an application that does something like the following
-	 * has a race condition.
-	 *
-	 * 1.	blob->state = SPDK_BLOB_STATE_DIRTY;
-	 * 2.	spdk_blob_sync_md(blob, blob_op_complete, NULL);
-	 * 3.	blob->state = SPDK_BLOB_STATE_DIRTY;
-	 * 4.	spdk_blob_sync_md(blob, blob_op_complete, NULL);
-	 *
-	 * Each spdk_blob_sync_md() queues a metadata sync.  The first metadata sync (2) is likely
-	 * to set blob->state to clean in blob_persist_generate_new_md() after blob->state is set to
-	 * dirty (3).  Thus, it is quite likely that when the blob_persist_generate_new_md()
-	 * associated with the second sync (4) executes, blob->state is clean, which fails
-	 * assert(blob->state == SPDK_BLOB_STATE_DIRTY) in blob_serialize().
-	 *
-	 * Both syncs need to execute, so we can't just call blob_persist_complete() now.  Instead,
-	 * we set blob->state to dirty so that we can march on.
-	 *
-	 * A couple questions:
-	 *
-	 *  1. Should we instead just get rid of the assert() in blob_serialize()?
-	 *  2. What does blob->state hope to accomplish?  Can it realistically do that with the data
-	 *     races that come with async operations?  Should dirty and clean be merged into a
-	 *     "running" state?
-	 */
-	blob->state = SPDK_BLOB_STATE_DIRTY;
 
 	blob_persist_generate_new_md(ctx);
 }
