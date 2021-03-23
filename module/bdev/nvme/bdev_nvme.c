@@ -95,6 +95,9 @@ struct nvme_bdev_io {
 
 	/** Keep track of how many zones that have been copied to the spdk_bdev_zone_info struct */
 	uint64_t handled_zones;
+
+	/** Context for zcopy IO operation */
+	struct spdk_nvme_zcopy_io *zcopy_io;
 };
 
 struct nvme_probe_ctx {
@@ -150,6 +153,10 @@ static int bdev_nvme_readv(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpai
 			   struct nvme_bdev_io *bio,
 			   struct iovec *iov, int iovcnt, void *md, uint64_t lba_count, uint64_t lba,
 			   uint32_t flags);
+static int bdev_nvme_readv_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+				       struct nvme_bdev_io *bio);
+static int bdev_nvme_readv_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+				     struct nvme_bdev_io *bio);
 static int bdev_nvme_no_pi_readv(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 				 struct nvme_bdev_io *bio,
 				 struct iovec *iov, int iovcnt, void *md, uint64_t lba_count, uint64_t lba);
@@ -878,6 +885,22 @@ _bdev_nvme_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_
 						bdev_io->u.nvme_passthru.md_buf,
 						bdev_io->u.nvme_passthru.md_len);
 
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		if (bdev_io->u.bdev.zcopy.populate) {
+			if (bdev_io->u.bdev.zcopy.start) {
+				/* TODO: md_buf will be handled later */
+				return bdev_nvme_readv_zcopy_start(nvme_ns->ns,
+								   qpair,
+								   nbdev_io);
+			} else {
+				return bdev_nvme_readv_zcopy_end(nvme_ns->ns,
+								 qpair,
+								 nbdev_io);
+			}
+		} else {
+			SPDK_ERRLOG("Zero copy write is not supported.\n");
+			return -ENOTSUP;
+		}
 	case SPDK_BDEV_IO_TYPE_ABORT:
 		nbdev_io_to_abort = (struct nvme_bdev_io *)bdev_io->u.abort.bio_to_abort->driver_ctx;
 		return bdev_nvme_abort(nvme_ch,
@@ -926,6 +949,10 @@ bdev_nvme_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
 	case SPDK_BDEV_IO_TYPE_NVME_IO:
 	case SPDK_BDEV_IO_TYPE_ABORT:
+		return true;
+
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		/* TODO: only nvme_tcp with VMA support zcopy now */
 		return true;
 
 	case SPDK_BDEV_IO_TYPE_COMPARE:
@@ -2518,6 +2545,46 @@ bdev_nvme_no_pi_readv_done(void *ref, const struct spdk_nvme_cpl *cpl)
 }
 
 static void
+bdev_nvme_readv_zcopy_start_done(void *ref,
+				 const struct spdk_nvme_cpl *cpl,
+				 struct spdk_nvme_zcopy_io *zcopy_io)
+{
+	struct nvme_bdev_io *bio = ref;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	struct iovec *iovs;
+	int iovcnt;
+
+	if (spdk_unlikely(spdk_nvme_cpl_is_pi_error(cpl))) {
+		/* TODO: handle error case */
+		SPDK_ERRLOG("readv completed with PI error (sct=%d, sc=%d)\n",
+			    cpl->status.sct, cpl->status.sc);
+		spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
+		return;
+	}
+
+	spdk_nvme_zcopy_io_get_iovec(zcopy_io, &iovs, &iovcnt);
+
+	assert(bdev_io->u.bdev.iovs == NULL);
+	assert(bdev_io->u.bdev.iovcnt == 0);
+
+	bdev_io->u.bdev.iovs = iovs;
+	bdev_io->u.bdev.iovcnt = iovcnt;
+	bio->zcopy_io = zcopy_io;
+
+	spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
+}
+
+static void
+bdev_nvme_readv_zcopy_end_done(void *ref,
+			       const struct spdk_nvme_cpl *cpl,
+			       struct spdk_nvme_zcopy_io *zcopy_io)
+{
+	struct nvme_bdev_io *bio = ref;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
+}
+
+static void
 bdev_nvme_readv_done(void *ref, const struct spdk_nvme_cpl *cpl)
 {
 	struct nvme_bdev_io *bio = ref;
@@ -2959,6 +3026,49 @@ static int bdev_nvme_ns_cmd_io_get_mkey(void *cb_arg, void *address, size_t leng
 	rc = bdev_io->internal.ext_opts.mem_type->u.mkey.get_mkey_cb(
 		     bdev_io->internal.ext_opts.mem_type->u.mkey.get_mkey_cb_arg, address, length, pd, mkey);
 
+	return rc;
+}
+
+static int
+bdev_nvme_readv_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			  struct nvme_bdev_io *bio)
+{
+	int rc;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	bool commit = bdev_io->u.bdev.zcopy.commit;
+
+	assert(commit == false);
+
+	rc = spdk_nvme_ns_cmd_zcopy_end(ns, qpair, 0, 0,
+					bdev_nvme_readv_zcopy_end_done,
+					bio, commit, bio->zcopy_io);
+
+	if (rc != 0) {
+		SPDK_ERRLOG("readv failed: rc = %d\n", rc);
+	}
+	return rc;
+}
+
+static int
+bdev_nvme_readv_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			    struct nvme_bdev_io *bio)
+{
+	int rc;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	uint64_t lba_count = bdev_io->u.bdev.num_blocks;
+	uint64_t lba = bdev_io->u.bdev.offset_blocks;
+	uint32_t flags = bdev_io->bdev->dif_check_flags;
+
+	SPDK_DEBUGLOG(bdev_nvme, "read %" PRIu64 " blocks with offset %#" PRIx64 "\n",
+		      lba_count, lba);
+
+	rc = spdk_nvme_ns_cmd_zcopy_start(ns, qpair, lba, lba_count,
+					  bdev_nvme_readv_zcopy_start_done, bio,
+					  flags, bdev_io->u.bdev.zcopy.populate);
+
+	if (rc != 0 && rc != -ENOMEM) {
+		SPDK_ERRLOG("readv failed: rc = %d\n", rc);
+	}
 	return rc;
 }
 

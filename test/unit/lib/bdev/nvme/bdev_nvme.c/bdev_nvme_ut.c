@@ -218,6 +218,8 @@ DEFINE_STUB(spdk_accel_submit_crc32cv, int, (struct spdk_io_channel *ch, uint32_
 		struct iovec *iov,
 		uint32_t iov_cnt, uint32_t seed, spdk_accel_completion_cb cb_fn, void *cb_arg), 0);
 
+DEFINE_STUB_V(spdk_nvme_zcopy_io_get_iovec, (struct spdk_nvme_zcopy_io *zcopy_io,
+		struct iovec **iovs, int *iovcnt));
 
 struct ut_nvme_req {
 	uint16_t			opc;
@@ -742,6 +744,25 @@ spdk_nvme_ns_get_num_sectors(struct spdk_nvme_ns *ns)
 {
 	return _nvme_ns_get_data(ns)->nsze;
 }
+
+int
+spdk_nvme_ns_cmd_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			   uint64_t lba, uint32_t lba_count,
+			   spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			   bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_READ, NULL, cb_arg);
+}
+
+int
+spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			     uint64_t lba, uint32_t lba_count,
+			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			     uint32_t io_flags, bool populate)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_READ, NULL, cb_arg);
+}
+
 int
 spdk_nvme_ns_cmd_read_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer,
 			      void *metadata, uint64_t lba, uint32_t lba_count,
