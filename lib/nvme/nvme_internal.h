@@ -1241,6 +1241,45 @@ nvme_complete_request(spdk_nvme_cmd_cb cb_fn, void *cb_arg, struct spdk_nvme_qpa
 }
 
 static inline void
+nvme_complete_request_zcopy(spdk_nvme_cmd_zcopy_cb cb_fn,
+			    void *cb_arg,
+			    struct spdk_nvme_qpair *qpair,
+			    struct nvme_request *req,
+			    struct spdk_nvme_cpl *cpl)
+{
+	struct spdk_nvme_cpl            err_cpl;
+	struct nvme_error_cmd           *cmd;
+
+	/* error injection at completion path,
+	 * only inject for successful completed commands
+	 */
+	if (spdk_unlikely(!TAILQ_EMPTY(&qpair->err_cmd_head) &&
+			  !spdk_nvme_cpl_is_error(cpl))) {
+		TAILQ_FOREACH(cmd, &qpair->err_cmd_head, link) {
+
+			if (cmd->do_not_submit) {
+				continue;
+			}
+
+			if ((cmd->opc == req->cmd.opc) && cmd->err_count) {
+
+				err_cpl = *cpl;
+				err_cpl.status.sct = cmd->status.sct;
+				err_cpl.status.sc = cmd->status.sc;
+
+				cpl = &err_cpl;
+				cmd->err_count--;
+				break;
+			}
+		}
+	}
+
+	if (cb_fn) {
+		cb_fn(cb_arg, cpl, &req->zcopy);
+	}
+}
+
+static inline void
 nvme_free_request(struct nvme_request *req)
 {
 	assert(req != NULL);

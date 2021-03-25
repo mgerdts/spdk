@@ -48,6 +48,7 @@
  * Maximum number of SGL elements.
  */
 #define NVME_TCP_MAX_SGL_DESCRIPTORS	(16)
+#define NVME_TCP_MAX_ZCOPY_IOVS	(128)
 
 #define MAKE_DIGEST_WORD(BUF, CRC32C) \
         (   ((*((uint8_t *)(BUF)+0)) = (uint8_t)((uint32_t)(CRC32C) >> 0)), \
@@ -544,81 +545,6 @@ nvme_tcp_read_payload_data(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
 	return nvme_tcp_readv_data(sock, iov, iovcnt);
 }
 
-static int
-nvme_tcp_readv_data_zcopy(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
-{
-	int ret;
-	struct spdk_sock_buf *sock_buf;
-	int i;
-	size_t len = 0;
-
-	assert(sock != NULL);
-	if (iov == NULL || iovcnt == 0) {
-		return 0;
-	}
-
-	for (i = 0; i < iovcnt; ++i) {
-		len += iov[i].iov_len;
-	}
-
-	ret = spdk_sock_recv_zcopy(sock, len, &sock_buf);
-	if (ret > 0) {
-		int iov_idx = 0, iov_offset = 0;
-		int buf_offset = 0;
-		struct spdk_sock_buf *cur_buf = sock_buf;
-
-		len = ret;
-		while (len > 0) {
-			assert(cur_buf);
-			size_t iov_len = iov[iov_idx].iov_len - iov_offset;
-			size_t buf_len = cur_buf->iov.iov_len - buf_offset;
-			size_t copy_len = spdk_min(iov_len, buf_len);
-
-			memcpy(iov[iov_idx].iov_base, cur_buf->iov.iov_base, copy_len);
-			len -= copy_len;
-			if (iov_len == copy_len) {
-				iov_idx++;
-				iov_offset = 0;
-			}
-			if (buf_len == copy_len) {
-				cur_buf = cur_buf->next;
-				buf_offset = 0;
-			}
-		}
-
-		spdk_sock_free_bufs(sock, sock_buf);
-		return ret;
-	}
-
-	if (ret < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			return 0;
-		}
-
-		/* For connect reset issue, do not output error log */
-		if (errno != ECONNRESET) {
-			SPDK_ERRLOG("spdk_sock_readv() failed, errno %d: %s\n",
-				    errno, spdk_strerror(errno));
-		}
-	}
-
-	/* connection closed */
-	return NVME_TCP_CONNECTION_FATAL;
-}
-
-static int
-nvme_tcp_read_payload_data_zcopy(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
-{
-	struct iovec iov[NVME_TCP_MAX_SGL_DESCRIPTORS + 1];
-	int iovcnt;
-
-	iovcnt = nvme_tcp_build_payload_iovs(iov, NVME_TCP_MAX_SGL_DESCRIPTORS + 1, pdu,
-					     pdu->ddgst_enable, NULL);
-	assert(iovcnt >= 0);
-
-	return nvme_tcp_readv_data_zcopy(sock, iov, iovcnt);
-}
-
 static void
 _nvme_tcp_pdu_set_data(struct nvme_tcp_pdu *pdu, void *data, uint32_t data_len)
 {
@@ -656,7 +582,7 @@ nvme_tcp_pdu_set_data_buf(struct nvme_tcp_pdu *pdu,
 
 	if (iovcnt == 1) {
 		_nvme_tcp_pdu_set_data(pdu, (void *)((uint64_t)iov[0].iov_base + buf_offset), buf_len);
-	} else {
+	} else if (iovcnt != 0) {
 		pdu_sgl = &pdu->sgl;
 
 		_nvme_tcp_sgl_init(pdu_sgl, pdu->data_iov, NVME_TCP_MAX_SGL_DESCRIPTORS, 0);
