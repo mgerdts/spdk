@@ -859,6 +859,22 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 	struct nvme_tcp_qpair *tqpair;
 	struct nvme_tcp_req *tcp_req;
 
+	if (nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
+		/* FIXME: add test stub here temporarily */
+		struct spdk_nvme_cpl cpl;
+		static struct iovec iov;
+
+		iov.iov_base = &iov;
+		iov.iov_len = req->payload_size;
+		req->zcopy.iovs = &iov;
+		req->zcopy.iovcnt = 1;
+
+		cpl.status.sc = SPDK_NVME_SC_SUCCESS;
+		cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+		req->zcopy.zcopy_cb_fn(req->cb_arg, &cpl, &req->zcopy);
+		return 0;
+	}
+
 	tqpair = nvme_tcp_qpair(qpair);
 	assert(tqpair != NULL);
 	assert(req != NULL);
@@ -2385,6 +2401,16 @@ nvme_tcp_get_caps(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *ca
 	return 0;
 }
 
+static int
+nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
+{
+	/* FIXME: free zcopy buffer here */
+	assert(req != NULL);
+	nvme_free_request(req);
+
+	return 0;
+}
+
 
 const struct spdk_nvme_transport_ops tcp_ops = {
 	.name = "TCP",
@@ -2424,6 +2450,7 @@ const struct spdk_nvme_transport_ops tcp_ops = {
 	.poll_group_destroy = nvme_tcp_poll_group_destroy,
 
 	.get_caps = nvme_tcp_get_caps,
+	.qpair_free_request = nvme_tcp_qpair_free_request,
 };
 
 SPDK_NVME_TRANSPORT_REGISTER(tcp, &tcp_ops);
