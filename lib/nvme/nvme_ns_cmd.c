@@ -617,15 +617,31 @@ spdk_nvme_ns_cmd_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpai
 			   spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 			   bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io)
 {
-	/* FIXME: For first dev phase, do not free zcopy buf but call callback here */
-	struct spdk_nvme_cpl cpl;
-
 	assert(nvme_zcopy_io != NULL);
 
-	cpl.status.sc = SPDK_NVME_SC_SUCCESS;
-	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-	cb_fn(cb_arg, &cpl, NULL);
-	return 0;
+	if (nvme_zcopy_io->commit) {
+		/* TODO: support zcopy write here */
+		return -ENOTSUP;
+	} else {
+		struct nvme_request *req = SPDK_CONTAINEROF(nvme_zcopy_io,
+					   struct nvme_request,
+					   zcopy);
+		struct spdk_nvme_cpl cpl;
+		int rc;
+
+		/* For Zcopy read, just need to free zcopy buffer here */
+		rc = nvme_transport_qpair_free_request(qpair, req);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to free request %p for zcopy on qpair %d\n",
+				    req, qpair->id);
+		}
+
+		cpl.status.sc = SPDK_NVME_SC_SUCCESS;
+		cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+		cb_fn(cb_arg, &cpl, NULL);
+
+		return 0;
+	}
 }
 
 int
@@ -634,24 +650,33 @@ spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qp
 			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 			     uint32_t io_flags, bool populate)
 {
-	/* FIXME: For first dev phase, we will return fake zcopy buf here */
-	struct spdk_nvme_cpl cpl;
-	uint32_t sector_size = _nvme_get_host_buffer_sector_size(ns, io_flags);
-	uint32_t payload_size = lba_count * sector_size;
-	static struct iovec iov; /* iov for test */
-	static struct spdk_nvme_zcopy_io nvme_zcopy_io;
+	struct nvme_request *req;
+	struct nvme_payload payload;
+	int rc = 0;
 
-	iov.iov_base = &iov;
-	iov.iov_len = payload_size;
+	if (!_is_io_flags_valid(io_flags)) {
+		return -EINVAL;
+	}
 
-	nvme_zcopy_io.iovs = &iov;
-	nvme_zcopy_io.iovcnt = 1;
-
-	cpl.status.sc = SPDK_NVME_SC_SUCCESS;
-	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-	cb_fn(cb_arg, &cpl, &nvme_zcopy_io);
-
-	return 0;
+	if (populate) {
+		req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, NULL,
+				      cb_arg, SPDK_NVME_OPC_READ, io_flags, 0, 0, false, &rc);
+		if (req != NULL) {
+			req->zcopy.zcopy_cb_fn = cb_fn;
+			req->zcopy.populate = populate;
+			req->payload.zcopy = &req->zcopy;
+			return nvme_qpair_submit_request(qpair, req);
+		} else {
+			return nvme_ns_map_failure_rc(lba_count,
+						      ns->sectors_per_max_io,
+						      ns->sectors_per_stripe,
+						      qpair->ctrlr->opts.io_queue_requests,
+						      rc);
+		}
+	} else {
+		/* TODO: support zcopy write here */
+		return -ENOTSUP;
+	}
 }
 
 int

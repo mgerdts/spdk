@@ -245,12 +245,20 @@ enum nvme_payload_type {
 
 	/** nvme_request::u.sgl is valid for this request */
 	NVME_PAYLOAD_TYPE_SGL,
+
+	/** payload for this request is zcopy buffer*/
+	NVME_PAYLOAD_TYPE_ZCOPY,
 };
 
 /**
  * Descriptor for a request data payload.
  */
 struct nvme_payload {
+	/**
+	 * If zcopy != NULL, this is a zcopy payload.
+	 */
+	struct spdk_nvme_zcopy_io *zcopy;
+
 	/**
 	 * Functions for retrieving physical addresses for scattered payloads.
 	 */
@@ -297,7 +305,13 @@ struct nvme_payload {
 
 static inline enum nvme_payload_type
 nvme_payload_type(const struct nvme_payload *payload) {
-	return payload->reset_sgl_fn ? NVME_PAYLOAD_TYPE_SGL : NVME_PAYLOAD_TYPE_CONTIG;
+	if (payload->zcopy) {
+		return NVME_PAYLOAD_TYPE_ZCOPY;
+	} else if (payload->reset_sgl_fn) {
+		return NVME_PAYLOAD_TYPE_SGL;
+	} else {
+		return NVME_PAYLOAD_TYPE_CONTIG;
+	}
 }
 
 struct nvme_error_cmd {
@@ -351,6 +365,11 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		cb_fn;
 	void				*cb_arg;
 	STAILQ_ENTRY(nvme_request)	stailq;
+
+	/**
+	 * Zcopy information of this request's command.
+	 */
+	struct spdk_nvme_zcopy_io	zcopy;
 
 	struct spdk_nvme_qpair		*qpair;
 
