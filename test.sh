@@ -31,8 +31,8 @@ xVMA_RX_POLL_ON_TX_TCP=1"
 QUEUE_DEPTH=128
 IO_SIZE=4096
 RW=randread
-SOCK_IMPL=vma
-PERF_EXTRA_OPTS="-Z vma -P 2"
+#NVME_PERF_EXTRA_OPTS="-T vma -T nvme"
+#BDEV_PERF_EXTRA_OPTS="-L vma -L nvme"
 #SSH_EXTRA_OPTS="-t"
 
 function rpc_tgt() {
@@ -62,7 +62,7 @@ function stop_tgt() {
 }
 
 function config() {
-    rpc_tgt nvmf_create_transport -t tcp
+    rpc_tgt nvmf_create_transport -t tcp -q 512
     rpc_tgt nvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode1
     rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $TGT_PORT nqn.2016-06.io.spdk:cnode1
     rpc_tgt bdev_null_create Null0 8192 512
@@ -77,7 +77,7 @@ function run_nvmeperf() {
     sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $BIN_PATH/spdk_nvme_perf \
 	 -S $SOCK_IMPL -r "trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT" \
 	 -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
-	 $PERF_EXTRA_OPTS 2>&1 | tee -a perf.log&
+	 $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     PERF_PID=$!
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
 }
@@ -87,18 +87,24 @@ function wait_nvmeperf() {
     wait $PERF_PID
 }
 
+function report_nvmeperf() {
+    local OUT=$(grep "Total" perf.log | awk '{ print $3 " | " $4 " | " $5 " | " }')
+    echo -n " $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+}
+
 function run_bdevperf() {
     local ADDR=${ADDR:-$TGT_ADDR}
     local PORT=${PORT:-$TGT_PORT}
 
     sudo $VMA_OPTS LD_PRELOAD=$LIBVMA ./test/bdev/bdevperf/bdevperf \
 	 -r /var/tmp/bdevperf.sock --wait-for-rpc -m $PERF_MASK -C \
-	 -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME 2>&1 | tee -a perf.log &
+	 -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
+	 $BDEV_PERF_EXTRA_OPTS 2>&1 | tee perf.log &
     PERF_PID=$!
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
     sleep 3
     rpc_perf sock_set_default_impl -i $SOCK_IMPL
-    rpc_perf sock_impl_set_options -i vma --enable-zerocopy-recv --disable-zerocopy-send
+    rpc_perf sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send --disable-recv-pipe
     rpc_perf framework_start_init
     rpc_perf bdev_nvme_attach_controller -b Nvme0 -t tcp -f ipv4 -a $ADDR -s $PORT \
 	     -n nqn.2016-06.io.spdk:cnode1
@@ -117,21 +123,88 @@ function wait_bdevperf() {
     wait $PERF_PID
 }
 
-# Test with spdk_nvme_perf
+function report_bdevperf() {
+    local OUT=$(grep "Total" perf.log | tail -1 | awk '{ print $4 " | " $6 " | " }')
+    echo -n " $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+}
+
+# Test with spdk_nvme_perf VMA non zcopy
 function test1() {
     start_tgt
     config
-    run_nvmeperf
+    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
     wait_nvmeperf
+    report_nvmeperf
     stop_tgt
 }
 
-# Test with bdevperf
+# Test with bdevperf VMA non zcopy
 function test2() {
     start_tgt
     config
-    run_bdevperf
+    SOCK_IMPL=vma run_bdevperf
     wait_bdevperf
+    report_bdevperf
+    stop_tgt
+}
+
+# Test with spdk_nvme_perf VMA zcopy
+function test3() {
+    start_tgt
+    config
+    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-Z vma -P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
+    wait_nvmeperf
+    report_nvmeperf
+    stop_tgt
+}
+
+# Test with bdevperf VMA zcopy
+function test4() {
+    start_tgt
+    config
+    SOCK_IMPL=vma BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" run_bdevperf
+    wait_bdevperf
+    report_bdevperf
+    stop_tgt
+}
+
+# Test with spdk_nvme_perf POSIX-VMA non zcopy
+function test5() {
+    start_tgt
+    config
+    SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-z posix -P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
+    wait_nvmeperf
+    report_nvmeperf
+    stop_tgt
+}
+
+# Test with bdevperf POSIX-VMA non zcopy
+function test6() {
+    start_tgt
+    config
+    SOCK_IMPL=posix run_bdevperf
+    wait_bdevperf
+    report_bdevperf
+    stop_tgt
+}
+
+# Test with spdk_nvme_perf POSIX-Kernel non zcopy
+function test7() {
+    start_tgt
+    config
+    LIBVMA= SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
+    wait_nvmeperf
+    report_nvmeperf
+    stop_tgt
+}
+
+# Test with bdevperf POSIX-Kernel non zcopy
+function test8() {
+    start_tgt
+    config
+    LIBVMA= SOCK_IMPL=posix run_bdevperf
+    wait_bdevperf
+    report_bdevperf
     stop_tgt
 }
 
@@ -139,15 +212,25 @@ if [ -n "$1" ]; then
     tests="$@"
 else
     tests="test1 \
-	   test2"
+	   test2 \
+	   test3 \
+	   test4 \
+	   test5 \
+	   test6 \
+	   test7 \
+	   test8"
 fi
 
-rm -rf rpc.log rpc_tgt.log perf.log tgt.log
-
+rm -rf rpc.log rpc_tgt.log perf.log tgt.log report.log
+echo "| Test | Perf CPU | TGT CPU | IO size | QD | IOPS | BW | Lat |" >> report.log
 echo "Running tests: $tests"
 for t in $tests; do
+    echo -n "| $t |" >> report.log
     echo "===== Start $t ====="
     $t | tee test.log
     echo "===== End $t ====="
     echo ""
+    echo "" >> report.log
 done
+
+cat report.log
