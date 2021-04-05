@@ -29,7 +29,7 @@ xVMA_TX_BUF_SIZE=8000
 xVMA_RX_POLL_ON_TX_TCP=1"
 
 QUEUE_DEPTH=128
-IO_SIZE=4096
+IO_SIZES="4096 8192 16384 32768 65536 131072"
 RW=randread
 #NVME_PERF_EXTRA_OPTS="-T vma -T nvme"
 #BDEV_PERF_EXTRA_OPTS="-L vma -L nvme"
@@ -89,7 +89,7 @@ function wait_nvmeperf() {
 
 function report_nvmeperf() {
     local OUT=$(grep "Total" perf.log | awk '{ print $3 " | " $4 " | " $5 " | " }')
-    echo -n " $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+    echo "| $TEST | $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
 }
 
 function run_bdevperf() {
@@ -109,7 +109,7 @@ function run_bdevperf() {
     rpc_perf bdev_nvme_attach_controller -b Nvme0 -t tcp -f ipv4 -a $ADDR -s $PORT \
 	     -n nqn.2016-06.io.spdk:cnode1
     sudo PYTHONPATH="$PYTHONPATH:$PWD/scripts" ./test/bdev/bdevperf/bdevperf.py \
-	 -s /var/tmp/bdevperf.sock perform_tests 2>&1 | tee -a perf.log &
+	 -s /var/tmp/bdevperf.sock -t 3600 perform_tests 2>&1 | tee -a perf.log &
     RPC_TASK_PID=$!
     echo "RPC task PID is $RPC_TASK_PID" 2>&1 | tee -a perf.log
 }
@@ -125,87 +125,69 @@ function wait_bdevperf() {
 
 function report_bdevperf() {
     local OUT=$(grep "Total" perf.log | tail -1 | awk '{ print $4 " | " $6 " | " }')
-    echo -n " $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+    echo "| $TEST | $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+}
+
+function basic_test_nvme() {
+    start_tgt
+    config
+    for IO_SIZE in $IO_SIZES; do
+	run_nvmeperf # > /dev/null 2>&1
+	wait_nvmeperf
+	report_nvmeperf
+    done
+    stop_tgt
+}
+
+function basic_test_bdev() {
+    start_tgt
+    config
+    for IO_SIZE in $IO_SIZES; do
+	run_bdevperf # > /dev/null 2>&1
+	wait_bdevperf
+	report_bdevperf
+    done
+    stop_tgt
 }
 
 # Test with spdk_nvme_perf VMA non zcopy
 function test1() {
-    start_tgt
-    config
-    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
-    wait_nvmeperf
-    report_nvmeperf
-    stop_tgt
+    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
 # Test with bdevperf VMA non zcopy
 function test2() {
-    start_tgt
-    config
-    SOCK_IMPL=vma run_bdevperf
-    wait_bdevperf
-    report_bdevperf
-    stop_tgt
+    SOCK_IMPL=vma basic_test_bdev
 }
 
 # Test with spdk_nvme_perf VMA zcopy
 function test3() {
-    start_tgt
-    config
-    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-Z vma -P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
-    wait_nvmeperf
-    report_nvmeperf
-    stop_tgt
+    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
 # Test with bdevperf VMA zcopy
 function test4() {
-    start_tgt
-    config
-    SOCK_IMPL=vma BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" run_bdevperf
-    wait_bdevperf
-    report_bdevperf
-    stop_tgt
+    SOCK_IMPL=vma BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" basic_test_bdev
 }
 
 # Test with spdk_nvme_perf POSIX-VMA non zcopy
 function test5() {
-    start_tgt
-    config
-    SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-z posix -P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
-    wait_nvmeperf
-    report_nvmeperf
-    stop_tgt
+    SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-z posix -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
 # Test with bdevperf POSIX-VMA non zcopy
 function test6() {
-    start_tgt
-    config
-    SOCK_IMPL=posix run_bdevperf
-    wait_bdevperf
-    report_bdevperf
-    stop_tgt
+    SOCK_IMPL=posix basic_test_bdev
 }
 
 # Test with spdk_nvme_perf POSIX-Kernel non zcopy
 function test7() {
-    start_tgt
-    config
-    LIBVMA= SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" run_nvmeperf
-    wait_nvmeperf
-    report_nvmeperf
-    stop_tgt
+    LIBVMA= SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
 # Test with bdevperf POSIX-Kernel non zcopy
 function test8() {
-    start_tgt
-    config
-    LIBVMA= SOCK_IMPL=posix run_bdevperf
-    wait_bdevperf
-    report_bdevperf
-    stop_tgt
+    LIBVMA= SOCK_IMPL=posix basic_test_bdev
 }
 
 if [ -n "$1" ]; then
@@ -225,12 +207,11 @@ rm -rf rpc.log rpc_tgt.log perf.log tgt.log report.log
 echo "| Test | Perf CPU | TGT CPU | IO size | QD | IOPS | BW | Lat |" >> report.log
 echo "Running tests: $tests"
 for t in $tests; do
-    echo -n "| $t |" >> report.log
+    TEST="$t"
     echo "===== Start $t ====="
     $t | tee test.log
     echo "===== End $t ====="
     echo ""
-    echo "" >> report.log
 done
 
 cat report.log
