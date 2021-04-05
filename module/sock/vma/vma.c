@@ -810,6 +810,20 @@ next_packet(struct vma_packet_t *packet)
 				       packet->sz_iov * sizeof(struct iovec));
 }
 
+#ifdef DEBUG
+static void
+dump_packet(struct vma_sock_packet *packet)
+{
+	size_t i;
+
+	for (i = 0; i < packet->vma_packet->sz_iov; ++i) {
+		SPDK_DEBUGLOG(vma, "Packet %p: id %p, iov[%lu].len %lu\n",
+			      packet, packet->vma_packet_id, i,
+			      packet->vma_packet->iov[i].iov_len);
+	}
+}
+#endif
+
 static ssize_t
 vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 {
@@ -828,7 +842,14 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 
 		return ret;
 	} else if (ret == 0) {
-		return 0;
+		SPDK_DEBUGLOG(vma, "recvfrom_zcopy failed, ret %d\n", ret);
+		/* @todo: temporary workaround.
+		 * Normally, 0 returned by recv function means that socket was disconnected.
+		 * Looks like VMA does not follow this rule for zero copy receive.
+		 * Need to check with VMA team
+		 */
+		errno = EAGAIN;
+		return -1;
 	}
 
 	if (!(flags & MSG_VMA_ZCOPY)) {
@@ -844,6 +865,27 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 	vma_packet = &vma_packets->pkts[0];
 	for (i = 0; i < vma_packets->n_packet_num; ++i) {
 		struct vma_sock_packet *packet = STAILQ_FIRST(&sock->free_packets);
+		size_t j, len = 0;
+
+		/* @todo: Filter out zero length packets.
+		 * Check with VMA team why it happens.
+		 */
+		for (j = 0; j < vma_packet->sz_iov; ++j) {
+			len += vma_packet->iov[j].iov_len;
+		}
+
+		if (len == 0) {
+			int rc;
+
+			SPDK_DEBUGLOG(vma, "Dropping zero length packet: id %p\n", vma_packet->packet_id);
+			rc = g_vma_api->free_packets(sock->fd, vma_packet, 1);
+			if (rc < 0) {
+				SPDK_ERRLOG("Free VMA packets failed, ret %d, errno %d\n",
+					    rc, errno);
+			}
+			vma_packet = next_packet(vma_packet);
+			continue;
+		}
 
 		/* @todo: handle lack of free packets */
 		assert(packet);
@@ -865,11 +907,8 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 		packet->refs = 1;
 		STAILQ_INSERT_TAIL(&sock->received_packets, packet, link);
 #ifdef DEBUG
-		size_t j;
-		for (j = 0; j < vma_packet->sz_iov; ++j) {
-			SPDK_DEBUGLOG(vma, "Sock %d: packet %lu, iov[%lu].len %lu\n",
-				      sock->fd, i, j, vma_packet->iov[j].iov_len);
-		}
+		SPDK_DEBUGLOG(vma, "Sock %d: packet %lu\n", sock->fd, i);
+		dump_packet(packet);
 #endif
 		vma_packet = next_packet(vma_packet);
 	}
@@ -940,10 +979,24 @@ packets_next_chunk(struct spdk_vma_sock *sock,
 		   struct vma_sock_packet **packet,
 		   size_t max_len)
 {
-	if (!STAILQ_EMPTY(&sock->received_packets)) {
-		struct vma_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
+	struct vma_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
+
+	while (cur_packet) {
 		struct iovec *iov = &cur_packet->vma_packet->iov[sock->cur_iov_idx];
 		size_t len = iov->iov_len - sock->cur_offset;
+
+		if (len == 0) {
+			/* VMA may return zero length iov. Skip to next in this case */
+			sock->cur_offset = 0;
+			sock->cur_iov_idx++;
+			assert(sock->cur_iov_idx <= cur_packet->vma_packet->sz_iov);
+			if (sock->cur_iov_idx >= cur_packet->vma_packet->sz_iov) {
+				/* Next packet */
+				sock->cur_iov_idx = 0;
+				cur_packet = STAILQ_NEXT(cur_packet, link);
+			}
+			continue;
+		}
 
 		assert(max_len > 0);
 		assert(len > 0);

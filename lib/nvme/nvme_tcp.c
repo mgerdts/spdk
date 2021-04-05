@@ -1716,6 +1716,10 @@ nvme_tcp_read_payload_data_zcopy(struct spdk_sock *sock, struct nvme_tcp_pdu *pd
 			sock_buf = tcp_req->sock_buf;
 			while (sock_buf) {
 				assert(i < SPDK_COUNTOF(tcp_req->zcopy_iov));
+				if (i >= SPDK_COUNTOF(tcp_req->zcopy_iov)) {
+					SPDK_ERRLOG("Not enough zcopy iovs: %lu\n", i);
+					break;
+				}
 				tcp_req->zcopy_iov[i++] = sock_buf->iov;
 				sock_buf = sock_buf->next;
 			}
