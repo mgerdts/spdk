@@ -612,9 +612,7 @@ spdk_nvme_ns_cmd_comparev_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpai
 }
 
 int
-spdk_nvme_ns_cmd_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
-			   uint64_t lba, uint32_t lba_count,
-			   spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 			   bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io)
 {
 	assert(nvme_zcopy_io != NULL);
@@ -628,12 +626,18 @@ spdk_nvme_ns_cmd_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpai
 					   zcopy);
 		struct spdk_nvme_cpl cpl;
 		int rc;
+		struct spdk_nvme_qpair *qpair;
+
+		assert(req != NULL);
+
+		qpair = req->qpair;
 
 		/* For Zcopy read, just need to free zcopy buffer here */
 		rc = nvme_transport_qpair_free_request(qpair, req);
 		if (rc != 0) {
 			SPDK_ERRLOG("Failed to free request %p for zcopy on qpair %d\n",
 				    req, qpair->id);
+			return rc;
 		}
 
 		cpl.status.sc = SPDK_NVME_SC_SUCCESS;

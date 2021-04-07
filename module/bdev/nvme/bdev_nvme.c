@@ -3039,8 +3039,7 @@ bdev_nvme_readv_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair
 
 	assert(commit == false);
 
-	rc = spdk_nvme_ns_cmd_zcopy_end(ns, qpair, 0, 0,
-					bdev_nvme_readv_zcopy_end_done,
+	rc = spdk_nvme_ns_cmd_zcopy_end(bdev_nvme_readv_zcopy_end_done,
 					bio, commit, bio->zcopy_io);
 
 	if (rc != 0) {

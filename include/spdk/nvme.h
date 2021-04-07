@@ -3068,20 +3068,15 @@ int spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair
 				 uint32_t io_flags, bool populate);
 
 /**
- * \brief Submits an I/O to the specified NVMe namespace and finalize zcopy IO operation.
+ * \brief Finalize zcopy IO operation started with spdk_nvme_ns_cmd_zcopy_start.
  *
- * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
- * The user must ensure that only one thread submits I/O on a given qpair at any
- * given time.This function finalizes zero copy IO operation previously started with
+ * This function finalizes zero copy IO operation previously started with
  * spdk_nvme_ns_cmd_zcopy_start() function. When commit is true this function will
  * write data from buffers to disk. When commit is false it will just release data
  * buffers and other resources. After call to this function data buffers can not be
- * accessed anymore.
+ * accessed anymore. The used namespace and qpair have already been stored in
+ * nvme_zcopy_io.
  *
- * \param ns NVMe namespace to submit the read I/O.
- * \param qpair I/O queue pair to submit the request.
- * \param lba Starting LBA to read the data.
- * \param lba_count Length (in sectors) for the read operation.
  * \param cb_fn Callback function to invoke when the I/O is completed.
  * \param cb_arg Argument to pass to the callback function.
  * \param commit Whether the buffer should be committed back to disk.
@@ -3095,9 +3090,7 @@ int spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair
  * -EFAULT: Invalid address was specified as part of payload.  cb_fn is also called
  *          with error status including dnr=1 in this case.
  */
-int spdk_nvme_ns_cmd_zcopy_end(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
-			       uint64_t lba, uint32_t lba_count,
-			       spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+int spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 			       bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io);
 
 /**
