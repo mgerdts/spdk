@@ -162,7 +162,7 @@ function test2() {
 
 # Test with spdk_nvme_perf VMA zcopy
 function test3() {
-    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-n-Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
 # Test with bdevperf VMA zcopy
