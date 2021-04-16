@@ -804,10 +804,6 @@ nvme_read_zcopy_end_done(void *ctx,
 			 const struct spdk_nvme_cpl *cpl,
 			 struct spdk_nvme_zcopy_io *zcopy_io)
 {
-	struct perf_task *task = ctx;
-	task->iovs = NULL;
-	task->iovcnt = 0;
-
 	io_complete(ctx,cpl);
 }
 
@@ -905,7 +901,8 @@ nvme_submit_io(struct perf_task *task, struct ns_worker_ctx *ns_ctx,
 			return spdk_nvme_ns_cmd_zcopy_start(entry->u.nvme.ns, ns_ctx->u.nvme.qpair[qp_num],
 							    lba, entry->io_size_blocks,
 							    nvme_read_zcopy_start_done,
-							    task, entry->io_flags, true);
+							    task, entry->io_flags, true,
+							    task->dif_ctx.apptag_mask, task->dif_ctx.app_tag);
 
 		} else if (task->iovcnt == 1) {
 			return spdk_nvme_ns_cmd_read_with_md(entry->u.nvme.ns, ns_ctx->u.nvme.qpair[qp_num],
@@ -1483,6 +1480,11 @@ task_complete(struct perf_task *task)
 	if (spdk_unlikely(entry->md_size > 0)) {
 		/* add application level verification for end-to-end data protection */
 		entry->fn_table->verify_io(task, entry);
+	}
+
+	if (g_zcopy) {
+		task->iovs = NULL;
+		task->iovcnt = 0;
 	}
 
 	/*

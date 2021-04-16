@@ -888,7 +888,6 @@ _bdev_nvme_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_
 	case SPDK_BDEV_IO_TYPE_ZCOPY:
 		if (bdev_io->u.bdev.zcopy.populate) {
 			if (bdev_io->u.bdev.zcopy.start) {
-				/* TODO: md_buf will be handled later */
 				return bdev_nvme_readv_zcopy_start(nvme_ns->ns,
 								   qpair,
 								   nbdev_io);
@@ -3063,7 +3062,8 @@ bdev_nvme_readv_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpa
 
 	rc = spdk_nvme_ns_cmd_zcopy_start(ns, qpair, lba, lba_count,
 					  bdev_nvme_readv_zcopy_start_done, bio,
-					  flags, bdev_io->u.bdev.zcopy.populate);
+					  flags, bdev_io->u.bdev.zcopy.populate,
+					  0, 0);
 
 	if (rc != 0 && rc != -ENOMEM) {
 		SPDK_ERRLOG("readv failed: rc = %d\n", rc);

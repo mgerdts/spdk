@@ -648,11 +648,13 @@ spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 	}
 }
 
+/* TODO: Add support for MD as a separate buffer */
 int
 spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 			     uint64_t lba, uint32_t lba_count,
 			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
-			     uint32_t io_flags, bool populate)
+			     uint32_t io_flags, bool populate,
+			     uint16_t apptag_mask, uint16_t apptag)
 {
 	struct nvme_request *req;
 	struct nvme_payload payload;
@@ -664,7 +666,8 @@ spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qp
 
 	if (populate) {
 		req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, NULL,
-				      cb_arg, SPDK_NVME_OPC_READ, io_flags, 0, 0, false, &rc);
+				      cb_arg, SPDK_NVME_OPC_READ, io_flags,
+				      apptag_mask, apptag, false, &rc);
 		if (req != NULL) {
 			req->zcopy.zcopy_cb_fn = cb_fn;
 			req->zcopy.populate = populate;

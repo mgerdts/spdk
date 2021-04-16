@@ -752,7 +752,8 @@ int
 spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 			     uint64_t lba, uint32_t lba_count,
 			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
-			     uint32_t io_flags, bool populate)
+			     uint32_t io_flags, bool populate,
+			     uint16_t apptag_mask, uint16_t apptag)
 {
 	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_READ, NULL, cb_arg);
 }
