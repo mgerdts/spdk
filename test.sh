@@ -35,6 +35,8 @@ RW=randread
 #BDEV_PERF_EXTRA_OPTS="-L vma -L nvme"
 #SSH_EXTRA_OPTS="-t"
 
+BDEV_NULL_OPTS="8192 512"
+
 function rpc_tgt() {
     local SSH=""
     if [ -n "$TGT_HOST" ]; then
@@ -65,7 +67,7 @@ function config() {
     rpc_tgt nvmf_create_transport -t tcp -q 512
     rpc_tgt nvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode1
     rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $TGT_PORT nqn.2016-06.io.spdk:cnode1
-    rpc_tgt bdev_null_create Null0 8192 512
+    rpc_tgt bdev_null_create Null0 $BDEV_NULL_OPTS
     rpc_tgt nvmf_subsystem_add_ns -n 1 nqn.2016-06.io.spdk:cnode1 Null0
     rpc_tgt save_config
 }
@@ -106,7 +108,7 @@ function run_bdevperf() {
     rpc_perf sock_set_default_impl -i $SOCK_IMPL
     rpc_perf sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send --disable-recv-pipe
     rpc_perf framework_start_init
-    rpc_perf bdev_nvme_attach_controller -b Nvme0 -t tcp -f ipv4 -a $ADDR -s $PORT \
+    rpc_perf bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t tcp -f ipv4 -a $ADDR -s $PORT \
 	     -n nqn.2016-06.io.spdk:cnode1
     sudo PYTHONPATH="$PYTHONPATH:$PWD/scripts" ./test/bdev/bdevperf/bdevperf.py \
 	 -s /var/tmp/bdevperf.sock -t 3600 perform_tests 2>&1 | tee -a perf.log &
@@ -190,6 +192,27 @@ function test8() {
     LIBVMA= SOCK_IMPL=posix basic_test_bdev
 }
 
+# Test with PI + spdk_nvme_perf VMA non zcopy + PI
+function test9() {
+    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+}
+
+# Test with bdevperf VMA non zcopy + PI
+function test10() {
+    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" basic_test_bdev
+    
+}
+
+# Test with spdk_nvme_perf VMA zcopy + PI
+function test11() {
+    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+}
+
+# Test with bdevperf VMA zcopy + PI
+function test12() {
+    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" basic_test_bdev
+}
+
 if [ -n "$1" ]; then
     tests="$@"
 else
@@ -200,7 +223,11 @@ else
 	   test5 \
 	   test6 \
 	   test7 \
-	   test8"
+	   test8 \
+	   test9 \
+	   test10 \
+	   test11 \
+	   test12"
 fi
 
 rm -rf rpc.log rpc_tgt.log perf.log tgt.log report.log
