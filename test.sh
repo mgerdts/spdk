@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-TGT_MASK=0x0F
-PERF_MASK=0xF0
-PERF_TIME=10
+TGT_MASK=${TGT_MASK:-0x0F}
+PERF_MASK=${PERF_MASK:-0xF0}
+PERF_TIME=${PERF_TIME:-10}
 
 # Looks like it is not possible to run initiator with VMA and target without on the same host.
 # So, we run it on a different host
-TGT_HOST=spdk04.swx.labs.mlnx
-TGT_ADDR=1.1.4.1
-TGT_PORT=4420
+TGT_HOST=${TGT_HOST:-spdk04.swx.labs.mlnx}
+TGT_ADDR=${TGT_ADDR:-1.1.4.1}
+TGT_PORT=${TGT_PORT:-4420}
 
 # It is expected that SPDK was configured with --prefix=$PWD/install-$HOSTNAME
 BIN_PATH=$PWD/install-$HOSTNAME/bin
@@ -19,7 +19,7 @@ fi
 
 # It is expected that VMA was configured with --prefix=$PWD/install-$HOSTNAME
 # Just comment the line if you want to run without VMA
-LIBVMA=$PWD/../libvma-zcopy-fix/install-$HOSTNAME/lib/libvma.so
+LIBVMA=${LIBVMA:-$PWD/../libvma-zcopy-fix/install-$HOSTNAME/lib/libvma.so}
 VMA_OPTS="
 xVMA_INTERNAL_THREAD_AFFINITY=0x80
 VMA_RING_ALLOCATION_LOGIC_TX=30
@@ -28,12 +28,12 @@ xVMA_TSO=0
 xVMA_TX_BUF_SIZE=8000
 xVMA_RX_POLL_ON_TX_TCP=1"
 
-QUEUE_DEPTH=128
-IO_SIZES="4096 8192 16384 32768 65536 131072"
-RW=randread
+QUEUE_DEPTH=${QUEUE_DEPTH:-128}
+IO_SIZES=${IO_SIZES:-4096 8192 16384 32768 65536 131072}
+RW=${RW:-randread}
 #NVME_PERF_EXTRA_OPTS="-T vma -T nvme"
 #BDEV_PERF_EXTRA_OPTS="-L vma -L nvme"
-#SSH_EXTRA_OPTS="-t"
+SSH_EXTRA_OPTS=${SSH_EXTRA_OPTS:-}
 
 BDEV_NULL_OPTS="8192 512"
 
