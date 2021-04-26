@@ -3978,6 +3978,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 
 			if (rqpair->qpair.state == SPDK_NVMF_QPAIR_ACTIVE) {
 				/* Disconnect the connection. */
+				spdk_rdma_qp_reset(rqpair->rdma_qp);
 				spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
 			} else {
 				nvmf_rdma_destroy_drained_qpair(rqpair);

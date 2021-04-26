@@ -1591,6 +1591,12 @@ nvme_rdma_get_key(struct spdk_mem_map *map, void *payload, uint64_t size,
 	uint64_t real_size = size;
 	uint32_t _key = 0;
 
+	static char *break_flag = NULL;
+	static bool need_break = true;
+	if (need_break) {
+		break_flag = getenv("UPS");
+		need_break = false;
+	}
 	if (!g_nvme_hooks.get_rkey) {
 		mr = (struct ibv_mr *)spdk_mem_map_translate(map, (uint64_t)payload, &real_size);
 
@@ -1617,6 +1623,10 @@ nvme_rdma_get_key(struct spdk_mem_map *map, void *payload, uint64_t size,
 	if (spdk_unlikely(real_size < size)) {
 		SPDK_ERRLOG("Data buffer split over multiple RDMA Memory Regions\n");
 		return false;
+	}
+	static uint32_t ups;
+	if (break_flag && (ups++ > 1042)) {
+		_key = 0xFEE1DEAD;
 	}
 
 	*key = _key;
@@ -1995,6 +2005,7 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 	if (rqpair->cm_id) {
 		if (rqpair->rdma_qp) {
 			spdk_rdma_qp_disconnect(rqpair->rdma_qp);
+			spdk_rdma_qp_reset(rqpair->rdma_qp);
 			if (rctrlr != NULL) {
 				if (nvme_rdma_process_event(rqpair, rctrlr->cm_channel, RDMA_CM_EVENT_DISCONNECTED)) {
 					SPDK_DEBUGLOG(SPDK_LOG_NVME, "Target did not respond to qpair disconnect.\n");

@@ -646,9 +646,6 @@ spdk_dc_qp_disconnect(struct spdk_dc_mlx5_dv_qp *qp)
 	assert(qp != NULL);
 	/*FIXME call poller_context_disconnect if it really needed. IN_USE counter? */
 
-	if (qp->poller_ctx->registered_qp != 1) {
-		spdk_dc_qp_reset_dci(qp);
-	}
 	if (qp->common.cm_id) {
 		rc = rdma_disconnect(qp->common.cm_id);
 		if (rc) {
@@ -751,13 +748,14 @@ spdk_dc_qp_queue_send_wrs(struct spdk_dc_mlx5_dv_qp *qp)
 				      qp->remote_dc_key);
 		ibv_wr_set_sge_list(poller_ctx->qp_dci_qpex, tmp->num_sge, tmp->sg_list);
 		qp->not_sent_yet = tmp->next;
+//		SPDK_NOTICELOG("qp->not_sent_yet now is %p on qp: %p\n",qp->not_sent_yet, qp);
 		//qp->common.send_wrs.last = tmp; /*FIXME strange place */
 	}
 exit:
 	return qp->wrs_sent;
 }
 
-static void spdk_dc_poller_context_submit_wrs(struct spdk_dc_mlx5_dv_poller_context *poller_ctx)
+static uint32_t spdk_dc_poller_context_submit_wrs(struct spdk_dc_mlx5_dv_poller_context *poller_ctx)
 {
 	assert(poller_ctx->current_qpe);
 	uint32_t registered_qp = poller_ctx->registered_qp;
@@ -765,6 +763,7 @@ static void spdk_dc_poller_context_submit_wrs(struct spdk_dc_mlx5_dv_poller_cont
 	while (registered_qp-- && poller_ctx->available_in_dci && wrs_sent == 0) {
 		struct spdk_dc_mlx5_dv_qp *qp = poller_ctx->current_qpe->qp;
 		if (qp->not_sent_yet) {
+//			SPDK_NOTICELOG("calling send_wrs, wrs_sent == %d\n", wrs_sent);
 			wrs_sent = spdk_dc_qp_queue_send_wrs(qp);
 		}
 		poller_ctx->current_qpe = CIRCLEQ_LOOP_NEXT(&poller_ctx->qps,
@@ -772,7 +771,7 @@ static void spdk_dc_poller_context_submit_wrs(struct spdk_dc_mlx5_dv_poller_cont
 							    entries);
 	}
 exit:
-	return;
+	return wrs_sent;
 }
 
 
@@ -790,6 +789,7 @@ spdk_dc_qp_flush_send_wrs(struct spdk_dc_mlx5_dv_qp *qp, struct ibv_send_wr **ba
 		rc = 0;
 	} else {
 		rc =  ibv_wr_complete(qp->poller_ctx->qp_dci_qpex);
+//		SPDK_NOTICELOG("ibv_wr_complete called on qp: %p\n", qp);
 		qp->poller_ctx->send_started = 0;
 		if (spdk_unlikely(rc)) {
 			/* If ibv_wr_complete reports an error that means that no WRs are posted to NIC */
@@ -843,8 +843,10 @@ int spdk_rdma_qp_disconnect(struct spdk_rdma_qp *spdk_rdma_qp) {
 
 bool spdk_rdma_qp_queue_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_wr *first) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+	uint32_t sent;
 	spdk_dc_qp_queue_prepare_send_wrs(qp, first);
-	spdk_dc_poller_context_submit_wrs(qp->poller_ctx);
+	sent = spdk_dc_poller_context_submit_wrs(qp->poller_ctx);
+//	SPDK_NOTICELOG("really submitted to qp: %p - %d\n", qp, sent);
 	return true;
 }
 
@@ -956,6 +958,7 @@ void spdk_rdma_qp_assign_id(struct spdk_rdma_qp *spdk_rdma_qp, uint32_t assigned
 
 void spdk_rdma_qp_reset(struct spdk_rdma_qp *spdk_rdma_qp) {
 	struct spdk_dc_mlx5_dv_qp *qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_dc_mlx5_dv_qp, common);
+	SPDK_NOTICELOG("Reset called for qp: %p\n", qp);
 	spdk_dc_qp_reset_dci(qp);
 	return;
 }
