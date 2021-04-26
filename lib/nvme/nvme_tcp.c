@@ -174,6 +174,14 @@ static int64_t nvme_tcp_poll_group_process_completions(struct spdk_nvme_transpor
 static void nvme_tcp_icresp_handle(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu);
 static struct nvme_tcp_req *get_nvme_active_req_by_cid(struct nvme_tcp_qpair *tqpair, uint32_t cid);
 
+static inline bool
+nvme_tcp_pdu_is_zcopy(struct nvme_tcp_pdu *pdu)
+{
+	struct nvme_tcp_req *tcp_req = pdu->req;
+	return (tcp_req &&
+		nvme_payload_type(&tcp_req->req->payload) == NVME_PAYLOAD_TYPE_ZCOPY);
+}
+
 static inline struct nvme_tcp_qpair *
 nvme_tcp_qpair(struct spdk_nvme_qpair *qpair)
 {
@@ -458,15 +466,22 @@ pdu_data_crc32_compute(struct nvme_tcp_pdu *pdu)
 	if (pdu->data_len > 0 && g_nvme_tcp_ddgst[pdu->hdr.common.pdu_type] &&
 	    tqpair->flags.host_ddgst_enable) {
 		/* Only suport this limitated case for the first step */
+		/* @todo: add support for crc32 accelerator in zcopy flow */
 		if (tgroup != NULL && tgroup->group.group->accel_fn_table.submit_accel_crc32c &&
-		    spdk_likely(!pdu->dif_ctx && (pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0))) {
+		    spdk_likely(!pdu->dif_ctx && (pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0)) &&
+		    !nvme_tcp_pdu_is_zcopy(pdu)) {
 			tgroup->group.group->accel_fn_table.submit_accel_crc32c(tgroup->group.group->ctx,
 					&pdu->data_digest_crc32, pdu->data_iov,
 					pdu->data_iovcnt, 0, data_crc32_accel_done, pdu);
 			return;
 		}
 
-		crc32c = nvme_tcp_pdu_calc_data_digest(pdu);
+		if (nvme_tcp_pdu_is_zcopy(pdu)) {
+			struct nvme_tcp_req *tcp_req = pdu->req;
+			crc32c = nvme_tcp_pdu_calc_data_digest(pdu, tcp_req->zcopy_iov, tcp_req->iovcnt);
+		} else {
+			crc32c = nvme_tcp_pdu_calc_data_digest(pdu, pdu->data_iov, pdu->data_iovcnt);
+		}
 		MAKE_DIGEST_WORD(pdu->data_digest, crc32c);
 	}
 
@@ -737,7 +752,7 @@ nvme_tcp_qpair_prepare_pdu(struct nvme_tcp_qpair *tqpair,
 	/* Data Digest */
 	if (pdu->data_len > 0 && g_nvme_tcp_ddgst[pdu->hdr.common.pdu_type] &&
 	    tqpair->flags.host_ddgst_enable) {
-		crc32c = nvme_tcp_pdu_calc_data_digest(pdu);
+		crc32c = nvme_tcp_pdu_calc_data_digest(pdu, pdu->data_iov, pdu->data_iovcnt);
 		MAKE_DIGEST_WORD(pdu->data_digest, crc32c);
 	}
 
@@ -1225,7 +1240,13 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 
 	/* check data digest if need */
 	if (pdu->ddgst_enable) {
-		crc32c = nvme_tcp_pdu_calc_data_digest(pdu);
+		if (nvme_tcp_pdu_is_zcopy(pdu)) {
+			struct nvme_tcp_req *tcp_req = pdu->req;
+			crc32c = nvme_tcp_pdu_calc_data_digest(pdu, tcp_req->zcopy_iov, tcp_req->iovcnt);
+		} else {
+			crc32c = nvme_tcp_pdu_calc_data_digest(pdu, pdu->data_iov, pdu->data_iovcnt);
+		}
+
 		rc = MATCH_DIGEST_WORD(pdu->data_digest, crc32c);
 		if (rc == 0) {
 			SPDK_ERRLOG("data digest error on tqpair=(%p) with pdu=%p\n", tqpair, pdu);
@@ -1686,53 +1707,83 @@ nvme_tcp_pdu_psh_handle(struct nvme_tcp_qpair *tqpair, uint32_t *reaped)
 }
 
 static int
+nvme_tcp_read_digest(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu, uint32_t len)
+{
+	struct iovec iov;
+
+	assert(len <= SPDK_NVME_TCP_DIGEST_LEN);
+
+	iov.iov_base = pdu->data_digest + SPDK_NVME_TCP_DIGEST_LEN - len;
+	iov.iov_len = len;
+
+	return nvme_tcp_readv_data(sock, &iov, 1);
+}
+
+static int
 nvme_tcp_read_payload_data_zcopy(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
 {
 	struct nvme_tcp_req *tcp_req = pdu->req;
 	struct spdk_sock_buf *sock_buf;
-	size_t len;
-	int ret;
+	int ret = 0;
 
-	len = pdu->data_len - pdu->rw_offset;
-	ret = spdk_sock_recv_zcopy(sock, len, &sock_buf);
-	if (ret > 0) {
+	if (pdu->data_len > pdu->rw_offset) {
+		size_t i = 0;
+		size_t len = pdu->data_len - pdu->rw_offset;
+
+		ret = spdk_sock_recv_zcopy(sock, len, &sock_buf);
+		if (ret <= 0) {
+			goto fail;
+		}
+
 		SPDK_DEBUGLOG(nvme, "Got %d bytes from socket layer\n", ret);
 
 		if (tcp_req->sock_buf) {
 			struct spdk_sock_buf *cur_buf = tcp_req->sock_buf;
-			while (cur_buf->next) cur_buf = cur_buf->next;
+			while (cur_buf->next) { cur_buf = cur_buf->next; }
 			cur_buf->next = sock_buf;
 		} else {
 			tcp_req->sock_buf = sock_buf;
 		}
 
-		if ((size_t)ret == len) {
-			/* We got all the data. Setup iovs */
-			/* @todo: test with data digest and metadata */
-			/* @todo: we use tcp_req.zcopy_iov to store iovs. It is limited in size.
-			 * Check if there is a better way */
-			size_t i = 0;
-
-			sock_buf = tcp_req->sock_buf;
-			while (sock_buf) {
-				assert(i < SPDK_COUNTOF(tcp_req->zcopy_iov));
-				if (i >= SPDK_COUNTOF(tcp_req->zcopy_iov)) {
-					SPDK_ERRLOG("Not enough zcopy iovs: %lu\n", i);
-					break;
-				}
-				tcp_req->zcopy_iov[i++] = sock_buf->iov;
-				sock_buf = sock_buf->next;
-			}
-
-			tcp_req->iovcnt = i;
-			tcp_req->req->zcopy.iovs = tcp_req->zcopy_iov;
-			tcp_req->req->zcopy.iovcnt = tcp_req->iovcnt;
-			SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->iovcnt);
+		if ((size_t)ret != len) {
+			/* Part of data is not received, so return directly */
+			return ret;
 		}
 
-		return ret;
+		/* We got all the data. Setup iovs */
+		/* @todo: we use tcp_req.zcopy_iov to store iovs. It is limited in size.
+		 * Check if there is a better way */
+
+		sock_buf = tcp_req->sock_buf;
+		while (sock_buf) {
+			assert(i < SPDK_COUNTOF(tcp_req->zcopy_iov));
+			if (i >= SPDK_COUNTOF(tcp_req->zcopy_iov)) {
+				SPDK_ERRLOG("Not enough zcopy iovs: %lu\n", i);
+				break;
+			}
+			tcp_req->zcopy_iov[i++] = sock_buf->iov;
+			sock_buf = sock_buf->next;
+		}
+
+		tcp_req->iovcnt = i;
+		tcp_req->req->zcopy.iovs = tcp_req->zcopy_iov;
+		tcp_req->req->zcopy.iovcnt = tcp_req->iovcnt;
+		SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->iovcnt);
 	}
 
+	if (pdu->ddgst_enable) {
+		int ret_dgst = nvme_tcp_read_digest(sock, pdu, SPDK_NVME_TCP_DIGEST_LEN +
+						    pdu->data_len - pdu->rw_offset - ret);
+		if (ret_dgst < 0) {
+			ret = ret_dgst;
+			goto fail;
+		}
+
+		ret += ret_dgst;
+	}
+	return ret;
+
+fail:
 	if (ret < 0) {
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
 			return 0;
@@ -1754,7 +1805,6 @@ nvme_tcp_read_pdu(struct nvme_tcp_qpair *tqpair, uint32_t *reaped)
 {
 	int rc = 0;
 	struct nvme_tcp_pdu *pdu;
-	struct nvme_tcp_req *tcp_req;
 	uint32_t data_len;
 	enum nvme_tcp_pdu_recv_state prev_state;
 
@@ -1822,9 +1872,7 @@ nvme_tcp_read_pdu(struct nvme_tcp_qpair *tqpair, uint32_t *reaped)
 				pdu->ddgst_enable = true;
 			}
 
-			tcp_req = pdu->req;
-			if (tcp_req &&
-			    nvme_payload_type(&tcp_req->req->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
+			if (nvme_tcp_pdu_is_zcopy(pdu)) {
 				rc = nvme_tcp_read_payload_data_zcopy(tqpair->sock, pdu);
 			} else {
 				rc = nvme_tcp_read_payload_data(tqpair->sock, pdu);

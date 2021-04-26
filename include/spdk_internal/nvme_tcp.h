@@ -222,7 +222,7 @@ _update_crc32c_iov(struct iovec *iov, int iovcnt, uint32_t crc32c)
 }
 
 static uint32_t
-nvme_tcp_pdu_calc_data_digest(struct nvme_tcp_pdu *pdu)
+nvme_tcp_pdu_calc_data_digest(struct nvme_tcp_pdu *pdu, struct iovec *iovs, int iovcnt)
 {
 	uint32_t crc32c = SPDK_CRC32C_XOR;
 	uint32_t mod;
@@ -230,9 +230,9 @@ nvme_tcp_pdu_calc_data_digest(struct nvme_tcp_pdu *pdu)
 	assert(pdu->data_len != 0);
 
 	if (spdk_likely(!pdu->dif_ctx)) {
-		crc32c = _update_crc32c_iov(pdu->data_iov, pdu->data_iovcnt, crc32c);
+		crc32c = _update_crc32c_iov(iovs, iovcnt, crc32c);
 	} else {
-		spdk_dif_update_crc32c_stream(pdu->data_iov, pdu->data_iovcnt,
+		spdk_dif_update_crc32c_stream(iovs, iovcnt,
 					      0, pdu->data_len, &crc32c, pdu->dif_ctx);
 	}
 
