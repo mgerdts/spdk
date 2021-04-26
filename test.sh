@@ -200,7 +200,6 @@ function test9() {
 # Test with bdevperf VMA non zcopy + PI
 function test10() {
     SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" basic_test_bdev
-    
 }
 
 # Test with spdk_nvme_perf VMA zcopy + PI
@@ -211,6 +210,16 @@ function test11() {
 # Test with bdevperf VMA zcopy + PI
 function test12() {
     SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" basic_test_bdev
+}
+
+# Test with spdk_nvme_perf VMA zcopy + digest
+function test13() {
+    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-H -I -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+}
+
+# Test with spdk_nvme_perf VMA zcopy + PI + digest
+function test14() {
+    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-H -I -e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
 if [ -n "$1" ]; then
@@ -227,7 +236,9 @@ else
 	   test9 \
 	   test10 \
 	   test11 \
-	   test12"
+	   test12 \
+	   test13 \
+	   test14"
 fi
 
 rm -rf rpc.log rpc_tgt.log perf.log tgt.log report.log
