@@ -86,7 +86,7 @@ struct vma_pd_attr {
 
 struct vma_sock_mkey_ctx {
 	union {
-		char buf[CMSG_SPACE(sizeof(struct ex_mem_key) * IOV_BATCH_SIZE)];
+		char buf[CMSG_SPACE(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE)];
 		struct cmsghdr align;
 	} u;
 	struct iovec iovs[IOV_BATCH_SIZE];
@@ -321,41 +321,14 @@ vma_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 
 static inline struct ibv_pd *vma_get_pd(int fd)
 {
-#if 0
-	struct vma_pd_attr pd_attr_ptr = {
-		.pd_ptr = NULL,
-		.vma_pd_oper = VMA_PD_GET
-	};
+	struct vma_pd_attr pd_attr_ptr = {};
 	socklen_t len = sizeof(pd_attr_ptr);
 
 	int err = getsockopt(fd, SOL_SOCKET, SO_VMA_PD, &pd_attr_ptr, &len);
 	if (err < 0) {
 		return NULL;
 	}
-	return pd_attr_ptr.pd_ptr;
-#endif
-
-	struct vma_pd_attr *pd_attr_ptr = NULL;
-	socklen_t len = sizeof(struct vma_pd_attr);
-
-	//pd_attr_ptr.vma_pd_oper = VMA_PD_GET;
-	int err = getsockopt(fd, SOL_SOCKET, SO_VMA_PD, &pd_attr_ptr, &len);
-	if (err < 0) {
-		return NULL;
-	}
-	return pd_attr_ptr->pd_ptr;
-}
-
-static inline int vma_free_pd(int fd, struct ibv_pd *pd)
-{
-
-	struct vma_pd_attr pd_attr_ptr = {
-		.pd_ptr = pd,
-		.vma_pd_oper = VMA_PD_FREE
-	};
-	socklen_t len = sizeof(pd_attr_ptr);
-
-	return setsockopt(fd, SOL_SOCKET, SO_VMA_PD, &pd_attr_ptr, len);
+	return pd_attr_ptr.ib_pd;
 }
 
 static struct spdk_vma_sock *
@@ -731,7 +704,6 @@ vma_sock_close(struct spdk_sock *_sock)
 	 * leak the fd but continue to free the rest of the sock
 	 * memory. */
 	if (sock->pd) {
-		vma_free_pd(sock->fd, sock->pd);
 		if (sock->zcopy) {
 			vma_dump_mkey_ctx_entries(sock);
 		}
@@ -902,7 +874,7 @@ vma_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 }
 
 static inline size_t
-vma_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct ex_mem_key *mkeys)
+vma_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct vma_pd_key *mkeys)
 {
 	size_t iovcnt = 0;
 	int i;
@@ -928,11 +900,10 @@ vma_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct ex_mem_ke
 			assert(req->mkeys);
 			if (mkeys) {
 				mkeys[iovcnt].mkey = req->mkeys[i];
-				mkeys[iovcnt].bit_flags = VMA_TX_ZEROCOPY_NVME;
 			}
 
-//			SPDK_NOTICELOG("req %p, buffer[%zu]: %p, %zu. mkey %u bit %x\n", req, iovcnt, iovs[iovcnt].iov_base, iovs[iovcnt].iov_len,
-//						   mkeys[iovcnt].mkey, mkeys[iovcnt].bit_flags);
+//			SPDK_NOTICELOG("req %p, buffer[%zu]: %p, %zu. mkey %u\n", req, iovcnt, iovs[iovcnt].iov_base, iovs[iovcnt].iov_len,
+//						   mkeys[iovcnt].mkey);
 			iovcnt++;
 
 			offset = 0;
@@ -968,7 +939,7 @@ _sock_flush_ext(struct spdk_sock *sock)
 	int i;
 	ssize_t rc;
 	unsigned int offset;
-//	struct ex_mem_key *mkey_tmp = NULL;
+//	struct vma_pd_key *mkey_tmp = NULL;
 	size_t len;
 
 	/* Can't flush from within a callback or we end up with recursive calls */
@@ -989,16 +960,18 @@ _sock_flush_ext(struct spdk_sock *sock)
 		iovs_to_use = ctx->iovs;
 		msg.msg_control = ctx->u.buf;
 		msg.msg_controllen = sizeof(ctx->u.buf);
-
 		cmsg = CMSG_FIRSTHDR(&msg);
 
-		cmsg->cmsg_len = CMSG_LEN(sizeof(struct ex_mem_key) * IOV_BATCH_SIZE);
-		cmsg->cmsg_level = SOL_SOCKET_TX_NVME;
-		cmsg->cmsg_type = SCM_NVME_TX_ZERO_COPY;
+		cmsg->cmsg_len = CMSG_LEN(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE);
+		cmsg->cmsg_level = SOL_SOCKET;
+		cmsg->cmsg_type = SCM_VMA_PD;
 		flags = MSG_ZEROCOPY;
 
-		iovcnt = vma_sock_prep_reqs(sock, iovs_to_use, (struct ex_mem_key *)CMSG_DATA(cmsg));
-//		mkey_tmp = (struct ex_mem_key *)CMSG_DATA(cmsg);
+		iovcnt = vma_sock_prep_reqs(sock, iovs_to_use, (struct vma_pd_key *)CMSG_DATA(cmsg));
+
+		msg.msg_controllen = CMSG_SPACE(sizeof(struct vma_pd_key) * iovcnt);
+		cmsg->cmsg_len = CMSG_LEN(sizeof(struct vma_pd_key) * iovcnt);
+//		mkey_tmp = (struct vma_pd_key *)CMSG_DATA(cmsg);
 
 	} else {
 		if (vsock->zcopy) {
@@ -1203,28 +1176,6 @@ vma_sock_is_connected(struct spdk_sock *_sock)
 	}
 
 	return true;
-}
-
-static int
-vma_sock_get_placement_id(struct spdk_sock *_sock, int *placement_id)
-{
-	int rc = -1;
-
-	if (!g_spdk_vma_sock_impl_opts.enable_placement_id) {
-		return rc;
-	}
-
-#if defined(SO_INCOMING_NAPI_ID)
-	struct spdk_vma_sock *sock = __vma_sock(_sock);
-	socklen_t salen = sizeof(int);
-
-	rc = getsockopt(sock->fd, SOL_SOCKET, SO_INCOMING_NAPI_ID, placement_id, &salen);
-	if (rc != 0) {
-		SPDK_ERRLOG("getsockopt() failed (errno=%d)\n", errno);
-	}
-
-#endif
-	return rc;
 }
 
 static struct spdk_sock_group_impl *
@@ -1521,7 +1472,6 @@ static struct spdk_net_impl g_vma_net_impl = {
 	.is_ipv6	= vma_sock_is_ipv6,
 	.is_ipv4	= vma_sock_is_ipv4,
 	.is_connected	= vma_sock_is_connected,
-	.get_placement_id	= vma_sock_get_placement_id,
 	.group_impl_create	= vma_sock_group_impl_create,
 	.group_impl_add_sock	= vma_sock_group_impl_add_sock,
 	.group_impl_remove_sock = vma_sock_group_impl_remove_sock,

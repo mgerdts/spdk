@@ -752,6 +752,7 @@ spdk_nvme_ns_cmd_readv_with_md_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qpa
 {
 	struct nvme_request *req;
 	struct nvme_payload payload;
+	int rc;
 
 	if (!_is_io_flags_valid(io_flags)) {
 		return -EINVAL;
@@ -774,16 +775,15 @@ spdk_nvme_ns_cmd_readv_with_md_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qpa
 	}
 
 	req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, cb_fn, cb_arg, SPDK_NVME_OPC_READ,
-			      io_flags, apptag_mask, apptag, true);
+			      io_flags, apptag_mask, apptag, true, &rc);
 	if (req != NULL) {
 		return nvme_qpair_submit_request(qpair, req);
-	} else if (nvme_ns_check_request_length(lba_count,
-						ns->sectors_per_max_io,
-						ns->sectors_per_stripe,
-						qpair->ctrlr->opts.io_queue_requests)) {
-		return -EINVAL;
 	} else {
-		return -ENOMEM;
+		return nvme_ns_map_failure_rc(lba_count,
+									  ns->sectors_per_max_io,
+									  ns->sectors_per_stripe,
+									  qpair->ctrlr->opts.io_queue_requests,
+									  rc);
 	}
 }
 
@@ -1050,6 +1050,7 @@ spdk_nvme_ns_cmd_writev_with_md_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qp
 {
 	struct nvme_request *req;
 	struct nvme_payload payload;
+	int rc;
 
 	if (!_is_io_flags_valid(io_flags)) {
 		return -EINVAL;
@@ -1072,18 +1073,16 @@ spdk_nvme_ns_cmd_writev_with_md_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qp
 	}
 
 	req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, cb_fn, cb_arg, SPDK_NVME_OPC_WRITE,
-			      io_flags, apptag_mask, apptag, true);
+			      io_flags, apptag_mask, apptag, true, &rc);
 	if (req != NULL) {
 		return nvme_qpair_submit_request(qpair, req);
-	} else if (nvme_ns_check_request_length(lba_count,
-						ns->sectors_per_max_io,
-						ns->sectors_per_stripe,
-						qpair->ctrlr->opts.io_queue_requests)) {
-		return -EINVAL;
 	} else {
-		return -ENOMEM;
+		return nvme_ns_map_failure_rc(lba_count,
+									  ns->sectors_per_max_io,
+									  ns->sectors_per_stripe,
+									  qpair->ctrlr->opts.io_queue_requests,
+									  rc);
 	}
-
 }
 
 int

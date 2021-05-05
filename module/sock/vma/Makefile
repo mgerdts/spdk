@@ -34,7 +34,7 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-CFLAGS += -I/hpc/local/work/alexeymar/repo/libvma-pro/_install/include/mellanox
+CFLAGS += -I/hpc/local/work/igori/libvma-pro/build-master/install/include/mellanox/
 
 SO_VER := 3
 SO_MINOR := 0
