@@ -1966,7 +1966,6 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	spdk_sock_get_default_opts(&opts);
 	opts.priority = ctrlr->trid.priority;
 	opts.zcopy = !nvme_qpair_is_admin_queue(qpair);
-	opts.queue_depth = tqpair->num_entries;
 	tqpair->sock = spdk_sock_connect_ext(ctrlr->trid.traddr, port, NULL, &opts);
 	if (!tqpair->sock) {
 		SPDK_ERRLOG("sock connection error of tqpair=%p with addr=%s, port=%ld\n",

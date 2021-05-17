@@ -84,32 +84,14 @@ struct vma_pd_attr {
 };
 #endif
 
-struct vma_sock_mkey_ctx {
-	union {
-		char buf[CMSG_SPACE(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE)];
-		struct cmsghdr align;
-	} u;
-	struct iovec iovs[IOV_BATCH_SIZE];
-	TAILQ_ENTRY(vma_sock_mkey_ctx) link;
-	uint32_t sendmsg_idx;
-	/* for debug */
-	uint16_t internal_idx;
-	uint64_t put_counter;
-	uint64_t get_counter;
-};
-
 struct spdk_vma_sock {
 	struct spdk_sock	base;
 	int			fd;
 	uint32_t		sendmsg_idx;
-	TAILQ_HEAD(, vma_sock_mkey_ctx) free_entries;
-	TAILQ_HEAD(, vma_sock_mkey_ctx) used_entries;
 	struct ibv_pd *pd;
 	bool			pending_recv;
 	bool			zcopy;
 	int			so_priority;
-	uint16_t	num_mkey_ctx_entries;
-	struct vma_sock_mkey_ctx *mkey_entries_buffer;
 	TAILQ_ENTRY(spdk_vma_sock)	link;
 };
 
@@ -129,46 +111,6 @@ static struct spdk_sock_impl_opts g_spdk_vma_sock_impl_opts = {
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
-
-static inline struct vma_sock_mkey_ctx *
-vma_get_mkey_ctx_entry(struct spdk_vma_sock *vsock, uint32_t sendmsg_idx)
-{
-	struct vma_sock_mkey_ctx *entry;
-	entry = TAILQ_FIRST(&vsock->free_entries);
-	if (!entry) {
-		return NULL;
-	}
-	TAILQ_REMOVE(&vsock->free_entries, entry, link);
-	TAILQ_INSERT_TAIL(&vsock->used_entries, entry, link);
-	entry->get_counter++;
-	entry->sendmsg_idx = sendmsg_idx;
-//	fprintf(stderr, "!!get sendmsg_idx %u, internal %u\n", entry->sendmsg_idx, entry->internal_idx);
-
-	return entry;
-}
-
-static inline void
-vma_put_mkey_ctx_entry(struct spdk_vma_sock *vsock, struct vma_sock_mkey_ctx *entry)
-{
-//	fprintf(stderr,"!!put sendmsg_idx %u, internal %u\n", entry->sendmsg_idx, entry->internal_idx);
-
-	TAILQ_REMOVE(&vsock->used_entries, entry, link);
-	TAILQ_INSERT_HEAD(&vsock->free_entries, entry, link);
-	/* Workaround for VMA problem where it sends buffer reclaim notification before data is actually written */
-//	TAILQ_INSERT_TAIL(&vsock->free_entries, entry, link);
-	entry->put_counter++;
-}
-
-static inline void
-vma_dump_mkey_ctx_entries(struct spdk_vma_sock *vsock)
-{
-//	for (uint16_t i = 0; i < vsock->num_mkey_ctx_entries; i++) {
-//		printf("[%u] used %d\t get_times %lu\t put_times %lu\n", i,
-//		       vsock->mkey_entries_buffer[i].get_counter != vsock->mkey_entries_buffer[i].put_counter,
-//		       vsock->mkey_entries_buffer[i].get_counter,
-//		       vsock->mkey_entries_buffer[i].put_counter);
-//	}
-}
 
 static int
 get_addr_str(struct sockaddr *sa, char *host, size_t hlen)
@@ -332,11 +274,9 @@ static inline struct ibv_pd *vma_get_pd(int fd)
 }
 
 static struct spdk_vma_sock *
-vma_sock_alloc(int fd, bool enable_zero_copy, uint16_t queue_depth)
+vma_sock_alloc(int fd, bool enable_zero_copy)
 {
 	struct spdk_vma_sock *sock;
-	uint16_t i;
-	struct vma_sock_mkey_ctx *mkey_entry;
 #if defined(SPDK_ZEROCOPY) || defined(__linux__)
 	int flag;
 	int rc;
@@ -359,25 +299,6 @@ vma_sock_alloc(int fd, bool enable_zero_copy, uint16_t queue_depth)
 		rc = setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
 		if (rc == 0) {
 			sock->zcopy = true;
-			if (!queue_depth) {
-				SPDK_ERRLOG("zero queue depth\n");
-				free(sock);
-				return NULL;
-			}
-			sock->mkey_entries_buffer = calloc(queue_depth, sizeof(struct vma_sock_mkey_ctx));
-			if (!sock->mkey_entries_buffer) {
-				SPDK_ERRLOG("Failed to alloc mkey entries\n");
-				free(sock);
-				return NULL;
-			}
-			TAILQ_INIT(&sock->free_entries);
-			TAILQ_INIT(&sock->used_entries);
-			sock->num_mkey_ctx_entries = queue_depth;
-			for (i = 0; i < sock->num_mkey_ctx_entries; i++) {
-				mkey_entry = &sock->mkey_entries_buffer[i];
-				mkey_entry->internal_idx = i;
-				TAILQ_INSERT_TAIL(&sock->free_entries, mkey_entry, link);
-			}
 		} else {
 			SPDK_ERRLOG("zcopy is not supported\n");
 		}
@@ -613,10 +534,9 @@ retry:
 
 	/* Only enable zero copy for non-loopback sockets. */
 	enable_zero_copy = opts->zcopy && !sock_is_loopback(fd);
-	SPDK_NOTICELOG("allocating vma sock, queue depth %d, zcopy %d\n", opts->queue_depth,
-		       enable_zero_copy);
+	SPDK_NOTICELOG("allocating vma sock, zcopy %d\n", enable_zero_copy);
 
-	sock = vma_sock_alloc(fd, enable_zero_copy, opts->queue_depth);
+	sock = vma_sock_alloc(fd, enable_zero_copy);
 	if (sock == NULL) {
 		SPDK_ERRLOG("sock allocation failed\n");
 		close(fd);
@@ -683,7 +603,7 @@ vma_sock_accept(struct spdk_sock *_sock)
 #endif
 
 	/* Inherit the zero copy feature from the listen socket */
-	new_sock = vma_sock_alloc(fd, sock->zcopy, sock->num_mkey_ctx_entries);
+	new_sock = vma_sock_alloc(fd, sock->zcopy);
 	if (new_sock == NULL) {
 		close(fd);
 		return NULL;
@@ -703,15 +623,7 @@ vma_sock_close(struct spdk_sock *_sock)
 	/* If the socket fails to close, the best choice is to
 	 * leak the fd but continue to free the rest of the sock
 	 * memory. */
-	if (sock->pd) {
-		if (sock->zcopy) {
-			vma_dump_mkey_ctx_entries(sock);
-		}
-	}
-
 	close(sock->fd);
-
-	free(sock->mkey_entries_buffer);
 
 	free(sock);
 
@@ -731,7 +643,6 @@ _sock_check_zcopy(struct spdk_sock *sock)
 	struct cmsghdr *cm;
 	uint32_t idx;
 	struct spdk_sock_request *req, *treq;
-	struct vma_sock_mkey_ctx *ctx, *ctx_tmp;
 	bool found;
 
 	msgh.msg_control = buf;
@@ -773,21 +684,6 @@ _sock_check_zcopy(struct spdk_sock *sock)
 		 * non-match is found.
 		 */
 		for (idx = serr->ee_info; idx <= serr->ee_data; idx++) {
-			found = false;
-
-			TAILQ_FOREACH_SAFE(ctx, &vsock->used_entries, link, ctx_tmp) {
-				if (ctx->sendmsg_idx == idx) {
-//					fprintf(stderr,"^^^^^^^^^put idx idx %u \t sendmsg_idx %u\n", ctx->internal_idx, idx);
-					vma_put_mkey_ctx_entry(vsock, ctx);
-					found = true;
-					/* Only 1 entry per sendmsg */
-					break;
-				}
-			}
-			if (!found && vsock->pd) {
-				printf("!!!!! didn't find ctx entry for sendmsg_idx %u\n", idx);
-			}
-
 			found = false;
 
 			TAILQ_FOREACH_SAFE(req, &sock->pending_reqs, internal.link, treq) {
@@ -900,6 +796,7 @@ vma_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct vma_pd_ke
 			assert(req->mkeys);
 			if (mkeys) {
 				mkeys[iovcnt].mkey = req->mkeys[i];
+				mkeys[iovcnt].flags = 0;
 			}
 
 //			SPDK_NOTICELOG("req %p, buffer[%zu]: %p, %zu. mkey %u\n", req, iovcnt, iovs[iovcnt].iov_base, iovs[iovcnt].iov_len,
@@ -931,15 +828,17 @@ _sock_flush_ext(struct spdk_sock *sock)
 	struct cmsghdr *cmsg;
 	int flags;
 	struct iovec iovs[IOV_BATCH_SIZE];
-	struct iovec *iovs_to_use;
-	struct vma_sock_mkey_ctx *ctx = NULL;
+	union {
+		char buf[CMSG_SPACE(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE)];
+		struct cmsghdr align;
+	} mkeys_container;
+	struct vma_pd_key *mkeys;
 	size_t iovcnt;
 	int retval;
 	struct spdk_sock_request *req;
 	int i;
 	ssize_t rc;
 	unsigned int offset;
-//	struct vma_pd_key *mkey_tmp = NULL;
 	size_t len;
 
 	/* Can't flush from within a callback or we end up with recursive calls */
@@ -952,14 +851,9 @@ _sock_flush_ext(struct spdk_sock *sock)
 	}
 
 	if (vsock->zcopy && vsock->pd) {
-		ctx = vma_get_mkey_ctx_entry(vsock, vsock->sendmsg_idx);
-		if (!ctx) {
-			SPDK_ERRLOG("no free ctx entry, sent %u\n", vsock->sendmsg_idx);
-			return 0;
-		}
-		iovs_to_use = ctx->iovs;
-		msg.msg_control = ctx->u.buf;
-		msg.msg_controllen = sizeof(ctx->u.buf);
+
+		msg.msg_control = mkeys_container.buf;
+		msg.msg_controllen = sizeof(mkeys_container.buf);
 		cmsg = CMSG_FIRSTHDR(&msg);
 
 		cmsg->cmsg_len = CMSG_LEN(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE);
@@ -967,11 +861,11 @@ _sock_flush_ext(struct spdk_sock *sock)
 		cmsg->cmsg_type = SCM_VMA_PD;
 		flags = MSG_ZEROCOPY;
 
-		iovcnt = vma_sock_prep_reqs(sock, iovs_to_use, (struct vma_pd_key *)CMSG_DATA(cmsg));
+		mkeys = (struct vma_pd_key *)CMSG_DATA(cmsg);
+		iovcnt = vma_sock_prep_reqs(sock, iovs, mkeys);
 
 		msg.msg_controllen = CMSG_SPACE(sizeof(struct vma_pd_key) * iovcnt);
 		cmsg->cmsg_len = CMSG_LEN(sizeof(struct vma_pd_key) * iovcnt);
-//		mkey_tmp = (struct vma_pd_key *)CMSG_DATA(cmsg);
 
 	} else {
 		if (vsock->zcopy) {
@@ -981,27 +875,18 @@ _sock_flush_ext(struct spdk_sock *sock)
 		}
 		msg.msg_control = NULL;
 		msg.msg_controllen = 0;
-		iovs_to_use = iovs;
 
-		iovcnt = vma_sock_prep_reqs(sock, iovs_to_use, NULL);
+		iovcnt = vma_sock_prep_reqs(sock, iovs, NULL);
 	}
 
 	assert(iovcnt);
 
-//	for (uint32_t j = 0; j < iovcnt; j++) {
-//		fprintf(stderr, "SPDK: iov[%u] base %p, len %zu, mkey %u addr %p\n", j, iovs_to_use[j].iov_base, iovs_to_use[j].iov_len, mkey_tmp ? mkey_tmp[j].mkey : -1u, mkey_tmp ? &mkey_tmp[j] : NULL);
-//	}
-
 	/* Perform the vectored write */
-	msg.msg_iov = iovs_to_use;
+	msg.msg_iov = iovs;
 	msg.msg_iovlen = iovcnt;
 
 	rc = sendmsg(vsock->fd, &msg, flags);
 	if (rc <= 0) {
-		if (vsock->zcopy && vsock->pd) {
-			assert(ctx);
-			vma_put_mkey_ctx_entry(vsock, ctx);
-		}
 		if (errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && vsock->zcopy)) {
 			return 0;
 		}
