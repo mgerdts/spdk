@@ -46,7 +46,7 @@
 #endif
 
 #include <infiniband/verbs.h>
-#include <mellanox/vma_extra.h>
+#include <mellanox/xlio_extra.h>
 
 #include "spdk/log.h"
 #include "spdk/pipe.h"

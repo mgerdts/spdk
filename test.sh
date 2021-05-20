@@ -19,7 +19,7 @@ fi
 
 # It is expected that VMA was configured with --prefix=$PWD/install-$HOSTNAME
 # Just comment the line if you want to run without VMA
-LIBVMA=${LIBVMA:-$PWD/../libvma-zcopy-fix/install-$HOSTNAME/lib/libvma.so}
+LIBVMA=${LIBVMA:-$PWD/../libxlio/install-$HOSTNAME/lib/libxlio.so}
 TGT_LIBVMA=${TGT_LIBVMA:-}
 
 VMA_OPTS="
