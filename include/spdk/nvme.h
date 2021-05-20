@@ -472,6 +472,12 @@ struct spdk_nvme_pcie_stat {
 	uint64_t sq_doobell_updates;
 };
 
+struct spdk_nvme_tcp_stat {
+	uint64_t num_polls;
+	uint64_t num_sock_completions;
+	uint64_t num_nvme_completions;
+};
+
 struct spdk_nvme_transport_poll_group_stat {
 	spdk_nvme_transport_type_t trtype;
 	union {
@@ -480,6 +486,7 @@ struct spdk_nvme_transport_poll_group_stat {
 			struct spdk_nvme_rdma_device_stat *device_stats;
 		} rdma;
 		struct spdk_nvme_pcie_stat pcie;
+		struct spdk_nvme_tcp_stat tcp;
 	};
 };
 

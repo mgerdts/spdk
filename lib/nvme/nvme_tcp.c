@@ -71,6 +71,7 @@ struct nvme_tcp_poll_group {
 	int64_t num_completions;
 
 	TAILQ_HEAD(, nvme_tcp_qpair) needs_poll;
+	struct spdk_nvme_tcp_stat stats;
 };
 
 /* NVMe TCP qpair extensions for spdk_nvme_qpair */
@@ -2498,11 +2499,12 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tgroup);
 	struct spdk_nvme_qpair *qpair, *tmp_qpair;
 	struct nvme_tcp_qpair *tqpair, *tmp_tqpair;
+	int num_events;
 
 	group->completions_per_qpair = completions_per_qpair;
 	group->num_completions = 0;
 
-	spdk_sock_group_poll(group->sock_group);
+	num_events = spdk_sock_group_poll(group->sock_group);
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
 		disconnected_qpair_cb(qpair, tgroup->group->ctx);
@@ -2512,6 +2514,15 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	 * and they weren't polled as a consequence of calling spdk_sock_group_poll above, poll them now. */
 	TAILQ_FOREACH_SAFE(tqpair, &group->needs_poll, link, tmp_tqpair) {
 		nvme_tcp_qpair_sock_cb(&tqpair->qpair, group->sock_group, tqpair->sock);
+	}
+
+	group->stats.num_polls++;
+	if (num_events > 0) {
+		group->stats.num_sock_completions += num_events;
+	}
+
+	if (group->num_completions > 0) {
+		group->stats.num_nvme_completions += group->num_completions;
 	}
 
 	return group->num_completions;
@@ -2552,6 +2563,39 @@ nvme_tcp_get_caps(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_capability *ca
 	return 0;
 }
 
+static int
+nvme_tcp_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
+			      struct spdk_nvme_transport_poll_group_stat **_stats)
+{
+	struct nvme_tcp_poll_group *group;
+	struct spdk_nvme_transport_poll_group_stat *stats;
+
+	if (tgroup == NULL || _stats == NULL) {
+		SPDK_ERRLOG("Invalid stats or group pointer\n");
+		return -EINVAL;
+	}
+
+	group = nvme_tcp_poll_group(tgroup);
+	stats = calloc(1, sizeof(*stats));
+	if (!stats) {
+		SPDK_ERRLOG("Can't allocate memory for NVME TCP poll group stats\n");
+		return -ENOMEM;
+	}
+	stats->trtype = SPDK_NVME_TRANSPORT_TCP;
+	memcpy(&stats->tcp, &group->stats, sizeof(group->stats));
+
+	*_stats = stats;
+
+	return 0;
+}
+
+static void
+nvme_tcp_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
+			       struct spdk_nvme_transport_poll_group_stat *stats)
+{
+	free(stats);
+}
+
 const struct spdk_nvme_transport_ops tcp_ops = {
 	.name = "TCP",
 	.type = SPDK_NVME_TRANSPORT_TCP,
@@ -2588,6 +2632,8 @@ const struct spdk_nvme_transport_ops tcp_ops = {
 	.poll_group_remove = nvme_tcp_poll_group_remove,
 	.poll_group_process_completions = nvme_tcp_poll_group_process_completions,
 	.poll_group_destroy = nvme_tcp_poll_group_destroy,
+	.poll_group_get_stats = nvme_tcp_poll_group_get_stats,
+	.poll_group_free_stats = nvme_tcp_poll_group_free_stats,
 
 	.get_caps = nvme_tcp_get_caps,
 	.qpair_free_request = nvme_tcp_qpair_free_request,
