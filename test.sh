@@ -20,6 +20,8 @@ fi
 # It is expected that VMA was configured with --prefix=$PWD/install-$HOSTNAME
 # Just comment the line if you want to run without VMA
 LIBVMA=${LIBVMA:-$PWD/../libvma-zcopy-fix/install-$HOSTNAME/lib/libvma.so}
+TGT_LIBVMA=${TGT_LIBVMA:-}
+
 VMA_OPTS="
 xVMA_INTERNAL_THREAD_AFFINITY=0x80
 VMA_RING_ALLOCATION_LOGIC_TX=30
@@ -54,7 +56,11 @@ function start_tgt() {
     if [ -n "$TGT_HOST" ]; then
 	SSH="ssh $SSH_EXTRA_OPTS $TGT_HOST"
     fi
-    $SSH sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
+    if [ -n "$TGT_LIBVMA" ]; then
+	$SSH sudo $VMA_OPTS LD_PRELOAD=$TGT_LIBVMA $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
+    else
+	$SSH sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
+    fi
     sleep 7
 }
 
