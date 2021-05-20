@@ -1,54 +1,84 @@
 #!/usr/bin/env bash
-TGT_MASK=${TGT_MASK:-0x0F}
-PERF_MASK=${PERF_MASK:-0xF0}
-PERF_TIME=${PERF_TIME:-10}
 
-# Looks like it is not possible to run initiator with VMA and target without on the same host.
-# So, we run it on a different host
-TGT_HOST=${TGT_HOST:-spdk04.swx.labs.mlnx}
-TGT_ADDR=${TGT_ADDR:-1.1.4.1}
-TGT_PORT=${TGT_PORT:-4420}
+# Change default setup here or run as 'SETUP=2 ./test.sh'
+SETUP=${SETUP:-1}
 
-# It is expected that SPDK was configured with --prefix=$PWD/install-$HOSTNAME
-BIN_PATH=$PWD/install-$HOSTNAME/bin
-if [ -n "$TGT_HOST" ]; then
-    TGT_BIN_PATH=$PWD/install-$TGT_HOST/bin
+# Adjust paths according to your setup or add new setup
+if [ "1" == $SETUP ]; then
+    # Test setup with SNIC initiator
+    TGT_HOST=${TGT_HOST:-spdk05.swx.labs.mlnx}
+    TGT_ADDR=${TGT_ADDR:-1.1.5.1}
+    TGT_PORT=${TGT_PORT:-4420}
+    PERF_SSH=${PERF_SSH:-ubuntu@snic}
+    PERF_BIN_PATH=${PERF_BIN_PATH:-/home/evgeniik/rx-zcopy/spdk/install-snic/bin}
+    PERF_SPDK_PATH=${PERF_SPDK_PATH:-/home/evgeniik/rx-zcopy/spdk}
+    LIBVMA=${LIBVMA:-/home/evgeniik/rx-zcopy/libxlio/install-snic/lib/libxlio.so}
+    TGT_BIN_PATH=${TGT_BIN_PATH:-$PWD/install-$TGT_HOST/bin}
+    TGT_SPDK_PATH=${TGT_SPDK_PATH:-$PWD}
+elif [ "2" == $SETUP ]; then
+    # Test setup with x86 initiator
+    TGT_HOST=${TGT_HOST:-spdk05.swx.labs.mlnx}
+    TGT_ADDR=${TGT_ADDR:-1.1.5.1}
+    TGT_PORT=${TGT_PORT:-4420}
+    PERF_SSH=${PERF_SSH:-}
+    PERF_BIN_PATH=${PERF_BIN_PATH:-$PWD/install-$HOSTNAME/bin}
+    PERF_SPDK_PATH=${PERF_SPDK_PATH:-$PWD}
+    LIBVMA=${LIBVMA:-$PWD/../libxlio/install-$HOSTNAME/lib/libxlio.so}
+    TGT_BIN_PATH=${TGT_BIN_PATH:-$PWD/install-$TGT_HOST/bin}
+    TGT_SPDK_PATH=${TGT_SPDK_PATH:-$PWD}
 else
-    TGT_BIN_PATH=$PWD/install-$HOSTNAME/bin
+    echo "Unknown setup"
+    exit 1
 fi
 
-# It is expected that VMA was configured with --prefix=$PWD/install-$HOSTNAME
-# Just comment the line if you want to run without VMA
-LIBVMA=${LIBVMA:-$PWD/../libxlio/install-$HOSTNAME/lib/libxlio.so}
 TGT_LIBVMA=${TGT_LIBVMA:-}
 
 VMA_OPTS="
-xVMA_INTERNAL_THREAD_AFFINITY=0x80
+xVMA_TSO=1
+xVMA_INTERNAL_THREAD_ARM_CQ=1
+xVMA_GRO_STREAMS_MAX=0
+xVMA_RX_POLL_ON_TX_TCP=1
+xVMA_MEM_ALLOC_TYPE=2
+xVMA_TX_BUFS=4096
+xVMA_TX_BUF_SIZE=8192
+xVMA_RX_BUFS=70000
+xVMA_RX_WRE=4096
 VMA_RING_ALLOCATION_LOGIC_TX=30
 VMA_RING_ALLOCATION_LOGIC_RX=30
-xVMA_TSO=0
-xVMA_TX_BUF_SIZE=8000
-xVMA_RX_POLL_ON_TX_TCP=1"
+xVMA_TCP_NODELAY=1
+xVMA_TRACELEVEL=4
+xVMA_INTERNAL_THREAD_AFFINITY=0x80
+xVMA_SELECT_POLL=0
+xVMA_RX_POLL=0
+"
 
-QUEUE_DEPTH=${QUEUE_DEPTH:-128}
+TGT_MASK=${TGT_MASK:-0xFF}
+PERF_TIME=${PERF_TIME:-60}
+PERF_MASKS=${PERF_MASKS:-0x10 0x30 0xF0 0xFF 0xFC}
+QUEUE_DEPTHS=${QUEUE_DEPTHS:-8 16 32 64 128}
 IO_SIZES=${IO_SIZES:-4096 8192 16384 32768 65536 131072}
 RW=${RW:-randread}
+REPEAT=${REPEAT:-1}
 #NVME_PERF_EXTRA_OPTS="-T vma -T nvme"
 #BDEV_PERF_EXTRA_OPTS="-L vma -L nvme"
 SSH_EXTRA_OPTS=${SSH_EXTRA_OPTS:-}
-
 BDEV_NULL_OPTS="8192 512"
+#SOCK_EXTRA_OPTS="--disable-recv-pipe"
 
 function rpc_tgt() {
     local SSH=""
     if [ -n "$TGT_HOST" ]; then
 	SSH="ssh $SSH_EXTRA_OPTS $TGT_HOST"
     fi
-    $SSH sudo $PWD/scripts/rpc.py $@ >> rpc_tgt.log 2>&1
+    $SSH sudo $TGT_SPDK_PATH/scripts/rpc.py $@ >> rpc_tgt.log 2>&1
 }
 
 function rpc_perf() {
-    sudo ./scripts/rpc.py -s /var/tmp/bdevperf.sock $@ 2>&1 | tee -a perf.log
+    local SSH=""
+    if [ -n "$PERF_SSH" ]; then
+	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
+    fi
+    $SSH sudo $PERF_SPDK_PATH/scripts/rpc.py -s /var/tmp/bdevperf.sock $@ 2>&1 | tee -a perf.log
 }
 
 function start_tgt() {
@@ -81,9 +111,30 @@ function config() {
 function run_nvmeperf() {
     local ADDR=${ADDR:-$TGT_ADDR}
     local PORT=${PORT:-$TGT_PORT}
+    local SSH=""
 
-    sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $BIN_PATH/spdk_nvme_perf \
-	 -S $SOCK_IMPL -r "trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT" \
+    if [ -n "$PERF_SSH" ]; then
+	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
+	$SSH sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_BIN_PATH/spdk_nvme_perf \
+	     -S $SOCK_IMPL -r \"trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT\" \
+	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
+	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
+    else
+	sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_BIN_PATH/spdk_nvme_perf \
+	     -S $SOCK_IMPL -r "trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT" \
+	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
+	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
+    fi
+
+    PERF_PID=$!
+    echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
+}
+
+function run_nvmeperf_snap() {
+    local ADDR=${ADDR:-$TGT_ADDR}
+
+    sudo $PERF_BIN_PATH/spdk_nvme_perf \
+	 -r "trtype:pcie traddr:$ADDR" \
 	 -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	 $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     PERF_PID=$!
@@ -103,8 +154,13 @@ function report_nvmeperf() {
 function run_bdevperf() {
     local ADDR=${ADDR:-$TGT_ADDR}
     local PORT=${PORT:-$TGT_PORT}
+    local SSH=""
 
-    sudo $VMA_OPTS LD_PRELOAD=$LIBVMA ./test/bdev/bdevperf/bdevperf \
+    if [ -n "$PERF_SSH" ]; then
+	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
+    fi
+
+    $SSH sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf \
 	 -r /var/tmp/bdevperf.sock --wait-for-rpc -m $PERF_MASK -C \
 	 -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	 $BDEV_PERF_EXTRA_OPTS 2>&1 | tee perf.log &
@@ -112,11 +168,13 @@ function run_bdevperf() {
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
     sleep 3
     rpc_perf sock_set_default_impl -i $SOCK_IMPL
-    rpc_perf sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send --disable-recv-pipe
+    rpc_perf sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send $SOCK_EXTRA_OPTS
     rpc_perf framework_start_init
+    rpc_perf bdev_nvme_set_options -k 0
     rpc_perf bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t tcp -f ipv4 -a $ADDR -s $PORT \
 	     -n nqn.2016-06.io.spdk:cnode1
-    sudo PYTHONPATH="$PYTHONPATH:$PWD/scripts" ./test/bdev/bdevperf/bdevperf.py \
+    $SSH sudo PYTHONPATH="$PYTHONPATH:$PERF_SPDK_PATH/scripts" \
+	 $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf.py \
 	 -s /var/tmp/bdevperf.sock -t 3600 perform_tests 2>&1 | tee -a perf.log &
     RPC_TASK_PID=$!
     echo "RPC task PID is $RPC_TASK_PID" 2>&1 | tee -a perf.log
@@ -139,21 +197,47 @@ function report_bdevperf() {
 function basic_test_nvme() {
     start_tgt
     config
-    for IO_SIZE in $IO_SIZES; do
-	run_nvmeperf # > /dev/null 2>&1
-	wait_nvmeperf
-	report_nvmeperf
+    for PERF_MASK in $PERF_MASKS; do
+	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
+	    for IO_SIZE in $IO_SIZES; do
+		for REP in $(seq $REPEAT); do
+		    run_nvmeperf # > /dev/null 2>&1
+		    wait_nvmeperf
+		    report_nvmeperf
+		done
+	    done
+	done
     done
     stop_tgt
+}
+
+function basic_test_nvme_snap() {
+    for PERF_MASK in $PERF_MASKS; do
+	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
+	    for IO_SIZE in $IO_SIZES; do
+		for REP in $(seq $REPEAT); do
+		    run_nvmeperf_snap # > /dev/null 2>&1
+		    wait_nvmeperf
+		    report_nvmeperf
+		done
+	    done
+	done
+    done
 }
 
 function basic_test_bdev() {
     start_tgt
     config
-    for IO_SIZE in $IO_SIZES; do
-	run_bdevperf # > /dev/null 2>&1
-	wait_bdevperf
-	report_bdevperf
+    for PERF_MASK in $PERF_MASKS; do
+	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
+	    for IO_SIZE in $IO_SIZES; do
+		for REP in $(seq $REPEAT); do
+		    run_bdevperf # > /dev/null 2>&1
+		    wait_bdevperf
+		    report_bdevperf
+		done
+	    done
+	done
     done
     stop_tgt
 }
@@ -185,7 +269,7 @@ function test5() {
 
 # Test with bdevperf POSIX-VMA non zcopy
 function test6() {
-    SOCK_IMPL=posix basic_test_bdev
+    SOCK_IMPL=posix SOCK_EXTRA_OPTS="--disable-recv-pipe" basic_test_bdev
 }
 
 # Test with spdk_nvme_perf POSIX-Kernel non zcopy
@@ -226,6 +310,11 @@ function test13() {
 # Test with spdk_nvme_perf VMA zcopy + PI + digest
 function test14() {
     SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-H -I -e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+}
+
+# Test with spdk_nvme_perf via SNAP
+function test_snap() {
+    ADDR=0000:60:00.2 basic_test_nvme_snap
 }
 
 if [ -n "$1" ]; then
