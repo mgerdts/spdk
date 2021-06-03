@@ -32,6 +32,7 @@
  */
 
 #include "spdk/stdinc.h"
+#include "spdk/env.h"
 
 #if defined(__FreeBSD__)
 #include <sys/event.h>
@@ -87,6 +88,12 @@ struct vma_pd_attr {
 };
 #endif
 
+enum {
+	IOCTL_USER_ALLOC_TX = (1 << 0),
+	IOCTL_USER_ALLOC_RX = (1 << 1),
+	IOCTL_USER_ALLOC_TX_ZC = (1 << 2)
+};
+
 struct vma_sock_packet {
 	struct vma_packet_t *vma_packet;
 	int refs;
@@ -139,6 +146,56 @@ static struct spdk_sock_impl_opts g_spdk_vma_sock_impl_opts = {
 
 static int _sock_flush_ext(struct spdk_sock *sock);
 static struct vma_api_t *g_vma_api;
+
+static void *
+spdk_vma_alloc(size_t size)
+{
+	return spdk_zmalloc(size, 0, NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+}
+
+static int
+vma_init(void)
+{
+	int rc;
+#pragma pack(push, 1)
+	struct {
+		uint8_t flags;
+		void *(*alloc_func)(size_t);
+		void (*free_func)(void *);
+	} data;
+#pragma pack(pop)
+	struct cmsghdr *cmsg;
+	char cbuf[CMSG_SPACE(sizeof(data))];
+
+	static_assert((sizeof(uint8_t) + sizeof(uintptr_t) +
+		       sizeof(uintptr_t)) == sizeof(data),
+		      "wrong vma ioctl data size.");
+
+	/* Before init, g_vma_api must be NULL */
+	assert(g_vma_api == NULL);
+
+	g_vma_api = vma_get_api();
+	if (!g_vma_api) {
+		return -1;
+	}
+	SPDK_NOTICELOG("Got VMA API %p\n", g_vma_api);
+
+	cmsg = (struct cmsghdr *)cbuf;
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = CMSG_XLIO_IOCTL_USER_ALLOC;
+	cmsg->cmsg_len = CMSG_LEN(sizeof(data));
+	data.flags = IOCTL_USER_ALLOC_RX;
+	data.alloc_func = spdk_vma_alloc;
+	data.free_func = spdk_free;
+	memcpy(CMSG_DATA(cmsg), &data, sizeof(data));
+
+	rc = g_vma_api->ioctl(cmsg, cmsg->cmsg_len);
+	if (rc < 0) {
+		SPDK_ERRLOG("vma_int rc %d (errno=%d)\n", rc, errno);
+	}
+
+	return rc;
+}
 
 static int
 get_addr_str(struct sockaddr *sa, char *host, size_t hlen)
@@ -462,11 +519,6 @@ vma_sock_create(const char *ip, int port,
 	bool enable_zero_copy = true;
 
 	assert(opts != NULL);
-
-	if (!g_vma_api) {
-		g_vma_api = vma_get_api();
-		SPDK_NOTICELOG("Got VMA API %p\n", g_vma_api);
-	}
 
 	if (ip == NULL) {
 		return NULL;
@@ -1807,6 +1859,12 @@ static struct spdk_net_impl g_vma_net_impl = {
 	.free_bufs	= vma_sock_free_bufs
 };
 
-SPDK_NET_IMPL_REGISTER(vma, &g_vma_net_impl, DEFAULT_SOCK_PRIORITY);
+static void __attribute__((constructor)) 
+ spdk_net_impl_register_vma(void)
+{
+	if (!vma_init()) {
+		spdk_net_impl_register(&g_vma_net_impl, DEFAULT_SOCK_PRIORITY);
+	}
+}
 
 SPDK_LOG_REGISTER_COMPONENT(vma)
