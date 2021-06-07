@@ -46,6 +46,8 @@
 #include <linux/errqueue.h>
 #endif
 
+#include <dlfcn.h>
+
 #include <infiniband/verbs.h>
 #include <mellanox/xlio_extra.h>
 
@@ -147,10 +149,108 @@ static struct spdk_sock_impl_opts g_spdk_vma_sock_impl_opts = {
 static int _sock_flush_ext(struct spdk_sock *sock);
 static struct vma_api_t *g_vma_api;
 
+static struct {
+	int (*socket)(int domain, int type, int protocol);
+	int (*bind)(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+	int (*listen)(int sockfd, int backlog);
+	int (*connect)(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+	int (*accept)(int sockfd, struct sockaddr *restrict addr, socklen_t *restrict addrlen);
+	int (*close)(int fd);
+	ssize_t (*readv)(int fd, const struct iovec *iov, int iovcnt);
+	ssize_t (*writev)(int fd, const struct iovec *iov, int iovcnt);
+	ssize_t (*recv)(int sockfd, void *buf, size_t len, int flags);
+	ssize_t (*recvmsg)(int sockfd, struct msghdr *msg, int flags);
+	ssize_t (*sendmsg)(int sockfd, const struct msghdr *msg, int flags);
+	int (*epoll_create1)(int flags);
+	int (*epoll_ctl)(int epfd, int op, int fd, struct epoll_event *event);
+	int (*epoll_wait)(int epfd, struct epoll_event *events, int maxevents, int timeout);
+	int (*fcntl)(int fd, int cmd, ... /* arg */);
+	int (*ioctl)(int fd, unsigned long request, ...);
+	int (*getsockopt)(int sockfd, int level, int optname, void *restrict optval, socklen_t *restrict optlen);
+	int (*setsockopt)(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+	int (*getsockname)(int sockfd, struct sockaddr *restrict addr, socklen_t *restrict addrlen);
+	int (*getpeername)(int sockfd, struct sockaddr *restrict addr, socklen_t *restrict addrlen);
+	int (*getaddrinfo)(const char *restrict node,
+			   const char *restrict service,
+			   const struct addrinfo *restrict hints,
+			   struct addrinfo **restrict res);
+	void (*freeaddrinfo)(struct addrinfo *res);
+	const char *(*gai_strerror)(int errcode);
+} g_vma_ops;
+
+static int
+vma_load(void)
+{
+	char *vma_path;
+	void *vma_handle;
+
+	vma_path = getenv("SPDK_VMA_PATH");
+	if (!vma_path) {
+		SPDK_NOTICELOG("VMA path is not specified. Not loading VMA socket implementation\n");
+		return -1;
+	}
+
+	vma_handle = dlopen(vma_path, RTLD_NOW);
+	if (!vma_handle) {
+		SPDK_ERRLOG("Failed to load VMA library: path %s, error %s\n",
+			    vma_path, dlerror());
+		return -1;
+	}
+
+#define GET_SYM(sym) \
+	g_vma_ops.sym = dlsym(vma_handle, #sym); \
+	if (!g_vma_ops.sym) { \
+		SPDK_ERRLOG("Failed to find symbol '%s'in VMA library\n", #sym); \
+		dlclose(vma_handle); \
+		return -1; \
+	}
+
+	GET_SYM(socket);
+	GET_SYM(bind);
+	GET_SYM(listen);
+	GET_SYM(connect);
+	GET_SYM(accept);
+	GET_SYM(close);
+	GET_SYM(readv);
+	GET_SYM(writev);
+	GET_SYM(recv);
+	GET_SYM(recvmsg);
+	GET_SYM(sendmsg);
+	GET_SYM(epoll_create1);
+	GET_SYM(epoll_ctl);
+	GET_SYM(epoll_wait);
+	GET_SYM(fcntl);
+	GET_SYM(ioctl);
+	GET_SYM(getsockopt);
+	GET_SYM(setsockopt);
+	GET_SYM(getsockname);
+	GET_SYM(getpeername);
+	GET_SYM(getaddrinfo);
+	GET_SYM(freeaddrinfo);
+	GET_SYM(gai_strerror);
+#undef GET_SYM
+
+	return 0;
+}
+
 static void *
 spdk_vma_alloc(size_t size)
 {
 	return spdk_zmalloc(size, 0, NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+}
+
+static struct vma_api_t*
+spdk_vma_get_api(void)
+{
+	struct vma_api_t *api_ptr = NULL;
+	socklen_t len = sizeof(api_ptr);
+
+	int err = g_vma_ops.getsockopt(-1, SOL_SOCKET, SO_VMA_GET_API, &api_ptr, &len);
+	if (err < 0) {
+		return NULL;
+	}
+
+	return api_ptr;
 }
 
 static int
@@ -174,8 +274,9 @@ vma_init(void)
 	/* Before init, g_vma_api must be NULL */
 	assert(g_vma_api == NULL);
 
-	g_vma_api = vma_get_api();
+	g_vma_api = spdk_vma_get_api();
 	if (!g_vma_api) {
+		SPDK_ERRLOG("Failed to get VMA API\n");
 		return -1;
 	}
 	SPDK_NOTICELOG("Got VMA API %p\n", g_vma_api);
@@ -242,7 +343,7 @@ vma_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *sport
 
 	memset(&sa, 0, sizeof sa);
 	salen = sizeof sa;
-	rc = getsockname(sock->fd, (struct sockaddr *) &sa, &salen);
+	rc = g_vma_ops.getsockname(sock->fd, (struct sockaddr *) &sa, &salen);
 	if (rc != 0) {
 		SPDK_ERRLOG("getsockname() failed (errno=%d)\n", errno);
 		return -1;
@@ -277,7 +378,7 @@ vma_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *sport
 
 	memset(&sa, 0, sizeof sa);
 	salen = sizeof sa;
-	rc = getpeername(sock->fd, (struct sockaddr *) &sa, &salen);
+	rc = g_vma_ops.getpeername(sock->fd, (struct sockaddr *) &sa, &salen);
 	if (rc != 0) {
 		SPDK_ERRLOG("getpeername() failed (errno=%d)\n", errno);
 		return -1;
@@ -318,7 +419,7 @@ vma_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 		sz = MIN_SO_RCVBUF_SIZE;
 	}
 
-	rc = setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
+	rc = g_vma_ops.setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 	if (rc < 0) {
 		return rc;
 	}
@@ -338,7 +439,7 @@ vma_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 		sz = MIN_SO_SNDBUF_SIZE;
 	}
 
-	rc = setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
+	rc = g_vma_ops.setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 	if (rc < 0) {
 		return rc;
 	}
@@ -351,7 +452,7 @@ static inline struct ibv_pd *vma_get_pd(int fd)
 	struct vma_pd_attr pd_attr_ptr = {};
 	socklen_t len = sizeof(pd_attr_ptr);
 
-	int err = getsockopt(fd, SOL_SOCKET, SO_VMA_PD, &pd_attr_ptr, &len);
+	int err = g_vma_ops.getsockopt(fd, SOL_SOCKET, SO_VMA_PD, &pd_attr_ptr, &len);
 	if (err < 0) {
 		return NULL;
 	}
@@ -381,7 +482,7 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 	if (enable_zero_copy && g_spdk_vma_sock_impl_opts.enable_zerocopy_send) {
 
 		/* Try to turn on zero copy sends */
-		rc = setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
+		rc = g_vma_ops.setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
 		if (rc == 0) {
 			sock->zcopy = true;
 		} else {
@@ -438,7 +539,7 @@ vma_sock_alloc(int fd, bool enable_zero_copy)
 	flag = 1;
 
 	if (g_spdk_vma_sock_impl_opts.enable_quickack) {
-		rc = setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
+		rc = g_vma_ops.setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
 		if (rc != 0) {
 			SPDK_ERRLOG("quickack was failed to set\n");
 		}
@@ -466,7 +567,7 @@ sock_is_loopback(int fd)
 	bool is_loopback = false;
 
 	salen = sizeof(sa);
-	rc = getsockname(fd, (struct sockaddr *)&sa, &salen);
+	rc = g_vma_ops.getsockname(fd, (struct sockaddr *)&sa, &salen);
 	if (rc != 0) {
 		return is_loopback;
 	}
@@ -489,7 +590,7 @@ sock_is_loopback(int fd)
 
 			if (strncmp(ip_addr, ip_addr_tmp, sizeof(ip_addr)) == 0) {
 				memcpy(ifr.ifr_name, tmp->ifa_name, sizeof(ifr.ifr_name));
-				ioctl(fd, SIOCGIFFLAGS, &ifr);
+				g_vma_ops.ioctl(fd, SIOCGIFFLAGS, &ifr);
 				if (ifr.ifr_flags & IFF_LOOPBACK) {
 					is_loopback = true;
 				}
@@ -539,9 +640,9 @@ vma_sock_create(const char *ip, int port,
 	hints.ai_flags = AI_NUMERICSERV;
 	hints.ai_flags |= AI_PASSIVE;
 	hints.ai_flags |= AI_NUMERICHOST;
-	rc = getaddrinfo(ip, portnum, &hints, &res0);
+	rc = g_vma_ops.getaddrinfo(ip, portnum, &hints, &res0);
 	if (rc != 0) {
-		SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n", gai_strerror(rc), rc);
+		SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n", g_vma_ops.gai_strerror(rc), rc);
 		return NULL;
 	}
 
@@ -549,42 +650,42 @@ vma_sock_create(const char *ip, int port,
 	fd = -1;
 	for (res = res0; res != NULL; res = res->ai_next) {
 retry:
-		fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		fd = g_vma_ops.socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 		if (fd < 0) {
 			/* error */
 			continue;
 		}
 
 		sz = g_spdk_vma_sock_impl_opts.recv_buf_size;
-		rc = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
+		rc = g_vma_ops.setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 		if (rc) {
 			/* Not fatal */
 		}
 
 		sz = g_spdk_vma_sock_impl_opts.send_buf_size;
-		rc = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
+		rc = g_vma_ops.setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 		if (rc) {
 			/* Not fatal */
 		}
 
-		rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
+		rc = g_vma_ops.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 		if (rc != 0) {
-			close(fd);
+			g_vma_ops.close(fd);
 			/* error */
 			continue;
 		}
-		rc = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+		rc = g_vma_ops.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
 		if (rc != 0) {
-			close(fd);
+			g_vma_ops.close(fd);
 			/* error */
 			continue;
 		}
 
 #if defined(SO_PRIORITY)
 		if (opts->priority) {
-			rc = setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
+			rc = g_vma_ops.setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
 			if (rc != 0) {
-				close(fd);
+				g_vma_ops.close(fd);
 				/* error */
 				continue;
 			}
@@ -592,22 +693,22 @@ retry:
 #endif
 
 		if (res->ai_family == AF_INET6) {
-			rc = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
+			rc = g_vma_ops.setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
 			if (rc != 0) {
-				close(fd);
+				g_vma_ops.close(fd);
 				/* error */
 				continue;
 			}
 		}
 
 		if (type == SPDK_SOCK_CREATE_LISTEN) {
-			rc = bind(fd, res->ai_addr, res->ai_addrlen);
+			rc = g_vma_ops.bind(fd, res->ai_addr, res->ai_addrlen);
 			if (rc != 0) {
 				SPDK_ERRLOG("bind() failed at port %d, errno = %d\n", port, errno);
 				switch (errno) {
 				case EINTR:
 					/* interrupted? */
-					close(fd);
+					g_vma_ops.close(fd);
 					goto retry;
 				case EADDRNOTAVAIL:
 					SPDK_ERRLOG("IP address %s not available. "
@@ -617,40 +718,40 @@ retry:
 				/* FALLTHROUGH */
 				default:
 					/* try next family */
-					close(fd);
+					g_vma_ops.close(fd);
 					fd = -1;
 					continue;
 				}
 			}
 			/* bind OK */
-			rc = listen(fd, 512);
+			rc = g_vma_ops.listen(fd, 512);
 			if (rc != 0) {
 				SPDK_ERRLOG("listen() failed, errno = %d\n", errno);
-				close(fd);
+				g_vma_ops.close(fd);
 				fd = -1;
 				break;
 			}
 		} else if (type == SPDK_SOCK_CREATE_CONNECT) {
-			rc = connect(fd, res->ai_addr, res->ai_addrlen);
+			rc = g_vma_ops.connect(fd, res->ai_addr, res->ai_addrlen);
 			if (rc != 0) {
 				SPDK_ERRLOG("connect() failed, errno = %d\n", errno);
 				/* try next family */
-				close(fd);
+				g_vma_ops.close(fd);
 				fd = -1;
 				continue;
 			}
 		}
 
-		flag = fcntl(fd, F_GETFL);
-		if (fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
+		flag = g_vma_ops.fcntl(fd, F_GETFL);
+		if (g_vma_ops.fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
 			SPDK_ERRLOG("fcntl can't set nonblocking mode for socket, fd: %d (%d)\n", fd, errno);
-			close(fd);
+			g_vma_ops.close(fd);
 			fd = -1;
 			break;
 		}
 		break;
 	}
-	freeaddrinfo(res0);
+	g_vma_ops.freeaddrinfo(res0);
 
 	if (fd < 0) {
 		return NULL;
@@ -663,7 +764,7 @@ retry:
 	sock = vma_sock_alloc(fd, enable_zero_copy);
 	if (sock == NULL) {
 		SPDK_ERRLOG("sock allocation failed\n");
-		close(fd);
+		g_vma_ops.close(fd);
 		return NULL;
 	}
 
@@ -700,7 +801,7 @@ vma_sock_accept(struct spdk_sock *_sock)
 
 	assert(sock != NULL);
 
-	rc = accept(sock->fd, (struct sockaddr *)&sa, &salen);
+	rc = g_vma_ops.accept(sock->fd, (struct sockaddr *)&sa, &salen);
 
 	if (rc == -1) {
 		return NULL;
@@ -708,19 +809,19 @@ vma_sock_accept(struct spdk_sock *_sock)
 
 	fd = rc;
 
-	flag = fcntl(fd, F_GETFL);
-	if ((!(flag & O_NONBLOCK)) && (fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0)) {
+	flag = g_vma_ops.fcntl(fd, F_GETFL);
+	if ((!(flag & O_NONBLOCK)) && (g_vma_ops.fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0)) {
 		SPDK_ERRLOG("fcntl can't set nonblocking mode for socket, fd: %d (%d)\n", fd, errno);
-		close(fd);
+		g_vma_ops.close(fd);
 		return NULL;
 	}
 
 #if defined(SO_PRIORITY)
 	/* The priority is not inherited, so call this function again */
 	if (sock->base.opts.priority) {
-		rc = setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &sock->base.opts.priority, sizeof(int));
+		rc = g_vma_ops.setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &sock->base.opts.priority, sizeof(int));
 		if (rc != 0) {
-			close(fd);
+			g_vma_ops.close(fd);
 			return NULL;
 		}
 	}
@@ -729,7 +830,7 @@ vma_sock_accept(struct spdk_sock *_sock)
 	/* Inherit the zero copy feature from the listen socket */
 	new_sock = vma_sock_alloc(fd, sock->zcopy);
 	if (new_sock == NULL) {
-		close(fd);
+		g_vma_ops.close(fd);
 		return NULL;
 	}
 	new_sock->so_priority = sock->base.opts.priority;
@@ -747,7 +848,7 @@ vma_sock_close(struct spdk_sock *_sock)
 	/* If the socket fails to close, the best choice is to
 	 * leak the fd but continue to free the rest of the sock
 	 * memory. */
-	close(sock->fd);
+	g_vma_ops.close(sock->fd);
 
 	free(sock->packets);
 	free(sock->buffers);
@@ -775,7 +876,7 @@ _sock_check_zcopy(struct spdk_sock *sock)
 	msgh.msg_controllen = sizeof(buf);
 
 	while (true) {
-		rc = recvmsg(vsock->fd, &msgh, MSG_ERRQUEUE);
+		rc = g_vma_ops.recvmsg(vsock->fd, &msgh, MSG_ERRQUEUE);
 
 		if (rc < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -1109,7 +1210,7 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 
 		SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
 	} else {
-		ret = readv(sock->fd, iovs, iovcnt);
+		ret = g_vma_ops.readv(sock->fd, iovs, iovcnt);
 	}
 
 	return ret;
@@ -1153,7 +1254,7 @@ vma_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 		return -1;
 	}
 
-	return writev(sock->fd, iov, iovcnt);
+	return g_vma_ops.writev(sock->fd, iov, iovcnt);
 }
 
 static inline size_t
@@ -1272,7 +1373,7 @@ _sock_flush_ext(struct spdk_sock *sock)
 	msg.msg_iov = iovs;
 	msg.msg_iovlen = iovcnt;
 
-	rc = sendmsg(vsock->fd, &msg, flags);
+	rc = g_vma_ops.sendmsg(vsock->fd, &msg, flags);
 	if (rc <= 0) {
 		if (errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && vsock->zcopy)) {
 			return 0;
@@ -1378,7 +1479,7 @@ vma_sock_set_recvlowat(struct spdk_sock *_sock, int nbytes)
 	assert(sock != NULL);
 
 	val = nbytes;
-	rc = setsockopt(sock->fd, SOL_SOCKET, SO_RCVLOWAT, &val, sizeof val);
+	rc = g_vma_ops.setsockopt(sock->fd, SOL_SOCKET, SO_RCVLOWAT, &val, sizeof val);
 	if (rc != 0) {
 		return -1;
 	}
@@ -1397,7 +1498,7 @@ vma_sock_is_ipv6(struct spdk_sock *_sock)
 
 	memset(&sa, 0, sizeof sa);
 	salen = sizeof sa;
-	rc = getsockname(sock->fd, (struct sockaddr *) &sa, &salen);
+	rc = g_vma_ops.getsockname(sock->fd, (struct sockaddr *) &sa, &salen);
 	if (rc != 0) {
 		SPDK_ERRLOG("getsockname() failed (errno=%d)\n", errno);
 		return false;
@@ -1418,7 +1519,7 @@ vma_sock_is_ipv4(struct spdk_sock *_sock)
 
 	memset(&sa, 0, sizeof sa);
 	salen = sizeof sa;
-	rc = getsockname(sock->fd, (struct sockaddr *) &sa, &salen);
+	rc = g_vma_ops.getsockname(sock->fd, (struct sockaddr *) &sa, &salen);
 	if (rc != 0) {
 		SPDK_ERRLOG("getsockname() failed (errno=%d)\n", errno);
 		return false;
@@ -1434,7 +1535,7 @@ vma_sock_is_connected(struct spdk_sock *_sock)
 	uint8_t byte;
 	int rc;
 
-	rc = recv(sock->fd, &byte, 1, MSG_PEEK);
+	rc = g_vma_ops.recv(sock->fd, &byte, 1, MSG_PEEK);
 	if (rc == 0) {
 		return false;
 	}
@@ -1457,7 +1558,7 @@ vma_sock_group_impl_create(void)
 	int fd;
 
 #if defined(SPDK_EPOLL)
-	fd = epoll_create1(0);
+	fd = g_vma_ops.epoll_create1(0);
 #elif defined(SPDK_KEVENT)
 	fd = kqueue();
 #endif
@@ -1468,7 +1569,7 @@ vma_sock_group_impl_create(void)
 	group_impl = calloc(1, sizeof(*group_impl));
 	if (group_impl == NULL) {
 		SPDK_ERRLOG("group_impl allocation failed\n");
-		close(fd);
+		g_vma_ops.close(fd);
 		return NULL;
 	}
 
@@ -1493,7 +1594,7 @@ vma_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group, struct spdk_so
 	event.events = EPOLLIN | EPOLLERR;
 	event.data.ptr = sock;
 
-	rc = epoll_ctl(group->fd, EPOLL_CTL_ADD, sock->fd, &event);
+	rc = g_vma_ops.epoll_ctl(group->fd, EPOLL_CTL_ADD, sock->fd, &event);
 #elif defined(SPDK_KEVENT)
 	struct kevent event;
 	struct timespec ts = {0};
@@ -1517,7 +1618,7 @@ vma_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct spdk
 	struct epoll_event event;
 
 	/* Event parameter is ignored but some old kernel version still require it. */
-	rc = epoll_ctl(group->fd, EPOLL_CTL_DEL, sock->fd, &event);
+	rc = g_vma_ops.epoll_ctl(group->fd, EPOLL_CTL_DEL, sock->fd, &event);
 #elif defined(SPDK_KEVENT)
 	struct kevent event;
 	struct timespec ts = {0};
@@ -1562,7 +1663,7 @@ vma_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	}
 
 #if defined(SPDK_EPOLL)
-	num_events = epoll_wait(group->fd, events, max_events, 0);
+	num_events = g_vma_ops.epoll_wait(group->fd, events, max_events, 0);
 #elif defined(SPDK_KEVENT)
 	num_events = kevent(group->fd, NULL, 0, events, max_events, &ts);
 #endif
@@ -1578,7 +1679,7 @@ vma_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		 * first socket in list and potentially reap incoming data.
 		 */
 		if (vsock->so_priority) {
-			recv(vsock->fd, &byte, 1, MSG_PEEK);
+			g_vma_ops.recv(vsock->fd, &byte, 1, MSG_PEEK);
 		}
 	}
 
@@ -1650,7 +1751,7 @@ vma_sock_group_impl_close(struct spdk_sock_group_impl *_group)
 	struct spdk_vma_sock_group_impl *group = __vma_group_impl(_group);
 	int rc;
 
-	rc = close(group->fd);
+	rc = g_vma_ops.close(group->fd);
 	free(group);
 	return rc;
 }
@@ -1862,7 +1963,8 @@ static struct spdk_net_impl g_vma_net_impl = {
 static void __attribute__((constructor)) 
  spdk_net_impl_register_vma(void)
 {
-	if (!vma_init()) {
+	if (vma_load() == 0 &&
+	    vma_init() == 0) {
 		spdk_net_impl_register(&g_vma_net_impl, DEFAULT_SOCK_PRIORITY);
 	}
 }
