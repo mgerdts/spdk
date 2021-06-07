@@ -169,6 +169,7 @@
 	spdk_nvme_cpl_get_status_string;
 
 	spdk_nvme_rdma_init_hooks;
+	spdk_nvme_tcp_poll_group_get_stats;
 
 	spdk_nvme_cuse_get_ctrlr_name;
 	spdk_nvme_cuse_get_ns_name;

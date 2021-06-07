@@ -34,6 +34,8 @@
 	spdk_sock_set_default_impl;
 	spdk_sock_write_config_json;
 	spdk_sock_get_caps;
+	spdk_sock_recv_zcopy;
+	spdk_sock_free_bufs;
 
 	# public functions in spdk/net.h
 	spdk_net_framework_register;
