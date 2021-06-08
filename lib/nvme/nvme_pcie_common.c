@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
  *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -1104,6 +1105,8 @@ nvme_pcie_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		}
 		total_completions += local_completions;
 	}
+
+	tgroup->group->busy = tgroup->group->busy || total_completions > 0;
 
 	return total_completions;
 }

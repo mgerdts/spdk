@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
  *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -521,6 +522,7 @@ struct spdk_nvme_poll_group {
 	void						*ctx;
 	struct spdk_nvme_accel_fn_table			accel_fn_table;
 	STAILQ_HEAD(, spdk_nvme_transport_poll_group)	tgroups;
+	bool						busy;
 };
 
 struct spdk_nvme_transport_poll_group {
