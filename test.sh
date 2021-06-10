@@ -9,12 +9,14 @@ if [ "1" == $SETUP ]; then
     TGT_HOST=${TGT_HOST:-spdk05.swx.labs.mlnx}
     TGT_ADDR=${TGT_ADDR:-1.1.5.1}
     TGT_PORT=${TGT_PORT:-4420}
+    SNAP_SSH=${SNAP_SSH:-ubuntu@snic}
     PERF_SSH=${PERF_SSH:-ubuntu@snic}
     PERF_BIN_PATH=${PERF_BIN_PATH:-/home/evgeniik/rx-zcopy/spdk/install-snic/bin}
     PERF_SPDK_PATH=${PERF_SPDK_PATH:-/home/evgeniik/rx-zcopy/spdk}
     LIBVMA=${LIBVMA:-/home/evgeniik/rx-zcopy/libxlio/install-snic/lib/libxlio.so}
     TGT_BIN_PATH=${TGT_BIN_PATH:-$PWD/install-$TGT_HOST/bin}
     TGT_SPDK_PATH=${TGT_SPDK_PATH:-$PWD}
+    PERF_ENV_OPTS="LD_LIBRARY_PATH=$PERF_SPDK_PATH/install-snic/lib:$PERF_SPDK_PATH/dpdk/build/lib"
 elif [ "2" == $SETUP ]; then
     # Test setup with x86 initiator
     TGT_HOST=${TGT_HOST:-spdk05.swx.labs.mlnx}
@@ -26,6 +28,22 @@ elif [ "2" == $SETUP ]; then
     LIBVMA=${LIBVMA:-$PWD/../libxlio/install-$HOSTNAME/lib/libxlio.so}
     TGT_BIN_PATH=${TGT_BIN_PATH:-$PWD/install-$TGT_HOST/bin}
     TGT_SPDK_PATH=${TGT_SPDK_PATH:-$PWD}
+elif [ "3" == $SETUP ]; then
+    # Test setup via SNAP
+    TGT_HOST=${TGT_HOST:-spdk05.swx.labs.mlnx}
+    TGT_ADDR=${TGT_ADDR:-1.1.5.1}
+    TGT_PORT=${TGT_PORT:-4420}
+    SNAP_SSH=${SNAP_SSH:-ubuntu@snic}
+    SNAP_BIN_PATH=${SNAP_BIN_PATH:-/home/evgeniik/rx-zcopy/nvmx/install-snic/bin}
+    SNAP_DPDK_PATH=${SNAP_DPDK_PATH:-/home/evgeniik/rx-zcopy/spdk/dpdk/build/lib}
+    SNIC_SPDK_PATH=${SNIC_SPDK_PATH:-/home/evgeniik/rx-zcopy/spdk}
+    PERF_SSH=${PERF_SSH:-}
+    PERF_BIN_PATH=${PERF_BIN_PATH:-$PWD/install-$HOSTNAME/bin}
+    PERF_SPDK_PATH=${PERF_SPDK_PATH:-$PWD}
+    LIBVMA=${LIBVMA:-/home/evgeniik/rx-zcopy/libxlio/install-snic/lib/libxlio.so}
+    TGT_BIN_PATH=${TGT_BIN_PATH:-$PWD/install-$TGT_HOST/bin}
+    TGT_SPDK_PATH=${TGT_SPDK_PATH:-$PWD}
+    SNAP_ENV_OPTS="LD_LIBRARY_PATH=$SNAP_DPDK_PATH NVME_SNAP_LOGFILE_PATH=stderr"
 else
     echo "Unknown setup"
     exit 1
@@ -53,6 +71,7 @@ xVMA_RX_POLL=0
 "
 
 TGT_MASK=${TGT_MASK:-0xFF}
+SNAP_MASK=${SNAP_MASK:-0xFF}
 PERF_TIME=${PERF_TIME:-60}
 PERF_MASKS=${PERF_MASKS:-0x10 0x30 0xF0 0xFF 0xFC}
 QUEUE_DEPTHS=${QUEUE_DEPTHS:-8 16 32 64 128}
@@ -99,13 +118,104 @@ function stop_tgt() {
     sleep 3
 }
 
-function config() {
+function config_tgt() {
     rpc_tgt nvmf_create_transport -t tcp -q 512
     rpc_tgt nvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode1
     rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $TGT_PORT nqn.2016-06.io.spdk:cnode1
     rpc_tgt bdev_null_create Null0 $BDEV_NULL_OPTS
     rpc_tgt nvmf_subsystem_add_ns -n 1 nqn.2016-06.io.spdk:cnode1 Null0
     rpc_tgt save_config
+}
+
+function start_snap_service() {
+    local SSH=""
+    if [ -z "$SNAP_SSH" ]; then
+	echo "SNAP_SSH is not set. Can not start SNAP"
+	return
+    fi
+
+    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+
+    $SSH sudo systemctl start mlnx_snap
+}
+
+function stop_snap_service() {
+    local SSH=""
+    if [ -z "$SNAP_SSH" ]; then
+	echo "SNAP_SSH is not set. Can not start SNAP"
+	return
+    fi
+
+    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+
+    $SSH sudo systemctl stop mlnx_snap
+}
+
+function start_snap() {
+    local SSH=""
+    if [ -z "$SNAP_SSH" ]; then
+	echo "SNAP_SSH is not set. Can not start SNAP"
+	return
+    fi
+
+    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+
+    $SSH sudo $VMA_OPTS SPDK_VMA_PATH=$LIBVMA \
+	 $SNAP_ENV_OPTS LD_LIBRARY_PATH=$SNAP_DPDK_PATH NVME_SNAP_LOGFILE_PATH=stderr \
+	 $SNAP_BIN_PATH/mlnx_snap_emu -m $SNAP_MASK -u --mem-size 1200 --wait-for-rpc \
+	 2>&1 | tee snap.log &
+    sleep 5
+}
+
+function stop_snap() {
+    local SSH=""
+    if [ -z "$SNAP_SSH" ]; then
+	echo "SNAP_SSH is not set. Can not start SNAP"
+	return
+    fi
+
+    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+
+    $SSH sudo spdk_rpc.py spdk_kill_instance 15
+    sleep 3
+}
+
+function snap_enable_debug() {
+    local SSH=""
+    if [ -z "$SNAP_SSH" ]; then
+	echo "SNAP_SSH is not set. Can not start SNAP"
+	return
+    fi
+
+    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag bdev
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag bdev_nvme
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag sock
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag vma
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_level DEBUG
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_print_level DEBUG
+}
+
+function config_snap() {
+    local SSH=""
+    if [ -z "$SNAP_SSH" ]; then
+	echo "SNAP_SSH is not set. Can not start SNAP"
+	return
+    fi
+
+    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+
+    #snap_enable_debug
+
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_set_default_impl -i $SOCK_IMPL
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send $SOCK_EXTRA_OPTS
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py framework_start_init
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_set_options -k 0
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t TCP -f ipv4 -a 1.1.5.1 -s 4420 -n nqn.2016-06.io.spdk:cnode1
+    $SSH sudo snap_rpc.py subsystem_nvme_create nqn.2020-12.mlnx.snap Mellanox_NVMe_SNAP \"Mellanox NVMe SNAP Controller\"
+    $SSH sudo snap_rpc.py controller_nvme_create nqn.2020-12.mlnx.snap mlx5_0 --pf_id 0 -c /etc/mlnx_snap/mlnx_snap.json
+    $SSH sudo snap_rpc.py controller_nvme_namespace_attach -c NvmeEmu0pf0 spdk Nvme0n1 1
 }
 
 function run_nvmeperf() {
@@ -115,7 +225,7 @@ function run_nvmeperf() {
 
     if [ -n "$PERF_SSH" ]; then
 	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
-	$SSH sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_BIN_PATH/spdk_nvme_perf \
+	$SSH sudo $PERF_ENV_OPTS $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_BIN_PATH/spdk_nvme_perf \
 	     -S $SOCK_IMPL -r \"trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT\" \
 	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
@@ -160,7 +270,7 @@ function run_bdevperf() {
 	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
     fi
 
-    $SSH sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf \
+    $SSH sudo $PERF_ENV_OPTS $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf \
 	 -r /var/tmp/bdevperf.sock --wait-for-rpc -m $PERF_MASK -C \
 	 -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	 $BDEV_PERF_EXTRA_OPTS 2>&1 | tee perf.log &
@@ -196,7 +306,7 @@ function report_bdevperf() {
 
 function basic_test_nvme() {
     start_tgt
-    config
+    config_tgt
     for PERF_MASK in $PERF_MASKS; do
 	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
 	    for IO_SIZE in $IO_SIZES; do
@@ -211,7 +321,10 @@ function basic_test_nvme() {
     stop_tgt
 }
 
-function basic_test_nvme_snap() {
+function basic_test_nvme_snap_service() {
+    start_tgt
+    config_tgt
+    start_snap_service
     for PERF_MASK in $PERF_MASKS; do
 	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
 	    for IO_SIZE in $IO_SIZES; do
@@ -223,11 +336,33 @@ function basic_test_nvme_snap() {
 	    done
 	done
     done
+    stop_snap_service
+    stop_tgt
+}
+
+function basic_test_nvme_snap() {
+    start_tgt
+    config_tgt
+    start_snap
+    config_snap
+    for PERF_MASK in $PERF_MASKS; do
+	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
+	    for IO_SIZE in $IO_SIZES; do
+		for REP in $(seq $REPEAT); do
+		    run_nvmeperf_snap # > /dev/null 2>&1
+		    wait_nvmeperf
+		    report_nvmeperf
+		done
+	    done
+	done
+    done
+    stop_snap
+    stop_tgt
 }
 
 function basic_test_bdev() {
     start_tgt
-    config
+    config_tgt
     for PERF_MASK in $PERF_MASKS; do
 	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
 	    for IO_SIZE in $IO_SIZES; do
@@ -312,9 +447,34 @@ function test14() {
     SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-H -I -e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
 }
 
-# Test with spdk_nvme_perf via SNAP
-function test_snap() {
-    ADDR=0000:60:00.2 basic_test_nvme_snap
+# Test with spdk_nvme_perf via SNAP service
+function test_snap_service() {
+    ADDR=0000:60:00.2 basic_test_nvme_snap_service
+}
+
+# Test with spdk_nvme_perf via custom SNAP with zcopy and verbs DMA
+function test_snap_1() {
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=0" SOCK_IMPL=vma ADDR=0000:60:00.2 basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP without zcopy and verbs DMA
+function test_snap_2() {
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=0" SOCK_IMPL=vma ADDR=0000:60:00.2 basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP with zcopy and DV DMA
+function test_snap_3() {
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=1" SOCK_IMPL=vma ADDR=0000:60:00.2 basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP without zcopy and DV DMA
+function test_snap_4() {
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=1" SOCK_IMPL=vma ADDR=0000:60:00.2 basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP without zcopy and GGA DMA
+function test_snap_6() {
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=2" SOCK_IMPL=vma ADDR=0000:60:00.2 basic_test_nvme_snap
 }
 
 if [ -n "$1" ]; then
@@ -336,7 +496,7 @@ else
 	   test14"
 fi
 
-rm -rf rpc.log rpc_tgt.log perf.log tgt.log report.log
+rm -rf rpc.log rpc_tgt.log perf.log tgt.log snap.log report.log
 echo "| Test | Perf CPU | TGT CPU | IO size | QD | IOPS | BW | Lat |" >> report.log
 echo "Running tests: $tests"
 for t in $tests; do
