@@ -2590,6 +2590,22 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=blobfs_set_cache_size)
 
     # sock
+    def sock_impl_clear_stats(args):
+        print_json(rpc.sock.sock_impl_clear_stats(args.client,
+                                                  impl_name=args.impl))
+
+    p = subparsers.add_parser('sock_impl_clear_stats', help='Clear statistics of socket layer implementation')
+    p.add_argument('-i', '--impl', help='Socket implementation name, e.g. posix', required=True)
+    p.set_defaults(func=sock_impl_clear_stats)
+
+    def sock_impl_get_stats(args):
+        print_json(rpc.sock.sock_impl_get_stats(args.client,
+                                           impl_name=args.impl))
+
+    p = subparsers.add_parser('sock_impl_get_stats', help='Get statistics of socket layer implementation')
+    p.add_argument('-i', '--impl', help='Socket implementation name, e.g. posix', required=True)
+    p.set_defaults(func=sock_impl_get_stats)
+
     def sock_impl_get_options(args):
         print_json(rpc.sock.sock_impl_get_options(args.client,
                                                   impl_name=args.impl))

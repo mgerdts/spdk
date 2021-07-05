@@ -75,6 +75,7 @@ struct spdk_sock {
 struct spdk_sock_group {
 	STAILQ_HEAD(, spdk_sock_group_impl)	group_impls;
 	void					*ctx;
+	STAILQ_ENTRY(spdk_sock_group)		link;
 };
 
 struct spdk_sock_group_impl {
@@ -131,6 +132,8 @@ struct spdk_net_impl {
 
 	ssize_t (*recv_zcopy)(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf);
 	int (*free_bufs)(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
+	void (*clear_stats)(struct spdk_sock_group_impl *group_impl);
+	void (*get_stats)(struct spdk_json_write_ctx *w, struct spdk_sock_group_impl *group_impl);
 };
 
 void spdk_net_impl_register(struct spdk_net_impl *impl, int priority);

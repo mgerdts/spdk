@@ -1,3 +1,27 @@
+def sock_impl_clear_stats(client, impl_name=None):
+    """Clear statistics of socket layer implementation
+
+    Args:
+        impl_name: name of socket implementation, e.g. posix
+    """
+    params = {}
+
+    params['impl_name'] = impl_name
+
+    return client.call('sock_impl_clear_stats', params)
+
+def sock_impl_get_stats(client, impl_name=None):
+    """Get statistics of socket layer implementation
+
+    Args:
+        impl_name: name of socket implementation, e.g. posix
+    """
+    params = {}
+
+    params['impl_name'] = impl_name
+
+    return client.call('sock_impl_get_stats', params)
+
 def sock_impl_get_options(client, impl_name=None):
     """Get parameters for the socket layer implementation.
 

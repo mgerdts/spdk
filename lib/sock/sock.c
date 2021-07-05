@@ -44,6 +44,8 @@
 
 static STAILQ_HEAD(, spdk_net_impl) g_net_impls = STAILQ_HEAD_INITIALIZER(g_net_impls);
 static struct spdk_net_impl *g_default_impl;
+static STAILQ_HEAD(, spdk_sock_group) g_sock_groups = STAILQ_HEAD_INITIALIZER(g_sock_groups);
+static pthread_mutex_t g_sock_groups_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct spdk_sock_placement_id_entry {
 	int placement_id;
@@ -525,6 +527,10 @@ spdk_sock_group_create(void *ctx)
 		return NULL;
 	}
 
+	pthread_mutex_lock(&g_sock_groups_mutex);
+	STAILQ_INSERT_TAIL(&g_sock_groups, group, link);
+	pthread_mutex_unlock(&g_sock_groups_mutex);
+
 	STAILQ_INIT(&group->group_impls);
 
 	STAILQ_FOREACH_FROM(impl, &g_net_impls, link) {
@@ -717,6 +723,11 @@ spdk_sock_group_close(struct spdk_sock_group **group)
 		}
 	}
 
+	/* remove group before free it */
+	pthread_mutex_lock(&g_sock_groups_mutex);
+	STAILQ_REMOVE(&g_sock_groups, *group, spdk_sock_group, link);
+	pthread_mutex_unlock(&g_sock_groups_mutex);
+
 	free(*group);
 	*group = NULL;
 
@@ -835,6 +846,87 @@ spdk_sock_write_config_json(struct spdk_json_write_ctx *w)
 	}
 
 	spdk_json_write_array_end(w);
+}
+
+int
+spdk_sock_clear_stats(const char *impl_name)
+{
+	struct spdk_sock_group_impl *group_impl = NULL;
+	struct spdk_sock_group *group = NULL;
+	struct spdk_net_impl *impl;
+
+	if (!impl_name) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	impl = sock_get_impl_by_name(impl_name);
+	if (!impl) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (!impl->clear_stats) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	pthread_mutex_lock(&g_sock_groups_mutex);
+	STAILQ_FOREACH_FROM(group, &g_sock_groups, link) {
+		STAILQ_FOREACH_FROM(group_impl, &group->group_impls, link) {
+			if (impl == group_impl->net_impl) {
+				group_impl->net_impl->clear_stats(group_impl);
+			}
+		}
+	}
+	pthread_mutex_unlock(&g_sock_groups_mutex);
+
+	return 0;
+}
+
+int
+spdk_sock_get_stats(struct spdk_jsonrpc_request *request, const char *impl_name)
+{
+	struct spdk_sock_group_impl *group_impl = NULL;
+	struct spdk_sock_group *group = NULL;
+	struct spdk_net_impl *impl;
+	struct spdk_json_write_ctx *w;
+
+	if (!impl_name) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	impl = sock_get_impl_by_name(impl_name);
+	if (!impl) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (!impl->get_stats) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_array_begin(w, "sock_groups");
+
+	pthread_mutex_lock(&g_sock_groups_mutex);
+	STAILQ_FOREACH_FROM(group, &g_sock_groups, link) {
+		STAILQ_FOREACH_FROM(group_impl, &group->group_impls, link) {
+			if (impl == group_impl->net_impl) {
+				group_impl->net_impl->get_stats(w, group_impl);
+			}
+		}
+	}
+	pthread_mutex_unlock(&g_sock_groups_mutex);
+
+	spdk_json_write_array_end(w);
+	spdk_json_write_object_end(w);
+	spdk_jsonrpc_end_result(request, w);
+
+	return 0;
 }
 
 void
