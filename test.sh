@@ -228,7 +228,11 @@ function config_snap() {
     #snap_enable_debug
 
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_set_default_impl -i $SOCK_IMPL
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send $SOCK_EXTRA_OPTS
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL \
+	 --enable-zerocopy-recv \
+	 --disable-zerocopy-send \
+	 --disable-zerocopy-send-client \
+	 $SOCK_EXTRA_OPTS
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py framework_start_init
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_set_options -k 0
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t TCP -f ipv4 -a $TGT_ADDR -s 4420 -n nqn.2016-06.io.spdk:cnode1
@@ -244,12 +248,12 @@ function run_nvmeperf() {
 
     if [ -n "$PERF_SSH" ]; then
 	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
-	$SSH sudo $PERF_ENV_OPTS $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_BIN_PATH/spdk_nvme_perf \
+	$SSH sudo $PERF_ENV_OPTS $VMA_OPTS $PERF_BIN_PATH/spdk_nvme_perf \
 	     -S $SOCK_IMPL -r \"trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT\" \
 	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     else
-	sudo $VMA_OPTS LD_PRELOAD=$LIBVMA $PERF_BIN_PATH/spdk_nvme_perf \
+	sudo $PERF_ENV_OPTS $VMA_OPTS $PERF_BIN_PATH/spdk_nvme_perf \
 	     -S $SOCK_IMPL -r "trtype:tcp adrfam:ipv4 traddr:$ADDR trsvcid:$PORT" \
 	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
@@ -289,7 +293,7 @@ function run_bdevperf() {
 	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
     fi
 
-    $SSH sudo $PERF_ENV_OPTS $VMA_OPTS SPDK_VMA_PATH=$LIBVMA $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf \
+    $SSH sudo $PERF_ENV_OPTS $VMA_OPTS $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf \
 	 -r /var/tmp/bdevperf.sock --wait-for-rpc -m $PERF_MASK -C \
 	 -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	 $BDEV_PERF_EXTRA_OPTS 2>&1 | tee perf.log &
@@ -297,7 +301,11 @@ function run_bdevperf() {
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
     sleep 3
     rpc_perf sock_set_default_impl -i $SOCK_IMPL
-    rpc_perf sock_impl_set_options -i $SOCK_IMPL --enable-zerocopy-recv --disable-zerocopy-send $SOCK_EXTRA_OPTS
+    rpc_perf sock_impl_set_options -i $SOCK_IMPL \
+	     --enable-zerocopy-recv \
+	     --disable-zerocopy-send \
+	     --disable-zerocopy-send-client \
+	     $SOCK_EXTRA_OPTS
     rpc_perf framework_start_init
     rpc_perf bdev_nvme_set_options -k 0
     rpc_perf bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t tcp -f ipv4 -a $ADDR -s $PORT \
@@ -398,72 +406,118 @@ function basic_test_bdev() {
 
 # Test with spdk_nvme_perf VMA non zcopy
 function test1() {
-    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma \
+	     NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with bdevperf VMA non zcopy
 function test2() {
-    SOCK_IMPL=vma basic_test_bdev
+    SOCK_IMPL=vma \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_bdev
 }
 
 # Test with spdk_nvme_perf VMA zcopy
 function test3() {
-    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma \
+	     NVME_PERF_EXTRA_OPTS="-n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with bdevperf VMA zcopy
 function test4() {
-    SOCK_IMPL=vma BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" basic_test_bdev
+    SOCK_IMPL=vma \
+	     BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_bdev
 }
 
 # Test with spdk_nvme_perf POSIX-VMA non zcopy
 function test5() {
-    SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-z posix -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=posix \
+	     NVME_PERF_EXTRA_OPTS="-z posix -P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="LD_PRELOAD=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with bdevperf POSIX-VMA non zcopy
 function test6() {
-    SOCK_IMPL=posix SOCK_EXTRA_OPTS="--disable-recv-pipe" basic_test_bdev
+    SOCK_IMPL=posix \
+	     SOCK_EXTRA_OPTS="--disable-recv-pipe" \
+	     PERF_ENV_OPTS="LD_PRELOAD=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_bdev
 }
 
 # Test with spdk_nvme_perf POSIX-Kernel non zcopy
 function test7() {
-    LIBVMA= SOCK_IMPL=posix NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    LIBVMA= \
+	  SOCK_IMPL=posix \
+	  NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" \
+	  basic_test_nvme
 }
 
 # Test with bdevperf POSIX-Kernel non zcopy
 function test8() {
-    LIBVMA= SOCK_IMPL=posix basic_test_bdev
+    LIBVMA= \
+	  SOCK_IMPL=posix \
+	  basic_test_bdev
 }
 
 # Test with PI + spdk_nvme_perf VMA non zcopy + PI
 function test9() {
-    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma \
+	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
+	     NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with bdevperf VMA non zcopy + PI
 function test10() {
-    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" basic_test_bdev
+    SOCK_IMPL=vma \
+	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
+	     BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_bdev
 }
 
 # Test with spdk_nvme_perf VMA zcopy + PI
 function test11() {
-    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma \
+	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
+	     NVME_PERF_EXTRA_OPTS="-e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with bdevperf VMA zcopy + PI
 function test12() {
-    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" basic_test_bdev
+    SOCK_IMPL=vma \
+	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
+	     BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" \
+	     BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_bdev
 }
 
 # Test with spdk_nvme_perf VMA zcopy + digest
 function test13() {
-    SOCK_IMPL=vma NVME_PERF_EXTRA_OPTS="-H -I -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma \
+	     NVME_PERF_EXTRA_OPTS="-H -I -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with spdk_nvme_perf VMA zcopy + PI + digest
 function test14() {
-    SOCK_IMPL=vma BDEV_NULL_OPTS="8192 520 -m 8 -t 1" NVME_PERF_EXTRA_OPTS="-H -I -e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" basic_test_nvme
+    SOCK_IMPL=vma \
+	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
+	     NVME_PERF_EXTRA_OPTS="-H -I -e PRACT=0,PRCHK=GUARD|REFTAG -n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" \
+	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
+	     basic_test_nvme
 }
 
 # Test with spdk_nvme_perf via SNAP service
