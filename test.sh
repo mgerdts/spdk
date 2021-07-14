@@ -407,7 +407,7 @@ function basic_test_bdev() {
 # Test with spdk_nvme_perf VMA non zcopy
 function test1() {
     SOCK_IMPL=vma \
-	     NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" \
+	     NVME_PERF_EXTRA_OPTS="-z vma -P 2 $NVME_PERF_EXTRA_OPTS" \
 	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
 	     basic_test_nvme
 }
@@ -422,7 +422,7 @@ function test2() {
 # Test with spdk_nvme_perf VMA zcopy
 function test3() {
     SOCK_IMPL=vma \
-	     NVME_PERF_EXTRA_OPTS="-n -Z vma -P 2 $NVME_PERF_EXTRA_OPTS" \
+	     NVME_PERF_EXTRA_OPTS="-n -z vma --enable-zcopy-recv vma -P 2 $NVME_PERF_EXTRA_OPTS" \
 	     PERF_ENV_OPTS="SPDK_VMA_PATH=$LIBVMA $PERF_ENV_OPTS" \
 	     basic_test_nvme
 }

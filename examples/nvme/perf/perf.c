@@ -314,7 +314,7 @@ static inline void
 task_complete(struct perf_task *task);
 
 static void
-perf_set_sock_zcopy(const char *impl_name, bool enable)
+perf_set_sock_zcopy_send(const char *impl_name, bool enable)
 {
 	struct spdk_sock_impl_opts sock_opts = {};
 	size_t opts_size = sizeof(sock_opts);
@@ -339,6 +339,37 @@ perf_set_sock_zcopy(const char *impl_name, bool enable)
 
 	sock_opts.enable_zerocopy_send = enable;
 	sock_opts.enable_zerocopy_send_client = enable;
+
+	if (spdk_sock_impl_set_opts(impl_name, &sock_opts, opts_size)) {
+		fprintf(stderr, "Failed to %s zcopy send for sock impl %s: error %d (%s)\n",
+			enable ? "enable" : "disable", impl_name, errno, strerror(errno));
+	}
+}
+
+static void
+perf_set_sock_zcopy_recv(const char *impl_name, bool enable)
+{
+	struct spdk_sock_impl_opts sock_opts = {};
+	size_t opts_size = sizeof(sock_opts);
+	int rc;
+
+	rc = spdk_sock_impl_get_opts(impl_name, &sock_opts, &opts_size);
+	if (rc != 0) {
+		if (errno == EINVAL) {
+			fprintf(stderr, "Unknown sock impl %s\n", impl_name);
+		} else {
+			fprintf(stderr, "Failed to get opts for sock impl %s: error %d (%s)\n", impl_name, errno,
+				strerror(errno));
+		}
+		return;
+	}
+
+	if (opts_size != sizeof(sock_opts)) {
+		fprintf(stderr, "Warning: sock_opts size mismatch. Expected %zu, received %zu\n",
+			sizeof(sock_opts), opts_size);
+		opts_size = sizeof(sock_opts);
+	}
+
 	sock_opts.enable_zerocopy_recv = enable;
 
 	if (spdk_sock_impl_set_opts(impl_name, &sock_opts, opts_size)) {
@@ -1826,8 +1857,10 @@ static void usage(char *program_name)
 	printf("\t");
 	spdk_log_usage(stdout, "-T");
 	printf("\t[-V, --enable-vmd enable VMD enumeration]\n");
-	printf("\t[-z, --disable-zcopy <impl> disable zero copy send for the given sock implementation. Default for posix impl]\n");
-	printf("\t[-Z, --enable-zcopy <impl> enable zero copy send for the given sock implementation]\n");
+	printf("\t[-z, --disable-zcopy-send <impl> disable zero copy send for the given sock implementation. Default for posix impl]\n");
+	printf("\t[-Z, --enable-zcopy-send <impl> enable zero copy send for the given sock implementation]\n");
+	printf("\t[--disable-zcopy-recv <impl> disable zero copy receive for the given sock implementation. Default for posix impl]\n");
+	printf("\t[--enable-zcopy-recv <impl> enable zero copy receive for the given sock implementation]\n");
 	printf("\t[-n, --enable-nvme-zcopy enable use of nvme zero copy]\n");
 	printf("\t[-A, --buffer-alignment IO buffer alignment. Must be power of 2 and not less than cache line (%u)]\n",
 	       SPDK_CACHE_LINE_SIZE);
@@ -2294,8 +2327,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"time",			required_argument,	NULL, PERF_TIME},
 #define PERF_IO_PATTERN	'w'
 	{"io-pattern",			required_argument,	NULL, PERF_IO_PATTERN},
-#define PERF_DISABLE_ZCOPY	'z'
-	{"disable-zcopy",			required_argument,	NULL, PERF_DISABLE_ZCOPY},
+#define PERF_DISABLE_ZCOPY_SEND	'z'
+	{"disable-zcopy-send",			required_argument,	NULL, PERF_DISABLE_ZCOPY_SEND},
 #define PERF_BUFFER_ALIGNMENT	'A'
 	{"buffer-alignment",			required_argument,	NULL, PERF_BUFFER_ALIGNMENT},
 #define PERF_MAX_COMPLETIONS_PER_POLL	'C'
@@ -2330,12 +2363,16 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"num-unused-qpairs", required_argument, NULL, PERF_NUM_UNUSED_IO_QPAIRS},
 #define PERF_ENABLE_VMD	'V'
 	{"enable-vmd", no_argument, NULL, PERF_ENABLE_VMD},
-#define PERF_ENABLE_ZCOPY	'Z'
-	{"enable-zcopy",			required_argument,	NULL, PERF_ENABLE_ZCOPY},
+#define PERF_ENABLE_ZCOPY_SEND	'Z'
+	{"enable-zcopy-send",			required_argument,	NULL, PERF_ENABLE_ZCOPY_SEND},
 #define PERF_TRANSPORT_STATISTICS	257
 	{"transport-stats", no_argument, NULL, PERF_TRANSPORT_STATISTICS},
 #define PERF_IOVA_MODE		258
 	{"iova-mode", required_argument, NULL, PERF_IOVA_MODE},
+#define PERF_DISABLE_ZCOPY_RECV	259
+	{"disable-zcopy-recv",			required_argument,	NULL, PERF_DISABLE_ZCOPY_RECV},
+#define PERF_ENABLE_ZCOPY_RECV	260
+	{"enable-zcopy-recv",			required_argument,	NULL, PERF_ENABLE_ZCOPY_RECV},
 	/* Should be the last element */
 	{0, 0, 0, 0}
 };
@@ -2503,11 +2540,17 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 		case PERF_ENABLE_VMD:
 			g_vmd = true;
 			break;
-		case PERF_DISABLE_ZCOPY:
-			perf_set_sock_zcopy(optarg, false);
+		case PERF_DISABLE_ZCOPY_SEND:
+			perf_set_sock_zcopy_send(optarg, false);
 			break;
-		case PERF_ENABLE_ZCOPY:
-			perf_set_sock_zcopy(optarg, true);
+		case PERF_ENABLE_ZCOPY_SEND:
+			perf_set_sock_zcopy_send(optarg, true);
+			break;
+		case PERF_DISABLE_ZCOPY_RECV:
+			perf_set_sock_zcopy_recv(optarg, false);
+			break;
+		case PERF_ENABLE_ZCOPY_RECV:
+			perf_set_sock_zcopy_recv(optarg, true);
 			break;
 		case PERF_ENABLE_NVME_ZCOPY:
 			g_zcopy = true;
