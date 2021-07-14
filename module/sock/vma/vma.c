@@ -1428,7 +1428,6 @@ _sock_flush_ext(struct spdk_sock *sock)
 		if (!vsock->zcopy) {
 			/* The sendmsg syscall above isn't currently asynchronous,
 			* so it's already done. */
-			assert(!vsock->pd);
 			retval = spdk_sock_request_put(sock, req, 0);
 			if (retval) {
 				break;
