@@ -127,7 +127,7 @@ function start_tgt() {
     if [ -n "$TGT_LIBVMA" ]; then
 	$SSH sudo $VMA_OPTS LD_PRELOAD=$TGT_LIBVMA $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
     else
-	$SSH sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
+	$SSH sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK --wait-for-rpc 2>&1 | tee tgt.log > /dev/null &
     fi
     sleep 7
 }
@@ -138,7 +138,9 @@ function stop_tgt() {
 }
 
 function config_tgt() {
-    rpc_tgt nvmf_create_transport -t tcp -q 512
+    #rpc_tgt sock_impl_set_options -i posix --enable-zerocopy-send
+    rpc_tgt framework_start_init
+    rpc_tgt nvmf_create_transport -t tcp -n 2048 -b 128
     rpc_tgt nvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode1
     rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $TGT_PORT nqn.2016-06.io.spdk:cnode1
     rpc_tgt bdev_null_create Null0 $BDEV_NULL_OPTS
@@ -179,7 +181,7 @@ function start_snap() {
 
     SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
 
-    $SSH sudo $VMA_OPTS SPDK_VMA_PATH=$LIBVMA \
+    $SSH sudo $VMA_OPTS \
 	 $SNAP_ENV_OPTS LD_LIBRARY_PATH=$SNAP_DPDK_PATH NVME_SNAP_LOGFILE_PATH=stderr \
 	 $SNAP_BIN_PATH/mlnx_snap_emu -m $SNAP_MASK -u --mem-size 1200 --wait-for-rpc \
 	 2>&1 | tee snap.log &
@@ -228,11 +230,7 @@ function config_snap() {
     #snap_enable_debug
 
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_set_default_impl -i $SOCK_IMPL
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL \
-	 --enable-zerocopy-recv \
-	 --disable-zerocopy-send \
-	 --disable-zerocopy-send-client \
-	 $SOCK_EXTRA_OPTS
+    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL $SOCK_EXTRA_OPTS
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py framework_start_init
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_set_options -k 0
     $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t TCP -f ipv4 -a $TGT_ADDR -s 4420 -n nqn.2016-06.io.spdk:cnode1
@@ -269,7 +267,7 @@ function run_nvmeperf_snap() {
     sudo $PERF_BIN_PATH/spdk_nvme_perf \
 	 -r "trtype:pcie traddr:$ADDR" \
 	 -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
-	 $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
+	 -A 4096 $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     PERF_PID=$!
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
 }
@@ -527,31 +525,88 @@ function test_snap_service() {
 
 # Test with spdk_nvme_perf via custom SNAP with zcopy and verbs DMA
 function test_snap_1() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=0" SOCK_IMPL=vma basic_test_nvme_snap
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=0" \
+		 SOCK_IMPL=vma \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --disable-zerocopy-send --disable-zerocopy-send-client" \
+		 basic_test_nvme_snap
 }
 
 # Test with spdk_nvme_perf via custom SNAP without zcopy and verbs DMA
 function test_snap_2() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=0" SOCK_IMPL=vma basic_test_nvme_snap
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=0" \
+		 SOCK_IMPL=vma \
+		 SOCK_EXTRA_OPTS="--disable-zerocopy-recv --disable-zerocopy-send --disable-zerocopy-send-client" \
+		 basic_test_nvme_snap
 }
 
 # Test with spdk_nvme_perf via custom SNAP with zcopy and DV DMA
 function test_snap_3() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=1" SOCK_IMPL=vma basic_test_nvme_snap
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=1" \
+		 SOCK_IMPL=vma \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --disable-zerocopy-send --disable-zerocopy-send-client" \
+		 basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP with zcopy and GGA DMA
+function test_snap_3_tx() {
+    RW=randwrite \
+      SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=2" \
+      SOCK_IMPL=vma \
+      SOCK_EXTRA_OPTS="--disable-zerocopy-recv --enable-zerocopy-send --enable-zerocopy-send-client" \
+      basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP with zcopy and GGA DMA
+function test_snap_3_mix() {
+    RW=randrw \
+      NVME_PERF_EXTRA_OPTS="$NVME_PERF_EXTRA_OPTS -M 50" \
+      SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=1 SNAP_DMA_Q_MODE=1" \
+      SOCK_IMPL=vma \
+      SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send --enable-zerocopy-send-client" \
+      basic_test_nvme_snap
 }
 
 # Test with spdk_nvme_perf via custom SNAP without zcopy and DV DMA
 function test_snap_4() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=1" SOCK_IMPL=vma basic_test_nvme_snap
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=1" \
+		 SOCK_IMPL=vma \
+		 SOCK_EXTRA_OPTS="--disable-zerocopy-recv --disable-zerocopy-send --disable-zerocopy-send-client" \
+		 basic_test_nvme_snap
 }
 
 # Test with spdk_nvme_perf via custom SNAP, no zcopy, DV DMA, posix VMA socket impl
 function test_snap_5() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBVMA SPDK_VMA_PATH= NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=1" SOCK_IMPL=posix basic_test_nvme_snap
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=1" \
+		 SOCK_IMPL=posix \
+		 SOCK_EXTRA_OPTS="--disable-zerocopy-send --disable-zerocopy-send-client --disable-recv-pipe" \
+		 basic_test_nvme_snap
 }
+
+# Test with spdk_nvme_perf via custom SNAP, no zcopy, GGA DMA, posix VMA socket impl
+function test_snap_5_tx() {
+    RW=randwrite \
+      SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=2" \
+      SOCK_IMPL=posix \
+      SOCK_EXTRA_OPTS="--enable-zerocopy-send --enable-zerocopy-send-client --disable-recv-pipe" \
+      basic_test_nvme_snap
+}
+
+# Test with spdk_nvme_perf via custom SNAP, no zcopy, GGA DMA, posix VMA socket impl
+function test_snap_5_mix() {
+    RW=randrw \
+      NVME_PERF_EXTRA_OPTS="$NVME_PERF_EXTRA_OPTS -M 50" \
+      SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=1" \
+      SOCK_IMPL=posix \
+      SOCK_EXTRA_OPTS="--enable-zerocopy-send --enable-zerocopy-send-client --disable-recv-pipe" \
+      basic_test_nvme_snap
+}
+
 # Test with spdk_nvme_perf via custom SNAP without zcopy and GGA DMA
 function test_snap_6() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=2" SOCK_IMPL=vma basic_test_nvme_snap
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_VMA_PATH=$LIBVMA NVME_SNAP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=2" \
+		 SOCK_IMPL=vma \
+		 SOCK_EXTRA_OPTS="--disable-zerocopy-recv --disable-zerocopy-send --disable-zerocopy-send-client" \
+		 basic_test_nvme_snap
 }
 
 if [ -n "$1" ]; then
