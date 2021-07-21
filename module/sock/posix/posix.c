@@ -78,9 +78,28 @@ struct spdk_posix_sock {
 
 TAILQ_HEAD(spdk_pending_events_list, spdk_posix_sock);
 
+struct spdk_posix_stat {
+	uint64_t succ_flushs;
+	uint64_t total_flushs;
+	uint64_t flushed_iovcnt;
+	uint64_t sent_bytes;
+	uint64_t writev_async;
+	uint64_t readv;
+	uint64_t readv_bytes;
+	uint64_t recv_from_pipe;
+	uint64_t recv_from_pipe_bytes;
+	uint64_t writev;
+	uint64_t writev_bytes;
+	uint64_t poll_events;
+	uint64_t busy_polls;
+	uint64_t total_polls;
+	int max_flushed_iovcnt;
+};
+
 struct spdk_posix_sock_group_impl {
 	struct spdk_sock_group_impl	base;
 	int				fd;
+	struct spdk_posix_stat		stats;
 	struct spdk_pending_events_list	pending_events;
 	int				placement_id;
 };
@@ -761,6 +780,7 @@ static int
 _sock_flush(struct spdk_sock *sock)
 {
 	struct spdk_posix_sock *psock = __posix_sock(sock);
+	struct spdk_posix_sock_group_impl *group = __posix_group_impl(sock->group_impl);
 	struct msghdr msg = {};
 	int flags;
 	struct iovec iovs[IOV_BATCH_SIZE];
@@ -771,6 +791,10 @@ _sock_flush(struct spdk_sock *sock)
 	ssize_t rc;
 	unsigned int offset;
 	size_t len;
+
+	if (group) {
+		group->stats.total_flushs++;
+	}
 
 	/* Can't flush from within a callback or we end up with recursive calls */
 	if (sock->cb_cnt > 0) {
@@ -808,6 +832,15 @@ _sock_flush(struct spdk_sock *sock)
 		psock->sendmsg_idx = 1;
 	} else {
 		psock->sendmsg_idx++;
+	}
+
+	if (group) {
+		if (spdk_unlikely(group->stats.max_flushed_iovcnt < iovcnt)) {
+			group->stats.max_flushed_iovcnt = iovcnt;
+		}
+		group->stats.succ_flushs++;
+		group->stats.flushed_iovcnt += iovcnt;
+		group->stats.sent_bytes += rc;
 	}
 
 	/* Consume the requests that were actually written */
@@ -883,7 +916,7 @@ posix_sock_recv_from_pipe(struct spdk_posix_sock *sock, struct iovec *diov, int 
 	struct iovec siov[2];
 	int sbytes;
 	ssize_t bytes;
-	struct spdk_posix_sock_group_impl *group;
+	struct spdk_posix_sock_group_impl *group = __posix_group_impl(sock->base.group_impl);
 
 	sbytes = spdk_pipe_reader_get_buffer(sock->recv_pipe, sock->recv_buf_sz, siov);
 	if (sbytes < 0) {
@@ -908,9 +941,13 @@ posix_sock_recv_from_pipe(struct spdk_posix_sock *sock, struct iovec *diov, int 
 	 * in the kernel to receive, but this will be handled on the next poll call when we get the same EPOLLIN
 	 * event again. */
 	if (sock->base.group_impl && spdk_pipe_reader_bytes_available(sock->recv_pipe) == 0) {
-		group = __posix_group_impl(sock->base.group_impl);
 		TAILQ_REMOVE(&group->pending_events, sock, link);
 		sock->pending_events = false;
+	}
+
+	if (group && bytes > 0) {
+		group->stats.recv_from_pipe++;
+		group->stats.recv_from_pipe_bytes += bytes;
 	}
 
 	return bytes;
@@ -928,6 +965,11 @@ posix_sock_read(struct spdk_posix_sock *sock)
 	if (bytes > 0) {
 		bytes = readv(sock->fd, iov, 2);
 		if (bytes > 0) {
+			group = __posix_group_impl(sock->base.group_impl);
+			if (group) {
+				group->stats.readv++;
+				group->stats.readv_bytes += bytes;
+			}
 			spdk_pipe_writer_advance(sock->recv_pipe, bytes);
 
 			/* For normal operation, this function is called in response to an EPOLLIN
@@ -940,7 +982,6 @@ posix_sock_read(struct spdk_posix_sock *sock)
 			 * will stop trying to receive and wait for the next EPOLLIN event, but
 			 * for correctness let's handle it. */
 			if (!sock->pending_events && sock->base.group_impl) {
-				group = __posix_group_impl(sock->base.group_impl);
 				TAILQ_INSERT_TAIL(&group->pending_events, sock, link);
 				sock->pending_events = true;
 			}
@@ -963,7 +1004,12 @@ posix_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 			sock->pending_events = false;
 			TAILQ_REMOVE(&group->pending_events, sock, link);
 		}
-		return readv(sock->fd, iov, iovcnt);
+		rc = readv(sock->fd, iov, iovcnt);
+		if (group && rc > 0) {
+			group->stats.readv++;
+			group->stats.readv_bytes += rc;
+		}
+		return rc;
 	}
 
 	len = 0;
@@ -979,7 +1025,12 @@ posix_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 				sock->pending_events = false;
 				TAILQ_REMOVE(&group->pending_events, sock, link);
 			}
-			return readv(sock->fd, iov, iovcnt);
+			rc = readv(sock->fd, iov, iovcnt);
+			if (group && rc > 0) {
+				group->stats.readv++;
+				group->stats.readv_bytes += rc;
+			}
+			return rc;
 		}
 
 		/* Otherwise, do a big read into our pipe */
@@ -1007,6 +1058,7 @@ static ssize_t
 posix_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 {
 	struct spdk_posix_sock *sock = __posix_sock(_sock);
+	struct spdk_posix_sock_group_impl *group = __posix_group_impl(sock->base.group_impl);
 	int rc;
 
 	/* In order to process a writev, we need to flush any asynchronous writes
@@ -1022,13 +1074,23 @@ posix_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 		return -1;
 	}
 
-	return writev(sock->fd, iov, iovcnt);
+	rc = writev(sock->fd, iov, iovcnt);
+	if (group && rc > 0) {
+		group->stats.writev++;
+		group->stats.writev_bytes += rc;
+	}
+	return rc;
 }
 
 static void
 posix_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 {
 	int rc;
+	struct spdk_posix_sock_group_impl *group = __posix_group_impl(sock->group_impl);
+
+	if (group) {
+		group->stats.writev_async++;
+	}
 
 	spdk_sock_request_queue(sock, req);
 
@@ -1372,6 +1434,7 @@ posix_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		}
 	}
 #endif
+	group->stats.total_polls++;
 
 	/* This must be a TAILQ_FOREACH_SAFE because while flushing,
 	 * a completion callback could remove the sock from the
@@ -1490,6 +1553,11 @@ posix_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		group->pending_events.tqh_last = &pc->link.tqe_next;
 	}
 
+	if (num_events > 0) {
+		group->stats.busy_polls++;
+		group->stats.poll_events += num_events;
+	}
+
 	return num_events;
 }
 
@@ -1572,6 +1640,44 @@ posix_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	return 0;
 }
 
+static void
+posix_sock_clear_stats(struct spdk_sock_group_impl *sock_group_impl)
+{
+	struct spdk_posix_sock_group_impl *group_impl = __posix_group_impl(sock_group_impl);
+	/* TODO: stats may be corrupted here because they may be updating in another threads */
+	memset(&group_impl->stats, 0, sizeof(group_impl->stats));
+}
+
+static void
+posix_sock_get_stats(struct spdk_json_write_ctx *w, struct spdk_sock_group_impl *sock_group_impl)
+{
+	struct spdk_posix_sock_group_impl *group_impl = __posix_group_impl(sock_group_impl);
+
+	spdk_json_write_object_begin(w);
+
+	spdk_json_write_named_uint64(w, "succ_flushs", group_impl->stats.succ_flushs);
+	spdk_json_write_named_uint64(w, "total_flushs", group_impl->stats.total_flushs);
+	spdk_json_write_named_uint64(w, "flushed_iovcnt", group_impl->stats.flushed_iovcnt);
+	spdk_json_write_named_int32(w, "max_flushed_iovcnt", group_impl->stats.max_flushed_iovcnt);
+	spdk_json_write_named_uint64(w, "sent_bytes", group_impl->stats.sent_bytes);
+	spdk_json_write_named_uint64(w, "writev_async", group_impl->stats.writev_async);
+
+	spdk_json_write_named_uint64(w, "readv", group_impl->stats.readv);
+	spdk_json_write_named_uint64(w, "readv_bytes", group_impl->stats.readv_bytes);
+
+	spdk_json_write_named_uint64(w, "writev", group_impl->stats.writev);
+	spdk_json_write_named_uint64(w, "writev_bytes", group_impl->stats.writev_bytes);
+
+	spdk_json_write_named_uint64(w, "poll_events", group_impl->stats.poll_events);
+	spdk_json_write_named_uint64(w, "busy_polls", group_impl->stats.busy_polls);
+	spdk_json_write_named_uint64(w, "total_polls", group_impl->stats.total_polls);
+
+	spdk_json_write_named_uint64(w, "recv_from_pipe", group_impl->stats.recv_from_pipe);
+	spdk_json_write_named_uint64(w, "recv_from_pipe_bytes", group_impl->stats.recv_from_pipe_bytes);
+
+	spdk_json_write_object_end(w);
+}
+
 
 static struct spdk_net_impl g_posix_net_impl = {
 	.name		= "posix",
@@ -1599,6 +1705,8 @@ static struct spdk_net_impl g_posix_net_impl = {
 	.group_impl_close	= posix_sock_group_impl_close,
 	.get_opts	= posix_sock_impl_get_opts,
 	.set_opts	= posix_sock_impl_set_opts,
+	.clear_stats	= posix_sock_clear_stats,
+	.get_stats	= posix_sock_get_stats
 };
 
 SPDK_NET_IMPL_REGISTER(posix, &g_posix_net_impl, DEFAULT_SOCK_PRIORITY);
