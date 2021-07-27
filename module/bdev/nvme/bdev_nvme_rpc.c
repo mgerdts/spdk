@@ -993,6 +993,16 @@ rpc_bdev_nvme_tcp_stats(struct spdk_json_write_ctx *w,
 	spdk_json_write_named_uint64(w, "polls", stat->tcp.num_polls);
 	spdk_json_write_named_uint64(w, "sock_completions", stat->tcp.num_sock_completions);
 	spdk_json_write_named_uint64(w, "nvme_completions", stat->tcp.num_nvme_completions);
+	spdk_json_write_named_uint64(w, "num_sock_idle_completion",
+				     stat->tcp.num_sock_idle_completion);
+	spdk_json_write_named_uint64(w, "total_sock_idle_tsc",
+				     stat->tcp.total_sock_idle_tsc);
+	spdk_json_write_named_uint64(w, "num_nvme_idle_completion",
+				     stat->tcp.num_nvme_idle_completion);
+	spdk_json_write_named_uint64(w, "total_nvme_idle_tsc",
+				     stat->tcp.total_nvme_idle_tsc);
+	spdk_json_write_named_uint64(w, "total_poll_tsc",
+				     stat->tcp.total_poll_tsc);
 }
 
 static void
