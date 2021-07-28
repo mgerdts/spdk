@@ -2500,9 +2500,12 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	struct spdk_nvme_qpair *qpair, *tmp_qpair;
 	struct nvme_tcp_qpair *tqpair, *tmp_tqpair;
 	int num_events;
+	uint64_t diff_tsc, start_tsc;
 
 	group->completions_per_qpair = completions_per_qpair;
 	group->num_completions = 0;
+
+	start_tsc = spdk_get_ticks();
 
 	num_events = spdk_sock_group_poll(group->sock_group);
 
@@ -2516,13 +2519,21 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 		nvme_tcp_qpair_sock_cb(&tqpair->qpair, group->sock_group, tqpair->sock);
 	}
 
+	diff_tsc = spdk_get_ticks() - start_tsc;
+	group->stats.total_poll_tsc += diff_tsc;
 	group->stats.num_polls++;
 	if (num_events > 0) {
 		group->stats.num_sock_completions += num_events;
+	} else {
+		group->stats.num_sock_idle_completion++;
+		group->stats.total_sock_idle_tsc += diff_tsc;
 	}
 
 	if (group->num_completions > 0) {
 		group->stats.num_nvme_completions += group->num_completions;
+	} else {
+		group->stats.num_nvme_idle_completion++;
+		group->stats.total_nvme_idle_tsc += diff_tsc;
 	}
 
 	return group->num_completions;
