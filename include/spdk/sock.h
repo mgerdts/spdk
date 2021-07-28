@@ -41,7 +41,7 @@
 #include "spdk/stdinc.h"
 
 #include "spdk/queue.h"
-#include "spdk/json.h"
+#include "spdk/jsonrpc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -580,6 +580,25 @@ ssize_t spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_soc
  * \return 0 on success, -1 on failure.
  */
 int spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
+
+/**
+ * Clear statistics of socket implementation.
+ *
+ * \param impl_name The socket implementation to use, such as "posix".
+ *
+ * \return 0 on success, -1 on failure. errno is set to indicate the reason of failure.
+ */
+int spdk_sock_clear_stats(const char *impl_name);
+
+/**
+ * Write statistics of socket implementation into provided JSON context.
+ *
+ * \param request JSON-RPC request to handle.
+ * \param impl_name The socket implementation to use, such as "posix".
+ *
+ * \return 0 on success, -1 on failure. errno is set to indicate the reason of failure.
+ */
+int spdk_sock_get_stats(struct spdk_jsonrpc_request *request, const char *impl_name);
 
 #ifdef __cplusplus
 }

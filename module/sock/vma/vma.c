@@ -130,9 +130,33 @@ struct spdk_vma_sock {
 	TAILQ_ENTRY(spdk_vma_sock)	link;
 };
 
+struct spdk_vma_stat {
+	uint64_t succ_flushs;
+	uint64_t total_flushs;
+	uint64_t flushed_iovcnt;
+	uint64_t sent_bytes;
+	uint64_t submitted_requests;
+	uint64_t readv;
+	uint64_t readv_bytes;
+	uint64_t total_recv_zcopy;
+	uint64_t succ_recv_zcopy;
+	uint64_t recv_zcopy_unfinished;
+	uint64_t recv_zcopy_packets;
+	uint64_t recv_zcopy_iovs;
+	uint64_t recv_zcopy_iovs_len0;
+	uint64_t recv_zcopy_bytes;
+	uint64_t writev;
+	uint64_t writev_bytes;
+	uint64_t poll_events;
+	uint64_t busy_polls;
+	uint64_t total_polls;
+	int max_flushed_iovcnt;
+};
+
 struct spdk_vma_sock_group_impl {
 	struct spdk_sock_group_impl	base;
 	int				fd;
+	struct spdk_vma_stat		stats;
 	TAILQ_HEAD(, spdk_vma_sock)	pending_recv;
 };
 
@@ -980,11 +1004,16 @@ dump_packet(struct vma_sock_packet *packet)
 static ssize_t
 vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 {
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(sock->base.group_impl);
 	struct vma_packets_t *vma_packets;
 	struct vma_packet_t *vma_packet;
 	int flags = 0;
 	int ret;
 	size_t i;
+
+	if (group) {
+		group->stats.total_recv_zcopy++;
+	}
 
 	ret = g_vma_api->recvfrom_zcopy(sock->fd, sock->vma_packets_buf,
 					sizeof(sock->vma_packets_buf), &flags, NULL, NULL);
@@ -1014,11 +1043,21 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 	SPDK_DEBUGLOG(vma, "Sock %d: got %lu packets, total %d bytes\n",
 		      sock->fd, vma_packets->n_packet_num, ret);
 
+	if (group) {
+		group->stats.succ_recv_zcopy++;
+		group->stats.recv_zcopy_bytes += ret;
+		group->stats.recv_zcopy_packets += vma_packets->n_packet_num;
+	}
+
 	/* Wrap all VMA packets and link to received packets list */
 	vma_packet = &vma_packets->pkts[0];
 	for (i = 0; i < vma_packets->n_packet_num; ++i) {
 		struct vma_sock_packet *packet = STAILQ_FIRST(&sock->free_packets);
 		size_t j, len = 0;
+
+		if (group) {
+			group->stats.recv_zcopy_iovs += vma_packet->sz_iov;
+		}
 
 		/* @todo: Filter out zero length packets.
 		 * Check with VMA team why it happens.
@@ -1133,6 +1172,7 @@ packets_next_chunk(struct spdk_vma_sock *sock,
 		   size_t max_len)
 {
 	struct vma_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(sock->base.group_impl);
 
 	while (cur_packet) {
 		struct iovec *iov = &cur_packet->vma_packet->iov[sock->cur_iov_idx];
@@ -1140,6 +1180,9 @@ packets_next_chunk(struct spdk_vma_sock *sock,
 
 		if (len == 0) {
 			/* VMA may return zero length iov. Skip to next in this case */
+			if (group) {
+				group->stats.recv_zcopy_iovs_len0++;
+			}
 			sock->cur_offset = 0;
 			sock->cur_iov_idx++;
 			assert(sock->cur_iov_idx <= cur_packet->vma_packet->sz_iov);
@@ -1166,6 +1209,7 @@ static int
 readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 {
 	int ret;
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(sock->base.group_impl);
 
 	if (sock->recv_zcopy) {
 		int i;
@@ -1193,6 +1237,9 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 			len = packets_next_chunk(sock, &buf, &packet, iov_len);
 			if (len == 0) {
 				/* No more data */
+				if (group) {
+					group->stats.recv_zcopy_unfinished++;
+				}
 				SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
 				return ret;
 			}
@@ -1211,6 +1258,10 @@ readv_wrapper(struct spdk_vma_sock *sock, struct iovec *iovs, int iovcnt)
 		SPDK_DEBUGLOG(vma, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
 	} else {
 		ret = g_vma_ops.readv(sock->fd, iovs, iovcnt);
+		if (group && ret > 0) {
+			group->stats.readv++;
+			group->stats.readv_bytes += ret;
+		}
 	}
 
 	return ret;
@@ -1239,6 +1290,7 @@ static ssize_t
 vma_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 {
 	struct spdk_vma_sock *sock = __vma_sock(_sock);
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(_sock->group_impl);
 	int rc;
 
 	/* In order to process a writev, we need to flush any asynchronous writes
@@ -1254,7 +1306,12 @@ vma_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 		return -1;
 	}
 
-	return g_vma_ops.writev(sock->fd, iov, iovcnt);
+	rc = g_vma_ops.writev(sock->fd, iov, iovcnt);
+	if (group && rc > 0) {
+		group->stats.writev++;
+		group->stats.writev_bytes += rc;
+	}
+	return rc;
 }
 
 static inline size_t
@@ -1312,6 +1369,7 @@ static int
 _sock_flush_ext(struct spdk_sock *sock)
 {
 	struct spdk_vma_sock *vsock = __vma_sock(sock);
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(sock->group_impl);
 	struct msghdr msg = {};
 	struct cmsghdr *cmsg;
 	int flags;
@@ -1328,6 +1386,10 @@ _sock_flush_ext(struct spdk_sock *sock)
 	ssize_t rc;
 	unsigned int offset;
 	size_t len;
+
+	if (group) {
+		group->stats.total_flushs++;
+	}
 
 	/* Can't flush from within a callback or we end up with recursive calls */
 	if (sock->cb_cnt > 0) {
@@ -1396,6 +1458,15 @@ _sock_flush_ext(struct spdk_sock *sock)
 		vsock->sendmsg_idx++;
 	}
 
+	if (group) {
+		if (spdk_unlikely(group->stats.max_flushed_iovcnt < iovcnt)) {
+			group->stats.max_flushed_iovcnt = iovcnt;
+		}
+		group->stats.succ_flushs++;
+		group->stats.flushed_iovcnt += iovcnt;
+		group->stats.sent_bytes += rc;
+	}
+
 	/* Consume the requests that were actually written */
 	req = TAILQ_FIRST(&sock->queued_reqs);
 	while (req) {
@@ -1454,6 +1525,11 @@ static void
 vma_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 {
 	int rc;
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(sock->group_impl);
+
+	if (group) {
+		group->stats.submitted_requests++;
+	}
 
 	spdk_sock_request_queue(sock, req);
 
@@ -1651,6 +1727,8 @@ vma_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	struct timespec ts = {0};
 #endif
 
+	group->stats.total_polls++;
+
 	/* This must be a TAILQ_FOREACH_SAFE because while flushing,
 	 * a completion callback could remove the sock from the
 	 * group. */
@@ -1739,6 +1817,11 @@ vma_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 
 		TAILQ_REMOVE(&group->pending_recv, vsock, link);
 		vsock->pending_recv = false;
+	}
+
+	if (num_events > 0) {
+		group->stats.busy_polls++;
+		group->stats.poll_events += num_events;
 	}
 
 	return num_events;
@@ -1848,6 +1931,7 @@ vma_sock_free_buf(struct spdk_vma_sock *sock, struct vma_sock_buf *buf)
 static ssize_t
 vma_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf **sock_buf)
 {
+	struct spdk_vma_sock_group_impl *group = __vma_group_impl(_sock->group_impl);
 	struct spdk_vma_sock *sock = __vma_sock(_sock);
 	struct vma_sock_buf *prev_buf = NULL;
 	int ret;
@@ -1876,6 +1960,9 @@ vma_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf **
 		chunk_len = packets_next_chunk(sock, &data, &packet, len);
 		if (chunk_len == 0) {
 			/* No more data */
+			if (group) {
+				group->stats.recv_zcopy_unfinished++;
+			}
 			break;
 		}
 
@@ -1929,6 +2016,49 @@ vma_sock_free_bufs(struct spdk_sock *_sock, struct spdk_sock_buf *sock_buf)
 	return 0;
 }
 
+static void
+vma_sock_clear_stats(struct spdk_sock_group_impl *sock_group_impl)
+{
+	struct spdk_vma_sock_group_impl *group_impl = __vma_group_impl(sock_group_impl);
+	/* TODO: stats may be corrupted here because they may be updating in another threads */
+	memset(&group_impl->stats, 0, sizeof(group_impl->stats));
+}
+
+static void
+vma_sock_get_stats(struct spdk_json_write_ctx *w, struct spdk_sock_group_impl *sock_group_impl)
+{
+	struct spdk_vma_sock_group_impl *group_impl = __vma_group_impl(sock_group_impl);
+
+	spdk_json_write_object_begin(w);
+
+	spdk_json_write_named_uint64(w, "succ_flushs", group_impl->stats.succ_flushs);
+	spdk_json_write_named_uint64(w, "total_flushs", group_impl->stats.total_flushs);
+	spdk_json_write_named_uint64(w, "flushed_iovcnt", group_impl->stats.flushed_iovcnt);
+	spdk_json_write_named_int32(w, "max_flushed_iovcnt", group_impl->stats.max_flushed_iovcnt);
+	spdk_json_write_named_uint64(w, "sent_bytes", group_impl->stats.sent_bytes);
+	spdk_json_write_named_uint64(w, "submitted_requests", group_impl->stats.submitted_requests);
+
+	spdk_json_write_named_uint64(w, "readv", group_impl->stats.readv);
+	spdk_json_write_named_uint64(w, "readv_bytes", group_impl->stats.readv_bytes);
+
+	spdk_json_write_named_uint64(w, "total_recv_zcopy", group_impl->stats.total_recv_zcopy);
+	spdk_json_write_named_uint64(w, "succ_recv_zcopy", group_impl->stats.succ_recv_zcopy);
+	spdk_json_write_named_uint64(w, "recv_zcopy_unfinished", group_impl->stats.recv_zcopy_unfinished);
+	spdk_json_write_named_uint64(w, "recv_zcopy_packets", group_impl->stats.recv_zcopy_packets);
+	spdk_json_write_named_uint64(w, "recv_zcopy_iovs", group_impl->stats.recv_zcopy_iovs);
+	spdk_json_write_named_uint64(w, "recv_zcopy_iovs_len0", group_impl->stats.recv_zcopy_iovs_len0);
+	spdk_json_write_named_uint64(w, "recv_zcopy_bytes", group_impl->stats.recv_zcopy_bytes);
+
+	spdk_json_write_named_uint64(w, "writev", group_impl->stats.writev);
+	spdk_json_write_named_uint64(w, "writev_bytes", group_impl->stats.writev_bytes);
+
+	spdk_json_write_named_uint64(w, "poll_events", group_impl->stats.poll_events);
+	spdk_json_write_named_uint64(w, "busy_polls", group_impl->stats.busy_polls);
+	spdk_json_write_named_uint64(w, "total_polls", group_impl->stats.total_polls);
+
+	spdk_json_write_object_end(w);
+}
+
 static struct spdk_net_impl g_vma_net_impl = {
 	.name		= "vma",
 	.getaddr	= vma_sock_getaddr,
@@ -1956,7 +2086,9 @@ static struct spdk_net_impl g_vma_net_impl = {
 	.set_opts	= vma_sock_impl_set_opts,
 	.get_caps	= vma_sock_get_caps,
 	.recv_zcopy	= vma_sock_recv_zcopy,
-	.free_bufs	= vma_sock_free_bufs
+	.free_bufs	= vma_sock_free_bufs,
+	.clear_stats	= vma_sock_clear_stats,
+	.get_stats	= vma_sock_get_stats
 };
 
 static void __attribute__((constructor)) 

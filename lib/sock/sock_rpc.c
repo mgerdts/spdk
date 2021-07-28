@@ -44,6 +44,58 @@ static const struct spdk_json_object_decoder rpc_sock_impl_get_opts_decoders[] =
 };
 
 static void
+rpc_sock_impl_clear_stats(struct spdk_jsonrpc_request *request,
+			  const struct spdk_json_val *params)
+{
+	char *impl_name = NULL;
+	int rc;
+
+	if (spdk_json_decode_object(params, rpc_sock_impl_get_opts_decoders,
+				    SPDK_COUNTOF(rpc_sock_impl_get_opts_decoders), &impl_name)) {
+		SPDK_ERRLOG("spdk_json_decode_object() failed\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Invalid parameters");
+		return;
+	}
+
+	rc = spdk_sock_clear_stats(impl_name);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Invalid parameters");
+	} else {
+		spdk_jsonrpc_send_bool_response(request, true);
+	}
+	free(impl_name);
+}
+SPDK_RPC_REGISTER("sock_impl_clear_stats", rpc_sock_impl_clear_stats, SPDK_RPC_RUNTIME)
+
+static void
+rpc_sock_impl_get_stats(struct spdk_jsonrpc_request *request,
+			const struct spdk_json_val *params)
+{
+	char *impl_name = NULL;
+	int rc;
+
+	if (spdk_json_decode_object(params, rpc_sock_impl_get_opts_decoders,
+				    SPDK_COUNTOF(rpc_sock_impl_get_opts_decoders), &impl_name)) {
+
+		SPDK_ERRLOG("spdk_json_decode_object() failed\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Invalid parameters");
+		return;
+	}
+
+	rc = spdk_sock_get_stats(request, impl_name);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Invalid parameters");
+	}
+
+	free(impl_name);
+}
+SPDK_RPC_REGISTER("sock_impl_get_stats", rpc_sock_impl_get_stats, SPDK_RPC_RUNTIME)
+
+static void
 rpc_sock_impl_get_options(struct spdk_jsonrpc_request *request,
 			  const struct spdk_json_val *params)
 {
