@@ -1093,6 +1093,7 @@ rpc_bdev_nvme_get_transport_statistics(struct spdk_jsonrpc_request *request,
 	ctx->request = request;
 	ctx->w = spdk_jsonrpc_begin_result(ctx->request);
 	spdk_json_write_object_begin(ctx->w);
+	spdk_json_write_named_int64(ctx->w, "tick_rate", spdk_get_ticks_hz());
 	spdk_json_write_named_array_begin(ctx->w, "poll_groups");
 
 	spdk_for_each_channel(&g_nvme_bdev_ctrlrs,
