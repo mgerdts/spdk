@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
  *   Copyright (c) 2019-2021 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -2466,6 +2467,15 @@ int spdk_nvme_poll_group_get_stats(struct spdk_nvme_poll_group *group,
  */
 void spdk_nvme_poll_group_free_stats(struct spdk_nvme_poll_group *group,
 				     struct spdk_nvme_poll_group_stat *stat);
+
+/**
+ * Return busy/idle status of the last \ref spdk_nvme_poll_group_process_completions
+ * function call.
+ *
+ * @param group Pointer to NVME poll group
+ * @return true if some useful job was done, false otherwise
+ */
+bool spdk_nvme_poll_group_is_busy(struct spdk_nvme_poll_group *group);
 
 /**
  * Get the identify namespace data as defined by the NVMe specification.
