@@ -127,26 +127,17 @@ elif stat_type == 'nvme':
     tsc_rate = data1['tick_rate']
     ticks_to_us = 1000 * 1000 / tsc_rate
     print(ticks_to_us)
-    initiator_stats = ["polls", "sock_completions", "nvme_completions", "num_sock_idle_completion",
-                       "total_sock_idle_tsc", "num_nvme_idle_completion", "total_nvme_idle_tsc", "total_poll_tsc"]
-    initiator_aggregated_stats = [("sock_busy_tsc", ("total_poll_tsc", "total_sock_idle_tsc"), lambda x: x[0] - x[1]),
-                                  ("nvme_busy_tsc", ("total_poll_tsc", "total_nvme_idle_tsc"), lambda x: x[0] - x[1]),
+    initiator_stats = ["polls", "sock_completions", "nvme_completions",
+                       "num_nvme_idle_completion", "total_nvme_idle_tsc", "total_poll_tsc"]
+    initiator_aggregated_stats = [("nvme_busy_tsc", ("total_poll_tsc", "total_nvme_idle_tsc"), lambda x: x[0] - x[1]),
                                   ("sock_completions/polls(%)", ("sock_completions", "polls"),
                                    lambda x: 100 * x[0] / x[1] if x[1] > 0 else 0),
                                   ("nvme_completions/polls(%)", ("nvme_completions", "polls"),
                                    lambda x: 100 * x[0] / x[1] if x[1] > 0 else 0),
-                                  ("sock_idle_tsc/sock_idle_completions (ticks)", ("total_sock_idle_tsc",
-                                   "num_sock_idle_completion"), lambda x: x[0] / x[1] if x[1] > 0 else 0),
-                                  ("sock_idle_tsc/sock_idle_completions (us)", ("total_sock_idle_tsc",
-                                   "num_sock_idle_completion"), lambda x: x[0] / x[1] * ticks_to_us if x[1] > 0 else 0),
                                   ("nvme_idle_tsc/nvme_idle_completions (ticks)", ("total_nvme_idle_tsc",
                                    "num_nvme_idle_completion"), lambda x: x[0] / x[1] if x[1] > 0 else 0),
                                   ("nvme_idle_tsc/nvme_idle_completions (us)", ("total_nvme_idle_tsc",
                                    "num_nvme_idle_completion"), lambda x: x[0] / x[1] * ticks_to_us if x[1] > 0 else 0),
-                                  ("sock_busy_tsc/sock_completions (ticks)", ("total_poll_tsc", "total_sock_idle_tsc",
-                                   "sock_completions"), lambda x: (x[0] - x[1]) / x[2] if x[2] > 0 else 0),
-                                  ("sock_busy_tsc/sock_completions (us)", ("total_poll_tsc", "total_sock_idle_tsc",
-                                   "sock_completions"), lambda x: (x[0] - x[1]) / x[2] * ticks_to_us if x[2] > 0 else 0),
                                   ("nvme_busy_tsc/nvme_completions (ticks)", ("total_poll_tsc", "total_nvme_idle_tsc",
                                    "nvme_completions"), lambda x: (x[0] - x[1]) / x[2] if x[2] > 0 else 0),
                                   ("nvme_busy_tsc/nvme_completions (us)", ("total_poll_tsc", "total_nvme_idle_tsc",

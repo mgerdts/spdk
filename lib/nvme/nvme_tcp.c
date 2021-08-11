@@ -2527,14 +2527,13 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	group->stats.num_polls++;
 	if (num_events > 0) {
 		group->stats.num_sock_completions += num_events;
-	} else {
-		group->stats.num_sock_idle_completion++;
-		group->stats.total_sock_idle_tsc += diff_tsc;
 	}
 
 	if (group->num_completions > 0) {
 		group->stats.num_nvme_completions += group->num_completions;
-	} else {
+	}
+
+	if (!group->group.group->busy) {
 		group->stats.num_nvme_idle_completion++;
 		group->stats.total_nvme_idle_tsc += diff_tsc;
 	}
