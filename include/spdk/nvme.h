@@ -475,11 +475,9 @@ struct spdk_nvme_pcie_stat {
 
 struct spdk_nvme_tcp_stat {
 	uint64_t num_polls;
-	uint64_t num_sock_idle_completion;
 	uint64_t num_nvme_idle_completion;
 	uint64_t num_sock_completions;
 	uint64_t num_nvme_completions;
-	uint64_t total_sock_idle_tsc;
 	uint64_t total_nvme_idle_tsc;
 	uint64_t total_poll_tsc;
 };
