@@ -62,6 +62,10 @@ DEFINE_STUB(spdk_bdev_readv_blocks, int,
 	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, struct iovec *iov,
 	     int iovcnt, uint64_t offset_blocks, uint64_t num_blocks,
 	     spdk_bdev_io_completion_cb cb, void *cb_arg), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_readv_blocks_ext, int,
+	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, struct iovec *iov,
+	     int iovcnt, uint64_t offset_blocks, uint64_t num_blocks,
+	     spdk_bdev_io_completion_cb cb, void *cb_arg, struct spdk_bdev_ext_io_opts *opts), -ENOTSUP);
 DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *bdev_name), NULL);
 DEFINE_STUB(spdk_bdev_io_type_supported, bool,
 	    (struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type), false);

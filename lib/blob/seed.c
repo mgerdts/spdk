@@ -106,6 +106,7 @@ seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payloa
 		return;
 	}
 
+	SPDK_DEBUGLOG(blob, "Read from seed, lba %"PRIu64"\n", lba);
 	spdk_bdev_read_blocks(ctx->bdev_desc, cb_args->channel, payload,
 			      lba, lba_count, seed_complete, cb_args);
 }
@@ -131,8 +132,27 @@ seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		return;
 	}
 
+	SPDK_DEBUGLOG(blob, "Readv from seed, lba %"PRIu64"\n", lba);
 	spdk_bdev_readv_blocks(ctx->bdev_desc, cb_args->channel, iov,
 			       iovcnt, lba, lba_count, seed_complete, cb_args);
+}
+
+static void
+seed_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+	       struct iovec *iov, int iovcnt,
+	       uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
+	       struct spdk_blob_ext_io_opts *ext_io_opts)
+{
+	struct seed_ctx *ctx = dev->seed_ctx;
+
+	if (ctx->bdev_desc == NULL) {
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
+		return;
+	}
+
+	SPDK_DEBUGLOG(blob, "Readv_ext from seed, lba %"PRIu64"\n", lba);
+	spdk_bdev_readv_blocks_ext(ctx->bdev_desc, cb_args->channel, iov, iovcnt, lba, lba_count,
+				   seed_complete, cb_args, (struct spdk_bdev_ext_io_opts *)ext_io_opts);
 }
 
 static void
@@ -140,6 +160,17 @@ seed_writev(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	    struct iovec *iov, int iovcnt,
 	    uint64_t lba, uint32_t lba_count,
 	    struct spdk_bs_dev_cb_args *cb_args)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EPERM);
+	assert(false);
+}
+
+static void
+seed_writev_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		struct iovec *iov, int iovcnt,
+		uint64_t lba, uint32_t lba_count,
+		struct spdk_bs_dev_cb_args *cb_args,
+		struct spdk_blob_ext_io_opts *ext_io_opts)
 {
 	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EPERM);
 	assert(false);
@@ -250,7 +281,9 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 	back->read = seed_read;
 	back->write = seed_write;
 	back->readv = seed_readv;
+	back->readv_ext = seed_readv_ext;
 	back->writev = seed_writev;
+	back->writev_ext = seed_writev_ext;
 	back->write_zeroes = seed_write_zeroes;
 	back->unmap = seed_unmap;
 	back->blockcnt = spdk_bdev_get_num_blocks(bdev);
