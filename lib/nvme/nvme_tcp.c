@@ -53,12 +53,18 @@
 #include "spdk_internal/nvme_tcp.h"
 #include "spdk_internal/rdma.h"
 
+#include "spdk/io_stages.h"
+
 #define NVME_TCP_RW_BUFFER_SIZE 131072
 #define NVME_TCP_TIME_OUT_IN_SECONDS 2
 
 #define NVME_TCP_HPDA_DEFAULT			0
 #define NVME_TCP_MAX_R2T_DEFAULT		1
 #define NVME_TCP_PDU_H2C_MIN_DATA_SIZE		4096
+
+char *io_stage_name[] = {"NO_STAGE", "PROCESS_SQE", "SOCK_BATCH_QUEUE",
+	"WAIT_FOR_TARGET", "PROCESS_C2H_PDU", "WAIT_FOR_DMA"};
+int64_t io_stage_counts[NUM_CORES][NUM_OF_STAGES];
 
 /* NVMe TCP transport extensions for spdk_nvme_ctrlr */
 struct nvme_tcp_ctrlr {
@@ -887,6 +893,10 @@ end:
 	if (nvme_tcp_fill_mkeys(tqpair, tcp_req, pdu) != 0) {
 		return -1;
 	}
+
+	if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
+		spdk_io_stage_update(PROCESS_SQE, SOCK_BATCH_QUEUE, 1);
+	}
 	spdk_sock_writev_async(tqpair->sock, &pdu->sock_req);
 
 
@@ -1476,6 +1486,9 @@ nvme_tcp_c2h_data_hdr_handle(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu 
 	pdu->req = tcp_req;
 
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
+	if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
+		spdk_io_stage_update(WAIT_FOR_TARGET, PROCESS_C2H_PDU, 1);
+	}
 	return;
 
 end:
@@ -2141,6 +2154,7 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	spdk_sock_get_default_opts(&opts);
 	opts.priority = ctrlr->trid.priority;
 	opts.zcopy = !nvme_qpair_is_admin_queue(qpair);
+	opts.admin_queue = nvme_qpair_is_admin_queue(qpair);
 	tqpair->sock = spdk_sock_connect_ext(ctrlr->trid.traddr, port, NULL, &opts);
 	if (!tqpair->sock) {
 		SPDK_ERRLOG("sock connection error of tqpair=%p with addr=%s, port=%ld\n",

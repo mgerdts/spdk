@@ -235,5 +235,8 @@
 
 	spdk_nvme_get_caps;
 
+	io_stage_counts;
+	io_stage_name;
+
 	local: *;
 };
