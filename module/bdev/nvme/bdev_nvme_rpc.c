@@ -45,6 +45,8 @@
 #include "spdk/log.h"
 #include "spdk/bdev_module.h"
 
+#include "spdk/io_stages.h"
+
 struct open_descriptors {
 	void *desc;
 	struct  spdk_bdev *bdev;
@@ -1098,4 +1100,83 @@ rpc_bdev_nvme_get_transport_statistics(struct spdk_jsonrpc_request *request,
 			      rpc_bdev_nvme_stats_done);
 }
 SPDK_RPC_REGISTER("bdev_nvme_get_transport_statistics", rpc_bdev_nvme_get_transport_statistics,
+		  SPDK_RPC_RUNTIME)
+
+
+struct rpc_bdev_nvme_io_stage_ctx {
+	struct spdk_jsonrpc_request *request;
+	struct spdk_json_write_ctx *w;
+};
+static void
+rpc_bdev_nvme_io_stage_per_channel(struct spdk_io_channel_iter *i)
+{
+	struct rpc_bdev_nvme_io_stage_ctx *ctx;
+	uint32_t core = spdk_env_get_current_core();
+	struct io_stage_val *isv;
+	uint32_t j;
+	int rc;
+
+	ctx = spdk_io_channel_iter_get_ctx(i);
+	rc = spdk_io_stage_get(core, &isv);
+	if (rc) {
+		spdk_for_each_channel_continue(i, rc);
+		return;
+	}
+
+	spdk_json_write_object_begin(ctx->w);
+	spdk_json_write_named_string(ctx->w, "thread", spdk_thread_get_name(spdk_get_thread()));
+	spdk_json_write_named_int64(ctx->w, "core", core);
+
+	spdk_json_write_named_object_begin(ctx->w, "counts");
+	for (j = 0; j < NUM_OF_STAGES; j++) {
+		spdk_json_write_named_int64(ctx->w, isv[j].name, isv[j].val);
+	}
+	spdk_json_write_object_end(ctx->w);
+
+	spdk_json_write_object_end(ctx->w);
+	free(isv);
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+static void
+rpc_bdev_nvme_io_stage_counts_done(struct spdk_io_channel_iter *i, int status)
+{
+	struct rpc_bdev_nvme_io_stage_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+
+	spdk_json_write_array_end(ctx->w);
+	spdk_json_write_object_end(ctx->w);
+	spdk_jsonrpc_end_result(ctx->request, ctx->w);
+	free(ctx);
+}
+
+static void
+rpc_bdev_nvme_get_io_stage_counts(struct spdk_jsonrpc_request *request,
+				  const struct spdk_json_val *params)
+{
+	struct rpc_bdev_nvme_io_stage_ctx *ctx;
+
+	if (params) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "'bdev_nvme_get_io_stage_counts' requires no arguments");
+		return;
+	}
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (!ctx) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "Memory allocation error");
+		return;
+	}
+	ctx->request = request;
+	ctx->w = spdk_jsonrpc_begin_result(ctx->request);
+	spdk_json_write_object_begin(ctx->w);
+	spdk_json_write_named_array_begin(ctx->w, "cores");
+
+	spdk_for_each_channel(&g_nvme_bdev_ctrlrs,
+			      rpc_bdev_nvme_io_stage_per_channel,
+			      ctx,
+			      rpc_bdev_nvme_io_stage_counts_done);
+}
+SPDK_RPC_REGISTER("bdev_nvme_get_io_stage_counts", rpc_bdev_nvme_get_io_stage_counts,
 		  SPDK_RPC_RUNTIME)

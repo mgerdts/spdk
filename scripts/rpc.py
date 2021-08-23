@@ -911,6 +911,13 @@ if __name__ == "__main__":
                               help='Get bdev_nvme poll group transport statistics')
     p.set_defaults(func=bdev_nvme_get_transport_statistics)
 
+    def bdev_nvme_get_io_stage_counts(args):
+        print_dict(rpc.bdev.bdev_nvme_get_io_stage_counts(args.client))
+
+    p = subparsers.add_parser('bdev_nvme_get_io_stage_counts',
+                              help='Get bdev_nvme io stage counts')
+    p.set_defaults(func=bdev_nvme_get_io_stage_counts)
+
     # iSCSI
     def iscsi_set_options(args):
         rpc.iscsi.iscsi_set_options(

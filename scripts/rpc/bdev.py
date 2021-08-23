@@ -1208,3 +1208,7 @@ def bdev_nvme_apply_firmware(client, bdev_name, filename):
 def bdev_nvme_get_transport_statistics(client):
     """Get bdev_nvme poll group transport statistics"""
     return client.call('bdev_nvme_get_transport_statistics')
+
+def bdev_nvme_get_io_stage_counts(client):
+    """Get bdev_nvme io stage counts"""
+    return client.call('bdev_nvme_get_io_stage_counts')
