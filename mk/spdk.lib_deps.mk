@@ -124,7 +124,7 @@ DEPDIRS-env_dpdk_rpc := log $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util
 DEPDIRS-sock_uring := log sock util
-DEPDIRS-sock_vma := log sock util rdma
+DEPDIRS-sock_vma := log sock util rdma nvme
 
 # module/bdev
 DEPDIRS-bdev_gpt := bdev json log thread util
