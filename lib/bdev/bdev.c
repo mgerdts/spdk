@@ -5095,7 +5095,9 @@ bdev_io_complete(void *ctx)
 	struct spdk_bdev_channel *bdev_ch = bdev_io->internal.ch;
 	uint64_t tsc, tsc_diff;
 
-	if (spdk_unlikely(bdev_io->internal.in_submit_request || bdev_io->internal.io_submit_ch)) {
+	if (spdk_unlikely((bdev_io->internal.in_submit_request || bdev_io->internal.io_submit_ch) &&
+			(bdev_io->type != SPDK_BDEV_IO_TYPE_ZCOPY || bdev_io->u.bdev.zcopy.start ||
+			 bdev_io->u.bdev.zcopy.commit))) {
 		/*
 		 * Send the completion to the thread that originally submitted the I/O,
 		 * which may not be the current thread in the case of QoS.
