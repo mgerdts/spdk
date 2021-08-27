@@ -63,7 +63,7 @@
 #define NVME_TCP_PDU_H2C_MIN_DATA_SIZE		4096
 
 char *io_stage_name[] = {"NO_STAGE", "PROCESS_SQE", "SOCK_BATCH_QUEUE",
-	"WAIT_FOR_TARGET", "PROCESS_C2H_PDU", "WAIT_FOR_DMA"};
+	"WAIT_FOR_TARGET", "PROCESS_RESP_PDU", "WAIT_FOR_DMA"};
 int64_t io_stage_counts[NUM_CORES][NUM_OF_STAGES];
 
 /* NVMe TCP transport extensions for spdk_nvme_ctrlr */
@@ -1400,6 +1400,10 @@ nvme_tcp_capsule_resp_hdr_handle(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 	/* Recv the pdu again */
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
 
+	if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
+		spdk_io_stage_update(WAIT_FOR_TARGET, PROCESS_RESP_PDU, 1);
+	}
+
 	if (nvme_tcp_req_complete_safe(tcp_req)) {
 		(*reaped)++;
 	}
@@ -1487,7 +1491,7 @@ nvme_tcp_c2h_data_hdr_handle(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu 
 
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
 	if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
-		spdk_io_stage_update(WAIT_FOR_TARGET, PROCESS_C2H_PDU, 1);
+		spdk_io_stage_update(WAIT_FOR_TARGET, PROCESS_RESP_PDU, 1);
 	}
 	return;
 
