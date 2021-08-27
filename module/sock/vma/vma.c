@@ -33,6 +33,7 @@
 
 #include "spdk/stdinc.h"
 #include "spdk/env.h"
+#include "spdk/io_stages.h"
 
 #if defined(__FreeBSD__)
 #include <sys/event.h>
@@ -1495,6 +1496,9 @@ _sock_flush_ext(struct spdk_sock *sock)
 
 		/* Handled a full request. */
 		spdk_sock_request_pend(sock, req);
+
+		if (!sock->opts.admin_queue)
+			spdk_io_stage_update(SOCK_BATCH_QUEUE, WAIT_FOR_TARGET, 1);
 
 		if (!vsock->zcopy) {
 			/* The sendmsg syscall above isn't currently asynchronous,

@@ -235,6 +235,10 @@ sock_init_opts(struct spdk_sock_opts *opts, struct spdk_sock_opts *opts_user)
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, zcopy)) {
 		opts->zcopy = opts_user->zcopy;
 	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, admin_queue)) {
+		opts->admin_queue = opts_user->admin_queue;
+	}
 }
 
 struct spdk_sock *

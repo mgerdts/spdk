@@ -180,6 +180,10 @@ struct spdk_sock_opts {
 	 * Used to enable or disable zero copy on socket layer.
 	 */
 	bool zcopy;
+	/**
+	 * true if the socket is used for admin_queue.
+	 */
+	bool admin_queue;
 };
 
 /**
