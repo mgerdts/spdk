@@ -132,17 +132,19 @@ Note: The json file accumulated with more statistics must be put at the end of a
 
 Example results 
 ~~~
-sock_completions :  2151409
-nvme_completions :  25429359
-num_nvme_idle_completion :  6567330
-total_nvme_idle_tsc :  1990277898
-total_poll_tsc :  21099372015
-nvme_busy_tsc :  19109094117
-sock_completions/polls(%) :  24.67568991341523
-nvme_completions/polls(%) :  291.663266901326
-nvme_idle_tsc/nvme_idle_completions (ticks) :  303.05739135995907
-nvme_idle_tsc/nvme_idle_completions (us) :  1.5152869567997953
-nvme_busy_tsc/nvme_completions (ticks) :  751.457955231982
-nvme_busy_tsc/nvme_completions (us) :  3.75728977615991
+polls :  9332464
+sock_completions :  1902169
+nvme_completions :  27169274
+num_nvme_idle_completion :  7430295
+total_nvme_idle_tsc :  986884137
+total_poll_tsc :  21532183056
+nvme_busy_tsc :  20545298919
+sock_completions/polls :  0.2038228060670794
+nvme_completions/polls :  2.9112648063791084
+nvme_completions/nvme_busy_polls :  14.283312366041082
+nvme_idle_tsc/nvme_idle_completions (ticks) :  132.81897111756666
+nvme_idle_tsc/nvme_idle_completions (us) :  0.6640948555878333
+nvme_busy_tsc/nvme_completions (ticks) :  756.1960955968128
+nvme_busy_tsc/nvme_completions (us) :  3.7809804779840643
 ~~~
 
