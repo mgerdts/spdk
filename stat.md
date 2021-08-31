@@ -148,3 +148,28 @@ nvme_busy_tsc/nvme_completions (ticks) :  756.1960955968128
 nvme_busy_tsc/nvme_completions (us) :  3.7809804779840643
 ~~~
 
+
+# IO Stages {#stat_io_stage}
+
+Get IO stage counts
+
+Example command
+
+`./scripts/rpc.py bdev_nvme_get_io_stage_counts > io_stage.json`
+
+Script io_stage.py can help to get the average counts with the following command
+
+`./io_stage.py *.json`
+
+Example results 
+~~~
+{
+ 'NO_STAGE': -39.59493670886076,
+ 'PROCESS_SQE': -1.375,
+ 'SOCK_BATCH_QUEUE': 13.496835443037975,
+ 'WAIT_FOR_TARGET': 25.140822784810126,
+ 'PROCESS_RESP_PDU': 1.8132911392405062,
+ 'WAIT_FOR_DMA': 0.5189873417721519
+}
+~~~
+
