@@ -98,7 +98,7 @@ enum {
 };
 
 struct vma_sock_packet {
-	struct vma_packet_t *vma_packet;
+	struct xlio_recvfrom_zcopy_packet_t *vma_packet;
 	int refs;
 	void *vma_packet_id;
 	STAILQ_ENTRY(vma_sock_packet) link;
@@ -172,7 +172,7 @@ static struct spdk_sock_impl_opts g_spdk_vma_sock_impl_opts = {
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
-static struct vma_api_t *g_vma_api;
+static struct xlio_api_t *g_vma_api;
 
 static struct {
 	int (*socket)(int domain, int type, int protocol);
@@ -270,7 +270,7 @@ spdk_vma_get_api(void)
 	struct vma_api_t *api_ptr = NULL;
 	socklen_t len = sizeof(api_ptr);
 
-	int err = g_vma_ops.getsockopt(-1, SOL_SOCKET, SO_VMA_GET_API, &api_ptr, &len);
+	int err = g_vma_ops.getsockopt(-1, SOL_SOCKET, SO_XLIO_GET_API, &api_ptr, &len);
 	if (err < 0) {
 		return NULL;
 	}
@@ -474,10 +474,10 @@ vma_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 
 static inline struct ibv_pd *vma_get_pd(int fd)
 {
-	struct vma_pd_attr pd_attr_ptr = {};
+	struct xlio_pd_attr pd_attr_ptr = {};
 	socklen_t len = sizeof(pd_attr_ptr);
 
-	int err = g_vma_ops.getsockopt(fd, SOL_SOCKET, SO_VMA_PD, &pd_attr_ptr, &len);
+	int err = g_vma_ops.getsockopt(fd, SOL_SOCKET, SO_XLIO_PD, &pd_attr_ptr, &len);
 	if (err < 0) {
 		return NULL;
 	}
@@ -980,11 +980,11 @@ vma_sock_flush(struct spdk_sock *sock)
 	return _sock_flush_ext(sock);
 }
 
-static inline struct vma_packet_t *
-next_packet(struct vma_packet_t *packet)
+static inline struct xlio_recvfrom_zcopy_packet_t *
+next_packet(struct xlio_recvfrom_zcopy_packet_t *packet)
 {
-	return (struct vma_packet_t *)((char *)packet +
-				       sizeof(struct vma_packet_t) +
+	return (struct xlio_recvfrom_zcopy_packet_t *)((char *)packet +
+				       sizeof(struct xlio_recvfrom_zcopy_packet_t) +
 				       packet->sz_iov * sizeof(struct iovec));
 }
 
@@ -1006,8 +1006,8 @@ static ssize_t
 vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 {
 	struct spdk_vma_sock_group_impl *group = __vma_group_impl(sock->base.group_impl);
-	struct vma_packets_t *vma_packets;
-	struct vma_packet_t *vma_packet;
+	struct xlio_recvfrom_zcopy_packets_t *vma_packets;
+	struct xlio_recvfrom_zcopy_packet_t *vma_packet;
 	int flags = 0;
 	int ret;
 	size_t i;
@@ -1035,12 +1035,12 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 		return -1;
 	}
 
-	if (!(flags & MSG_VMA_ZCOPY)) {
+	if (!(flags & MSG_XLIO_ZCOPY)) {
 		SPDK_WARNLOG("Zcopy receive was not performed. Got %d bytes.\n", ret);
 		return -1;
 	}
 
-	vma_packets = (struct vma_packets_t *)sock->vma_packets_buf;
+	vma_packets = (struct xlio_recvfrom_zcopy_packets_t *)sock->vma_packets_buf;
 	SPDK_DEBUGLOG(vma, "Sock %d: got %lu packets, total %d bytes\n",
 		      sock->fd, vma_packets->n_packet_num, ret);
 
@@ -1071,7 +1071,7 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 			int rc;
 
 			SPDK_DEBUGLOG(vma, "Dropping zero length packet: id %p\n", vma_packet->packet_id);
-			rc = g_vma_api->free_packets(sock->fd, vma_packet, 1);
+			rc = g_vma_api->recvfrom_zcopy_free_packets(sock->fd, vma_packet, 1);
 			if (rc < 0) {
 				SPDK_ERRLOG("Free VMA packets failed, ret %d, errno %d\n",
 					    rc, errno);
@@ -1115,7 +1115,7 @@ vma_sock_recvfrom_zcopy(struct spdk_vma_sock *sock)
 static void
 vma_sock_free_packet(struct spdk_vma_sock *sock, struct vma_sock_packet *packet) {
 	int ret;
-	struct vma_packet_t vma_packet;
+	struct xlio_recvfrom_zcopy_packet_t vma_packet;
 
 	SPDK_DEBUGLOG(vma, "Sock %d: free VMA packet %p\n",
 		      sock->fd, packet->vma_packet->packet_id);
@@ -1123,7 +1123,7 @@ vma_sock_free_packet(struct spdk_vma_sock *sock, struct vma_sock_packet *packet)
 	/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
 	vma_packet.packet_id = packet->vma_packet_id;
 	vma_packet.sz_iov = 0;
-	ret = g_vma_api->free_packets(sock->fd, &vma_packet, 1);
+	ret = g_vma_api->recvfrom_zcopy_free_packets(sock->fd, &vma_packet, 1);
 	if (ret < 0) {
 		SPDK_ERRLOG("Free VMA packets failed, ret %d, errno %d\n",
 			    ret, errno);
@@ -1316,7 +1316,7 @@ vma_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 }
 
 static inline size_t
-vma_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct vma_pd_key *mkeys)
+vma_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct xlio_pd_key *mkeys)
 {
 	size_t iovcnt = 0;
 	int i;
@@ -1376,10 +1376,10 @@ _sock_flush_ext(struct spdk_sock *sock)
 	int flags;
 	struct iovec iovs[IOV_BATCH_SIZE];
 	union {
-		char buf[CMSG_SPACE(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE)];
+		char buf[CMSG_SPACE(sizeof(struct xlio_pd_key) * IOV_BATCH_SIZE)];
 		struct cmsghdr align;
 	} mkeys_container;
-	struct vma_pd_key *mkeys;
+	struct xlio_pd_key *mkeys;
 	size_t iovcnt;
 	int retval;
 	struct spdk_sock_request *req;
@@ -1407,16 +1407,16 @@ _sock_flush_ext(struct spdk_sock *sock)
 		msg.msg_controllen = sizeof(mkeys_container.buf);
 		cmsg = CMSG_FIRSTHDR(&msg);
 
-		cmsg->cmsg_len = CMSG_LEN(sizeof(struct vma_pd_key) * IOV_BATCH_SIZE);
+		cmsg->cmsg_len = CMSG_LEN(sizeof(struct xlio_pd_key) * IOV_BATCH_SIZE);
 		cmsg->cmsg_level = SOL_SOCKET;
-		cmsg->cmsg_type = SCM_VMA_PD;
+		cmsg->cmsg_type = SCM_XLIO_PD;
 		flags = MSG_ZEROCOPY;
 
-		mkeys = (struct vma_pd_key *)CMSG_DATA(cmsg);
+		mkeys = (struct xlio_pd_key *)CMSG_DATA(cmsg);
 		iovcnt = vma_sock_prep_reqs(sock, iovs, mkeys);
 
-		msg.msg_controllen = CMSG_SPACE(sizeof(struct vma_pd_key) * iovcnt);
-		cmsg->cmsg_len = CMSG_LEN(sizeof(struct vma_pd_key) * iovcnt);
+		msg.msg_controllen = CMSG_SPACE(sizeof(struct xlio_pd_key) * iovcnt);
+		cmsg->cmsg_len = CMSG_LEN(sizeof(struct xlio_pd_key) * iovcnt);
 
 	} else {
 		if (vsock->zcopy) {
