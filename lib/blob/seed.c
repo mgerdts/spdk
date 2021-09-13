@@ -92,6 +92,7 @@ seed_complete(struct spdk_bdev_io *bdev_io, bool success, void *args)
 {
 	struct spdk_bs_dev_cb_args *cb_args = args;
 
+	spdk_bdev_free_io(bdev_io);
 	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, success ? 0 : -EIO);
 }
 
