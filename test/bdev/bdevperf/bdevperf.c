@@ -46,6 +46,8 @@
 #include "spdk/bit_array.h"
 #include "spdk/conf.h"
 #include "spdk/zipf.h"
+#include "spdk/dma.h"
+#include <infiniband/verbs.h>
 
 #define BDEVPERF_CONFIG_MAX_FILENAME 1024
 #define BDEVPERF_CONFIG_UNDEFINED -1
@@ -62,6 +64,8 @@ struct bdevperf_task {
 	enum spdk_bdev_io_type		io_type;
 	TAILQ_ENTRY(bdevperf_task)	link;
 	struct spdk_bdev_io_wait_entry	bdev_io_wait;
+	struct spdk_bdev_ext_io_opts	ext_io_opts;
+	struct ibv_mr			*mr;
 };
 
 static const char *g_workload_type = NULL;
@@ -82,6 +86,12 @@ static int g_run_rc = 0;
 static bool g_shutdown = false;
 static uint64_t g_shutdown_tsc;
 static bool g_zcopy = false;
+static bool g_memory_domains = false;
+static enum spdk_dma_device_type g_memory_domain_type = SPDK_DMA_DEVICE_TYPE_RDMA;
+static uint64_t g_host_id = 0;
+static struct spdk_memory_domain *g_bdevperf_memory_domain;
+struct spdk_memory_domain_rdma_ctx g_rdma_memory_domain_ctx;
+struct spdk_memory_domain_host_ctx g_host_memory_domain_ctx;
 static struct spdk_thread *g_main_thread;
 static int g_time_in_sec = 0;
 static bool g_mix_specified = false;
@@ -402,7 +412,15 @@ bdevperf_test_done(void *ctx)
 
 		TAILQ_FOREACH_SAFE(task, &job->task_list, link, ttmp) {
 			TAILQ_REMOVE(&job->task_list, task, link);
-			spdk_free(task->buf);
+			if (task->mr) {
+				ibv_dereg_mr(task->mr);
+			}
+
+			if (g_memory_domains) {
+				free(task->buf);
+			} else {
+				spdk_free(task->buf);
+			}
 			spdk_free(task->md_buf);
 			free(task);
 		}
@@ -739,6 +757,15 @@ bdevperf_submit_task(void *arg)
 			if (g_zcopy) {
 				spdk_bdev_zcopy_end(task->bdev_io, true, cb_fn, task);
 				return;
+			} else if (g_memory_domains) {
+				struct iovec iov;
+				iov.iov_base = task->buf;
+				iov.iov_len = task->job->io_size;
+				rc = spdk_bdev_writev_blocks_ext(desc, ch, &iov, 1,
+								 task->offset_blocks,
+								 job->io_size_blocks,
+								 bdevperf_complete, task,
+								 &task->ext_io_opts);
 			} else {
 				if (spdk_bdev_is_md_separate(job->bdev)) {
 					rc = spdk_bdev_writev_blocks_with_md(desc, ch, &task->iov, 1,
@@ -771,6 +798,15 @@ bdevperf_submit_task(void *arg)
 		if (g_zcopy) {
 			rc = spdk_bdev_zcopy_start(desc, ch, NULL, 0, task->offset_blocks, job->io_size_blocks,
 						   true, bdevperf_zcopy_populate_complete, task);
+		} else if (g_memory_domains) {
+			struct iovec iov;
+			iov.iov_base = task->buf;
+			iov.iov_len = task->job->io_size;
+			rc = spdk_bdev_readv_blocks_ext(desc, ch, &iov, 1,
+							task->offset_blocks,
+							job->io_size_blocks,
+							bdevperf_complete, task,
+							&task->ext_io_opts);
 		} else {
 			if (spdk_bdev_is_md_separate(job->bdev)) {
 				rc = spdk_bdev_read_blocks_with_md(desc, ch, task->buf, task->md_buf,
@@ -1237,6 +1273,33 @@ _bdevperf_construct_job(void *ctx)
 		}
 	}
 
+	if (g_memory_domains) {
+		struct spdk_memory_domain *domains[8];
+		int num_domains;
+		int i;
+
+		num_domains = spdk_bdev_get_memory_domains(job->bdev, NULL, 0);
+		if (0 == num_domains) {
+			fprintf(stderr, "Test requires memory domains but bdev module does not support any\n");
+			g_run_rc = -ENOTSUP;
+			goto end;
+		}
+
+		num_domains = spdk_bdev_get_memory_domains(job->bdev, domains, 8);
+		for (i = 0; i < num_domains; ++i) {
+			if (spdk_memory_domain_get_dma_device_type(domains[i]) ==
+			    SPDK_DMA_DEVICE_TYPE_HOST) {
+				break;
+			}
+		}
+
+		if (i == num_domains) {
+			printf("Test requires HOST memory domain but bdev module does not support it\n");
+			g_run_rc = -ENOTSUP;
+			goto end;
+		}
+	}
+
 	job->ch = spdk_bdev_get_io_channel(job->bdev_desc);
 	if (!job->ch) {
 		SPDK_ERRLOG("Could not get io_channel for device %s, error=%d\n", spdk_bdev_get_name(job->bdev),
@@ -1398,8 +1461,13 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 			return -ENOMEM;
 		}
 
-		task->buf = spdk_zmalloc(job->buf_size, spdk_bdev_get_buf_align(job->bdev), NULL,
-					 SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+		if (g_memory_domains) {
+			task->buf = calloc(1, job->buf_size + spdk_bdev_get_buf_align(job->bdev));
+			/* @todo: handle alignment requirements */
+		} else {
+			task->buf = spdk_zmalloc(job->buf_size, spdk_bdev_get_buf_align(job->bdev), NULL,
+						 SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+		}
 		if (!task->buf) {
 			fprintf(stderr, "Cannot allocate buf for task=%p\n", task);
 			free(task);
@@ -1412,10 +1480,20 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 						    SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 			if (!task->md_buf) {
 				fprintf(stderr, "Cannot allocate md buf for task=%p\n", task);
-				spdk_free(task->buf);
+				if (g_memory_domains) {
+					free(task->buf);
+				} else {
+					spdk_free(task->buf);
+				}
 				free(task);
 				return -ENOMEM;
 			}
+		}
+
+		if (g_memory_domains) {
+			task->ext_io_opts.size = sizeof(struct spdk_bdev_ext_io_opts);
+			task->ext_io_opts.memory_domain = g_bdevperf_memory_domain;
+			task->ext_io_opts.memory_domain_ctx = task;
 		}
 
 		task->job = job;
@@ -1900,6 +1978,57 @@ error:
 	return 1;
 }
 
+static int
+memory_domain_translate_cb(struct spdk_memory_domain *src_domain,
+			   void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			   struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			   void *addr, size_t len,
+			   struct spdk_memory_domain_translation_result *result)
+{
+	struct bdevperf_task *task = src_domain_ctx;
+	enum spdk_dma_device_type dst_type = spdk_memory_domain_get_dma_device_type(dst_domain);
+
+	assert(src_domain == g_bdevperf_memory_domain);
+
+	if (dst_type == SPDK_DMA_DEVICE_TYPE_RDMA) {
+		if (!task->mr) {
+			struct ibv_qp *qp = dst_domain_ctx->rdma.ibv_qp;
+			task->mr = ibv_reg_mr(qp->pd, task->buf, task->job->buf_size,
+					      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
+					      IBV_ACCESS_REMOTE_WRITE);
+			if (!task->mr) {
+				fprintf(stderr, "Failed to register MR: addr %p, len %lu, pd %p\n",
+					task->buf, task->job->buf_size, qp->pd);
+				return -1;
+			}
+		}
+
+		result->size = sizeof(*result);
+		result->iov_count = 1;
+		result->iov.iov_base = addr;
+		result->iov.iov_len = len;
+		result->dst_domain = dst_domain;
+		result->rdma.lkey = task->mr->lkey;
+		result->rdma.rkey = task->mr->rkey;
+	} else if (dst_type == SPDK_DMA_DEVICE_TYPE_HOST) {
+		if (dst_domain_ctx->host.host_id != g_host_id) {
+			return -1;
+		}
+
+		result->size = sizeof(*result);
+		result->iov_count = 1;
+		result->iov.iov_base = addr;
+		result->iov.iov_len = len;
+		result->dst_domain = dst_domain;
+	} else {
+		fprintf(stderr, "Requested translation to unsupported memory domain %d\n",
+			dst_type);
+		return -1;
+	}
+
+	return 0;
+}
+
 static void
 bdevperf_run(void *arg1)
 {
@@ -1910,6 +2039,41 @@ bdevperf_run(void *arg1)
 	spdk_cpuset_zero(&g_all_cpuset);
 	SPDK_ENV_FOREACH_CORE(i) {
 		spdk_cpuset_set_cpu(&g_all_cpuset, i, true);
+	}
+
+	if (g_memory_domains) {
+		struct spdk_memory_domain_ctx domain_ctx = {};
+		int rc;
+
+		domain_ctx.size = sizeof(domain_ctx);
+		switch (g_memory_domain_type) {
+		case SPDK_DMA_DEVICE_TYPE_RDMA:
+			domain_ctx.user_ctx = &g_rdma_memory_domain_ctx;
+			g_rdma_memory_domain_ctx.size = sizeof(g_rdma_memory_domain_ctx);
+			g_rdma_memory_domain_ctx.ibv_pd = NULL;
+			break;
+		case SPDK_DMA_DEVICE_TYPE_HOST:
+			domain_ctx.user_ctx = &g_host_memory_domain_ctx;
+			g_host_memory_domain_ctx.size = sizeof(g_host_memory_domain_ctx);
+			g_host_memory_domain_ctx.host_id = g_host_id;
+			break;
+		default:
+			fprintf(stderr, "Unknown memory domain type %d\n", g_memory_domain_type);
+			spdk_app_stop(-EINVAL);
+			return;
+		}
+
+		rc = spdk_memory_domain_create(&g_bdevperf_memory_domain,
+					       g_memory_domain_type,
+					       &domain_ctx,
+					       "bdevperf_memory_domain");
+		if (rc != 0) {
+			fprintf(stderr, "Failed to create memory domain: err %d\n", rc);
+			spdk_app_stop(rc);
+			return;
+		}
+
+		spdk_memory_domain_set_translation(g_bdevperf_memory_domain, memory_domain_translate_cb);
 	}
 
 	if (g_wait_for_tests) {
@@ -2005,6 +2169,16 @@ bdevperf_parse_arg(int ch, char *arg)
 		g_wait_for_tests = true;
 	} else if (ch == 'Z') {
 		g_zcopy = true;
+	} else if (ch == 'D') {
+		g_memory_domains = true;
+		if (strcasecmp(arg, "rdma") == 0) {
+			g_memory_domain_type = SPDK_DMA_DEVICE_TYPE_RDMA;
+		} else if (strcasecmp(arg, "host") == 0) {
+			g_memory_domain_type = SPDK_DMA_DEVICE_TYPE_HOST;
+		} else {
+			fprintf(stderr, "Unknown memory domain type: %s\n", arg);
+			return -EINVAL;
+		}
 	} else if (ch == 'X') {
 		g_abort = true;
 	} else if (ch == 'C') {
@@ -2044,6 +2218,9 @@ bdevperf_parse_arg(int ch, char *arg)
 			break;
 		case 'k':
 			g_timeout_in_sec = tmp;
+			break;
+		case 'H':
+			g_host_id = tmp;
 			break;
 		case 'M':
 			g_rw_percentage = tmp;
@@ -2085,6 +2262,8 @@ bdevperf_usage(void)
 	printf(" -X                        abort timed out I/O\n");
 	printf(" -C                        enable every core to send I/Os to each bdev\n");
 	printf(" -j <filename>             use job config file\n");
+	printf(" -D <type>                 enable using bdev API with memory domain and set source domain type: rdma, host\n");
+	printf(" -H <host_id>              host_id to use for host memory domain translation\n");
 }
 
 static int
@@ -2190,7 +2369,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:", NULL,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:", NULL,
 				      bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
