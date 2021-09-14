@@ -2734,6 +2734,12 @@ spdk_nvmf_ctrlr_identify_ctrlr(struct spdk_nvmf_ctrlr *ctrlr, struct spdk_nvme_c
 			      *(uint8_t *)&cdata->nvmf_specific.ctrattr);
 		SPDK_DEBUGLOG(nvmf, "ext ctrlr data: msdbd 0x%x\n",
 			      cdata->nvmf_specific.msdbd);
+
+		if (getenv("SPDK_NVMF_SQE_MODE") &&
+		    strtoul(getenv("SPDK_NVMF_SQE_MODE"), NULL, 0) != 0) {
+			SPDK_NOTICELOG("Controller supports SQE mode\n");
+			cdata->vs[0] = 1;
+		}
 	}
 
 	return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
