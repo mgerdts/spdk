@@ -1853,6 +1853,20 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->state = RDMA_REQUEST_STATE_FREE;
 }
 
+static inline bool
+nvmf_rdma_is_sqe_mode(uint8_t opc)
+{
+	switch (opc) {
+	case SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP:
+	case SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP_LIST:
+	case SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP:
+	case SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP_LIST:
+		return true;
+	default:
+		return false;
+	}
+}
+
 bool
 nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			  struct spdk_nvmf_rdma_request *rdma_req)
@@ -1949,6 +1963,14 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			if (&rdma_req->req != STAILQ_FIRST(&rgroup->group.pending_buf_queue)) {
 				/* This request needs to wait in line to obtain a buffer */
+				break;
+			}
+
+			if (nvmf_rdma_is_sqe_mode(rdma_req->req.cmd->nvme_cmd.opc)) {
+				STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
+				rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE;
+				rdma_req->req.xfer = SPDK_NVME_DATA_NONE;
+				rsp->cid = rdma_req->req.cmd->nvme_cmd.cid;
 				break;
 			}
 
