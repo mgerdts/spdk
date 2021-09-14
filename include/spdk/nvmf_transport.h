@@ -484,6 +484,11 @@ spdk_nvmf_ctrlr_get_subsystem(struct spdk_nvmf_ctrlr *ctrlr);
 uint16_t
 spdk_nvmf_ctrlr_get_id(struct spdk_nvmf_ctrlr *ctrlr);
 
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP 0x80
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP_LIST 0x81
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP 0x84
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP_LIST 0x85
+
 static inline enum spdk_nvme_data_transfer
 spdk_nvmf_req_get_xfer(struct spdk_nvmf_request *req) {
 	enum spdk_nvme_data_transfer xfer;
@@ -501,6 +506,17 @@ spdk_nvmf_req_get_xfer(struct spdk_nvmf_request *req) {
 
 	if (xfer == SPDK_NVME_DATA_NONE)
 	{
+		switch (cmd->opc) {
+		case SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP:
+		case SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP_LIST:
+			xfer = SPDK_NVME_DATA_HOST_TO_CONTROLLER;
+			break;
+		case SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP:
+		case SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP_LIST:
+			xfer = SPDK_NVME_DATA_CONTROLLER_TO_HOST;
+			break;
+		}
+
 		return xfer;
 	}
 
