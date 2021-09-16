@@ -415,6 +415,13 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
 		}
+
+		/* @todo: We set in-capsule related fields here because in nvme_ctrlr.c
+		 * it depends on transport type. Is there a better way?
+		 */
+		rqpair->qpair.ctrlr->ioccsz_bytes = cdata->nvmf_specific.ioccsz * 16 -
+			sizeof(struct spdk_nvme_cmd);
+		rqpair->qpair.ctrlr->icdoff = cdata->nvmf_specific.icdoff;
 	}
 
 	nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
