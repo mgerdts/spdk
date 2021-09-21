@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -1055,7 +1056,11 @@ spdk_nvme_trid_populate_transport(struct spdk_nvme_transport_id *trid,
 		trstring = SPDK_NVME_TRANSPORT_NAME_VFIOUSER;
 		break;
 	case SPDK_NVME_TRANSPORT_CUSTOM:
-		trstring = SPDK_NVME_TRANSPORT_NAME_CUSTOM;
+		if (strnlen(trid->trstring, SPDK_NVMF_TRSTRING_MAX_LEN) != 0) {
+			return;
+		} else {
+			trstring = SPDK_NVME_TRANSPORT_NAME_CUSTOM;
+		}
 		break;
 	default:
 		SPDK_ERRLOG("no available transports\n");
