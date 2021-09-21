@@ -53,8 +53,10 @@
 #define BDEVPERF_CONFIG_UNDEFINED -1
 #define BDEVPERF_CONFIG_ERROR -2
 
+#define BDEVPERF_MAX_IOVS 32
+
 struct bdevperf_task {
-	struct iovec			iov;
+	struct iovec			iovs[BDEVPERF_MAX_IOVS];
 	struct bdevperf_job		*job;
 	struct spdk_bdev_io		*bdev_io;
 	void				*buf;
@@ -92,6 +94,7 @@ static uint64_t g_host_id = 0;
 static struct spdk_memory_domain *g_bdevperf_memory_domain;
 struct spdk_memory_domain_rdma_ctx g_rdma_memory_domain_ctx;
 struct spdk_memory_domain_host_ctx g_host_memory_domain_ctx;
+static int g_io_unit_size = 0;
 static struct spdk_thread *g_main_thread;
 static int g_time_in_sec = 0;
 static bool g_mix_specified = false;
@@ -715,14 +718,14 @@ bdevperf_generate_dif(struct bdevperf_task *task)
 	}
 
 	if (spdk_bdev_is_md_interleaved(bdev)) {
-		rc = spdk_dif_generate(&task->iov, 1, job->io_size_blocks, &dif_ctx);
+		rc = spdk_dif_generate(task->iovs, 1, job->io_size_blocks, &dif_ctx);
 	} else {
 		struct iovec md_iov = {
 			.iov_base	= task->md_buf,
 			.iov_len	= spdk_bdev_get_md_size(bdev) * job->io_size_blocks,
 		};
 
-		rc = spdk_dix_generate(&task->iov, 1, &md_iov, job->io_size_blocks, &dif_ctx);
+		rc = spdk_dix_generate(task->iovs, 1, &md_iov, job->io_size_blocks, &dif_ctx);
 	}
 
 	if (rc != 0) {
@@ -730,6 +733,32 @@ bdevperf_generate_dif(struct bdevperf_task *task)
 	}
 
 	return rc;
+}
+
+static size_t
+bdevperf_fill_iovs(void *addr, size_t length, struct iovec *iovs)
+{
+	size_t num_iovs;
+	const uint64_t PRP_PAGE_SIZE = 4096;
+	const uint64_t PRP_PAGE_MASK = PRP_PAGE_SIZE - 1;
+	uint64_t page_offset = (uint64_t)addr & PRP_PAGE_MASK;
+	size_t iov_len;
+
+	iov_len = spdk_min(length, (size_t)g_io_unit_size - page_offset);
+	iovs[0].iov_base = addr;
+	iovs[0].iov_len = iov_len;
+	addr += iov_len;
+	length -= iov_len;
+	for (num_iovs = 1; length > 0; ++num_iovs) {
+		iov_len = spdk_min(length, (size_t)g_io_unit_size);
+		iovs[num_iovs].iov_base = addr;
+		iovs[num_iovs].iov_len = iov_len;
+		addr += iov_len;
+		length -= iov_len;
+	}
+
+	assert(length == 0);
+	return num_iovs;
 }
 
 static void
@@ -758,20 +787,23 @@ bdevperf_submit_task(void *arg)
 				spdk_bdev_zcopy_end(task->bdev_io, true, cb_fn, task);
 				return;
 			} else if (g_memory_domains) {
-				rc = spdk_bdev_writev_blocks_ext(desc, ch, &task->iov, 1,
+				size_t num_iovs;
+
+				num_iovs = bdevperf_fill_iovs(task->buf, task->job->io_size, task->iovs);
+				rc = spdk_bdev_writev_blocks_ext(desc, ch, task->iovs, num_iovs,
 								 task->offset_blocks,
 								 job->io_size_blocks,
 								 bdevperf_complete, task,
 								 &task->ext_io_opts);
 			} else {
 				if (spdk_bdev_is_md_separate(job->bdev)) {
-					rc = spdk_bdev_writev_blocks_with_md(desc, ch, &task->iov, 1,
+					rc = spdk_bdev_writev_blocks_with_md(desc, ch, task->iovs, 1,
 									     task->md_buf,
 									     task->offset_blocks,
 									     job->io_size_blocks,
 									     cb_fn, task);
 				} else {
-					rc = spdk_bdev_writev_blocks(desc, ch, &task->iov, 1,
+					rc = spdk_bdev_writev_blocks(desc, ch, task->iovs, 1,
 								     task->offset_blocks,
 								     job->io_size_blocks,
 								     cb_fn, task);
@@ -796,9 +828,10 @@ bdevperf_submit_task(void *arg)
 			rc = spdk_bdev_zcopy_start(desc, ch, NULL, 0, task->offset_blocks, job->io_size_blocks,
 						   true, bdevperf_zcopy_populate_complete, task);
 		} else if (g_memory_domains) {
-			task->iov.iov_base = task->buf;
-			task->iov.iov_len = task->job->io_size;
-			rc = spdk_bdev_readv_blocks_ext(desc, ch, &task->iov, 1,
+			size_t num_iovs;
+
+			num_iovs = bdevperf_fill_iovs(task->buf, task->job->io_size, task->iovs);
+			rc = spdk_bdev_readv_blocks_ext(desc, ch, task->iovs, num_iovs,
 							task->offset_blocks,
 							job->io_size_blocks,
 							bdevperf_complete, task,
@@ -962,8 +995,8 @@ bdevperf_submit_single(struct bdevperf_job *job, struct bdevperf_task *task)
 			bdevperf_prep_zcopy_write_task(task);
 			return;
 		} else {
-			task->iov.iov_base = task->buf;
-			task->iov.iov_len = job->buf_size;
+			task->iovs[0].iov_base = task->buf;
+			task->iovs[0].iov_len = job->buf_size;
 			task->io_type = SPDK_BDEV_IO_TYPE_WRITE;
 		}
 	} else if (job->flush) {
@@ -980,8 +1013,8 @@ bdevperf_submit_single(struct bdevperf_job *job, struct bdevperf_task *task)
 			bdevperf_prep_zcopy_write_task(task);
 			return;
 		} else {
-			task->iov.iov_base = task->buf;
-			task->iov.iov_len = job->buf_size;
+			task->iovs[0].iov_base = task->buf;
+			task->iovs[0].iov_len = job->buf_size;
 			task->io_type = SPDK_BDEV_IO_TYPE_WRITE;
 		}
 	}
@@ -2222,6 +2255,9 @@ bdevperf_parse_arg(int ch, char *arg)
 			g_rw_percentage = tmp;
 			g_mix_specified = true;
 			break;
+		case 'O':
+			g_io_unit_size = tmp;
+			break;
 		case 'P':
 			g_show_performance_ema_period = tmp;
 			break;
@@ -2260,6 +2296,7 @@ bdevperf_usage(void)
 	printf(" -j <filename>             use job config file\n");
 	printf(" -D <type>                 enable using bdev API with memory domain and set source domain type: rdma, host\n");
 	printf(" -H <host_id>              host_id to use for host memory domain translation\n");
+	printf(" -O <size>                 IO unit size\n");
 }
 
 static int
@@ -2301,6 +2338,18 @@ verify_test_params(struct spdk_app_opts *opts)
 		       g_io_size, SPDK_BDEV_LARGE_BUF_MAX_SIZE);
 		printf("Zero copy mechanism will not be used.\n");
 		g_zcopy = false;
+	}
+
+	if (g_io_unit_size) {
+		int num_iovs = SPDK_CEIL_DIV(g_io_size, g_io_unit_size);
+
+		if (num_iovs > BDEVPERF_MAX_IOVS) {
+			fprintf(stderr, "Requested iovs (%d) is largger then max supported (%d). Use large IO unit size\n",
+				num_iovs, BDEVPERF_MAX_IOVS);
+			return 1;
+		}
+	} else {
+		g_io_unit_size = g_io_size;
 	}
 
 	if (g_bdevperf_conf_file) {
@@ -2365,7 +2414,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:", NULL,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:O:", NULL,
 				      bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
