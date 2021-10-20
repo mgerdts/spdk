@@ -80,6 +80,11 @@ struct dma_test_task {
 	TAILQ_ENTRY(dma_test_task) link;
 };
 
+struct dma_test_data_cpl_ctx {
+	spdk_memory_domain_data_cpl_cb data_cpl;
+	void *data_cpl_arg;
+};
+
 TAILQ_HEAD(, dma_test_task) g_tasks = TAILQ_HEAD_INITIALIZER(g_tasks);
 
 /* User's input */
@@ -270,6 +275,55 @@ dma_test_task_is_read(struct dma_test_task *task)
 		return true;
 	}
 	return false;
+}
+
+static void
+dma_test_data_cpl(void *ctx)
+{
+	struct dma_test_data_cpl_ctx *cpl_ctx = ctx;
+
+	cpl_ctx->data_cpl(cpl_ctx->data_cpl_arg, 0);
+	free(cpl_ctx);
+}
+
+static int
+dma_test_copy_memory(struct dma_test_req *req, struct iovec *dst_iov, uint32_t dst_iovcnt,
+		     struct iovec *src_iov, uint32_t src_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg)
+{
+	struct dma_test_data_cpl_ctx *cpl_ctx;
+
+	cpl_ctx = calloc(1, sizeof(*cpl_ctx));
+	if (!cpl_ctx) {
+		return -ENOMEM;
+	}
+
+	cpl_ctx->data_cpl = cpl_cb;
+	cpl_ctx->data_cpl_arg = cpl_cb_arg;
+
+	spdk_iovcpy(src_iov, src_iovcnt, dst_iov, dst_iovcnt);
+	spdk_thread_send_msg(req->task->thread, dma_test_data_cpl, cpl_ctx);
+
+	return 0;
+}
+
+static int dma_test_push_memory_cb(struct spdk_memory_domain *dst_domain,
+				   void *dst_domain_ctx,
+				   struct iovec *dst_iov, uint32_t dst_iovcnt, struct iovec *src_iov, uint32_t src_iovcnt,
+				   spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg)
+{
+	struct dma_test_req *req = dst_domain_ctx;
+
+	return dma_test_copy_memory(req, dst_iov, dst_iovcnt, src_iov, src_iovcnt, cpl_cb, cpl_cb_arg);
+}
+
+static int dma_test_pull_memory_cb(struct spdk_memory_domain *src_domain,
+				   void *src_domain_ctx,
+				   struct iovec *src_iov, uint32_t src_iovcnt, struct iovec *dst_iov, uint32_t dst_iovcnt,
+				   spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg)
+{
+	struct dma_test_req *req = src_domain_ctx;
+
+	return dma_test_copy_memory(req, dst_iov, dst_iovcnt, src_iov, src_iovcnt, cpl_cb, cpl_cb_arg);
 }
 
 static int
@@ -464,7 +518,7 @@ dma_test_construct_task_on_thread(void *ctx)
 	spdk_thread_send_msg(g_main_thread, dma_test_construct_task_done, task);
 }
 
-static bool
+static void
 dma_test_check_bdev_supports_rdma_memory_domain(struct spdk_bdev *bdev)
 {
 	struct spdk_memory_domain **bdev_domains;
@@ -475,10 +529,10 @@ dma_test_check_bdev_supports_rdma_memory_domain(struct spdk_bdev *bdev)
 
 	if (bdev_domains_count < 0) {
 		fprintf(stderr, "Failed to get bdev memory domains count, rc %d\n", bdev_domains_count);
-		return false;
+		return;
 	} else if (bdev_domains_count == 0) {
 		fprintf(stderr, "bdev %s doesn't support any memory domains\n", spdk_bdev_get_name(bdev));
-		return false;
+		return;
 	}
 
 	fprintf(stdout, "bdev %s reports %d memory domains\n", spdk_bdev_get_name(bdev),
@@ -487,13 +541,13 @@ dma_test_check_bdev_supports_rdma_memory_domain(struct spdk_bdev *bdev)
 	bdev_domains = calloc((size_t)bdev_domains_count, sizeof(*bdev_domains));
 	if (!bdev_domains) {
 		fprintf(stderr, "Failed to allocate memory domains\n");
-		return false;
+		return;
 	}
 
 	bdev_domains_count_tmp = spdk_bdev_get_memory_domains(bdev, bdev_domains, bdev_domains_count);
 	if (bdev_domains_count_tmp != bdev_domains_count) {
 		fprintf(stderr, "Unexpected bdev domains return value %d\n", bdev_domains_count_tmp);
-		return false;
+		return;
 	}
 
 	for (i = 0; i < bdev_domains_count; i++) {
@@ -508,8 +562,6 @@ dma_test_check_bdev_supports_rdma_memory_domain(struct spdk_bdev *bdev)
 	fprintf(stdout, "bdev %s %s RDMA memory domain\n", spdk_bdev_get_name(bdev),
 		rdma_domain_supported ? "supports" : "doesn't support");
 	free(bdev_domains);
-
-	return rdma_domain_supported;
 }
 
 static int
@@ -615,11 +667,9 @@ dma_test_start(void *arg)
 		return;
 	}
 	bdev = spdk_bdev_desc_get_bdev(desc);
-	if (!dma_test_check_bdev_supports_rdma_memory_domain(bdev)) {
-		spdk_bdev_close(desc);
-		spdk_app_stop(-ENODEV);
-		return;
-	}
+	/* This function checks if bdev supports memory domains. Test is not failed if there are
+	 * no memory domains since bdev layer can pull/push data */
+	dma_test_check_bdev_supports_rdma_memory_domain(bdev);
 
 	g_main_thread = spdk_get_thread();
 
@@ -643,6 +693,8 @@ dma_test_start(void *arg)
 		return;
 	}
 	spdk_memory_domain_set_translation(g_domain, dma_test_translate_memory_cb);
+	spdk_memory_domain_set_pull(g_domain, dma_test_pull_memory_cb);
+	spdk_memory_domain_set_push(g_domain, dma_test_push_memory_cb);
 
 	SPDK_ENV_FOREACH_CORE(i) {
 		rc = allocate_task(i, g_bdev_name);

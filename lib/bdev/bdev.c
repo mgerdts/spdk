@@ -46,6 +46,7 @@
 #include "spdk/notify.h"
 #include "spdk/util.h"
 #include "spdk/trace.h"
+#include "spdk/dma.h"
 
 #include "spdk/bdev_module.h"
 #include "spdk/log.h"
@@ -322,6 +323,7 @@ struct spdk_bdev_desc {
 	}				callback;
 	bool				closed;
 	bool				write;
+	bool				memory_domains_supported;
 	pthread_mutex_t			mutex;
 	uint32_t			refs;
 	TAILQ_HEAD(, media_event_entry)	pending_media_events;
@@ -752,6 +754,12 @@ spdk_bdev_next_leaf(struct spdk_bdev *prev)
 	return bdev;
 }
 
+static inline bool
+bdev_io_use_memory_domain(struct spdk_bdev_io *bdev_io)
+{
+	return bdev_io->internal.ext_opts && bdev_io->internal.ext_opts->memory_domain;
+}
+
 void
 spdk_bdev_io_set_buf(struct spdk_bdev_io *bdev_io, void *buf, size_t len)
 {
@@ -881,7 +889,23 @@ _bdev_io_pull_bounce_md_buf(struct spdk_bdev_io *bdev_io, void *md_buf, size_t l
 	bdev_io->u.bdev.md_buf = md_buf;
 
 	if (bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE) {
-		memcpy(md_buf, bdev_io->internal.orig_md_iov.iov_base, len);
+		if (bdev_io_use_memory_domain(bdev_io)) {
+			rc = spdk_memory_domain_pull_data(bdev_io->internal.ext_opts->memory_domain,
+							  bdev_io->internal.ext_opts->memory_domain_ctx,
+							  &bdev_io->internal.orig_md_iov, 1,
+							  &bdev_io->internal.bounce_md_iov, 1,
+							  cpl_cb,
+							  bdev_io);
+			if (rc == 0) {
+				/* Continue to submit IO in completion callback */
+				return;
+			}
+			SPDK_ERRLOG("Failed to pull data from memory domain %s\n",
+				    spdk_memory_domain_get_dma_device_id(bdev_io->internal.ext_opts->memory_domain));
+			bdev_io->internal.status = SPDK_BDEV_IO_STATUS_FAILED;
+		} else {
+			memcpy(md_buf, bdev_io->internal.orig_md_iov.iov_base, len);
+		}
 	}
 
 	cpl_cb(bdev_io, rc);
@@ -945,7 +969,24 @@ _bdev_io_pull_bounce_data_buf(struct spdk_bdev_io *bdev_io, void *buf, size_t le
 	bdev_io->u.bdev.iovs[0].iov_len = len;
 	/* if this is write path, copy data from original buffer to bounce buffer */
 	if (bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE) {
-		_copy_iovs_to_buf(buf, len, bdev_io->internal.orig_iovs, bdev_io->internal.orig_iovcnt);
+		if (bdev_io_use_memory_domain(bdev_io)) {
+			rc = spdk_memory_domain_pull_data(bdev_io->internal.ext_opts->memory_domain,
+							  bdev_io->internal.ext_opts->memory_domain_ctx,
+							  bdev_io->internal.orig_iovs,
+							  (uint32_t) bdev_io->internal.orig_iovcnt,
+							  bdev_io->u.bdev.iovs, 1,
+							  _bdev_io_pull_bounce_data_buf_done,
+							  bdev_io);
+			if (rc == 0) {
+				/* Continue to submit IO in completion callback */
+				return;
+			}
+			SPDK_ERRLOG("Failed to pull data from memory domain %s\n",
+				    spdk_memory_domain_get_dma_device_id(bdev_io->internal.ext_opts->memory_domain));
+			bdev_io->internal.status = SPDK_BDEV_IO_STATUS_FAILED;
+		} else {
+			_copy_iovs_to_buf(buf, len, bdev_io->internal.orig_iovs, bdev_io->internal.orig_iovcnt);
+		}
 	}
 
 	_bdev_io_pull_bounce_data_buf_done(bdev_io, rc);
@@ -1115,8 +1156,26 @@ _bdev_io_push_bounce_md_buffer(struct spdk_bdev_io *bdev_io, bdev_copy_bounce_bu
 
 		if (bdev_io->type == SPDK_BDEV_IO_TYPE_READ &&
 		    bdev_io->internal.status == SPDK_BDEV_IO_STATUS_SUCCESS) {
-			memcpy(bdev_io->internal.orig_md_iov.iov_base, bdev_io->u.bdev.md_buf,
-			       bdev_io->internal.orig_md_iov.iov_len);
+			if (bdev_io_use_memory_domain(bdev_io)) {
+				/* If memory domain is used then we need to call async push function */
+				rc = spdk_memory_domain_push_data(bdev_io->internal.ext_opts->memory_domain,
+								  bdev_io->internal.ext_opts->memory_domain_ctx,
+								  &bdev_io->internal.orig_md_iov,
+								  (uint32_t)bdev_io->internal.orig_iovcnt,
+								  &bdev_io->internal.bounce_md_iov, 1,
+								  cpl_cb,
+								  bdev_io);
+				if (rc == 0) {
+					/* Continue IO completion in async callback */
+					return;
+				}
+				SPDK_ERRLOG("Failed to push md to memory domain %s\n",
+					    spdk_memory_domain_get_dma_device_id(bdev_io->internal.ext_opts->memory_domain));
+				bdev_io->internal.status = SPDK_BDEV_IO_STATUS_FAILED;
+			} else {
+				memcpy(bdev_io->internal.orig_md_iov.iov_base, bdev_io->u.bdev.md_buf,
+				       bdev_io->internal.orig_md_iov.iov_len);
+			}
 		}
 	}
 
@@ -1156,10 +1215,28 @@ _bdev_io_push_bounce_data_buffer(struct spdk_bdev_io *bdev_io, bdev_copy_bounce_
 	/* if this is read path, copy data from bounce buffer to original buffer */
 	if (bdev_io->type == SPDK_BDEV_IO_TYPE_READ &&
 	    bdev_io->internal.status == SPDK_BDEV_IO_STATUS_SUCCESS) {
-		_copy_buf_to_iovs(bdev_io->internal.orig_iovs,
-				  bdev_io->internal.orig_iovcnt,
-				  bdev_io->internal.bounce_iov.iov_base,
-				  bdev_io->internal.bounce_iov.iov_len);
+		if (bdev_io_use_memory_domain(bdev_io)) {
+			/* If memory domain is used then we need to call async push function */
+			rc = spdk_memory_domain_push_data(bdev_io->internal.ext_opts->memory_domain,
+							  bdev_io->internal.ext_opts->memory_domain_ctx,
+							  bdev_io->internal.orig_iovs,
+							  (uint32_t)bdev_io->internal.orig_iovcnt,
+							  &bdev_io->internal.bounce_iov, 1,
+							  _bdev_io_push_bounce_data_buffer_done,
+							  bdev_io);
+			if (rc == 0) {
+				/* Continue IO completion in async callback */
+				return;
+			}
+			SPDK_ERRLOG("Failed to push data to memory domain %s\n",
+				    spdk_memory_domain_get_dma_device_id(bdev_io->internal.ext_opts->memory_domain));
+			bdev_io->internal.status = SPDK_BDEV_IO_STATUS_FAILED;
+		} else {
+			_copy_buf_to_iovs(bdev_io->internal.orig_iovs,
+					  bdev_io->internal.orig_iovcnt,
+					  bdev_io->internal.bounce_iov.iov_base,
+					  bdev_io->internal.bounce_iov.iov_len);
+		}
 	}
 
 	_bdev_io_push_bounce_data_buffer_done(bdev_io, rc);
@@ -1224,6 +1301,28 @@ spdk_bdev_io_get_buf(struct spdk_bdev_io *bdev_io, spdk_bdev_io_get_buf_cb cb, u
 		cb(spdk_bdev_io_get_io_channel(bdev_io), bdev_io, true);
 		return;
 	}
+
+	bdev_io_get_buf(bdev_io, len);
+}
+
+static void
+_bdev_memory_domain_get_io_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io,
+			      bool success)
+{
+	if (!success) {
+		SPDK_ERRLOG("Failed to get data buffer, completing IO\n");
+		bdev_io_complete(bdev_io);
+	} else {
+		bdev_io_submit(bdev_io);
+	}
+}
+
+static void
+_bdev_memory_domain_io_get_buf(struct spdk_bdev_io *bdev_io, spdk_bdev_io_get_buf_cb cb,
+			       uint64_t len)
+{
+	assert(cb != NULL);
+	bdev_io->internal.get_buf_cb = cb;
 
 	bdev_io_get_buf(bdev_io, len);
 }
@@ -2312,6 +2411,11 @@ bdev_io_split_submit(struct spdk_bdev_io *bdev_io, struct iovec *iov, int iovcnt
 	if (bdev_io->internal.ext_opts) {
 		memcpy(&opts_copy, bdev_io->internal.ext_opts, bdev_io->internal.ext_opts->size);
 		opts_copy.metadata = md_buf;
+		if (bdev_io->internal.orig_iovcnt) {
+			/* If orig_iovcnt is not 0 then local buffers are used, do not pass memory domain in that case */
+			opts_copy.memory_domain = NULL;
+			opts_copy.memory_domain_ctx = NULL;
+		}
 		opts = &opts_copy;
 	}
 
@@ -4096,13 +4200,28 @@ bdev_readv_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *c
 	bdev_io->u.bdev.num_blocks = num_blocks;
 	bdev_io->u.bdev.offset_blocks = offset_blocks;
 	bdev_io_init(bdev_io, bdev, cb_arg, cb);
-	bdev_io->internal.ext_opts = opts;
-	bdev_io->u.bdev.ext_opts = opts;
 
-	if (opts && copy_opts) {
-		memcpy(&bdev_io->internal.ext_opts_copy, opts, opts->size);
-		bdev_io->internal.ext_opts = &bdev_io->internal.ext_opts_copy;
-		bdev_io->u.bdev.ext_opts = &bdev_io->internal.ext_opts_copy;
+	if (opts) {
+		if (copy_opts) {
+			memcpy(&bdev_io->internal.ext_opts_copy, opts, opts->size);
+			opts = &bdev_io->internal.ext_opts_copy;
+		}
+		bdev_io->internal.ext_opts = opts;
+
+		if (opts->memory_domain && !desc->memory_domains_supported) {
+			/* bdev doesn't support memory domains, thereby buffers in this IO request can't
+			 * be accessed directly. It is needed to allocate buffers before issuing IO operation.
+			 * For write operation we need to pull buffers from memory domain before submitting IO.
+			 * Once read operation completes, we need to use memory_domain push functionality to
+			 * update data in original memory domain IO buffer
+			 * This IO request will go through a regular IO flow */
+			bdev_io->u.bdev.ext_opts = NULL;
+			_bdev_memory_domain_io_get_buf(bdev_io, _bdev_memory_domain_get_io_cb,
+						       num_blocks * bdev_io->bdev->blocklen);
+			return 0;
+		} else {
+			bdev_io->u.bdev.ext_opts = opts;
+		}
 	}
 
 	bdev_io_submit(bdev_io);
@@ -4147,6 +4266,10 @@ spdk_bdev_readv_blocks_ext(struct spdk_bdev_desc *desc, struct spdk_io_channel *
 	void *md = NULL;
 
 	if (opts) {
+		if (spdk_unlikely(opts->memory_domain && !(iov && iov[0].iov_base))) {
+			/* When memory domain is used, the user must provide data buffers */
+			return -EINVAL;
+		}
 		if (spdk_unlikely(!opts->size || sizeof(struct spdk_bdev_ext_io_opts) < opts->size)) {
 			return -EINVAL;
 		}
@@ -4281,13 +4404,29 @@ bdev_writev_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *
 	bdev_io->u.bdev.num_blocks = num_blocks;
 	bdev_io->u.bdev.offset_blocks = offset_blocks;
 	bdev_io_init(bdev_io, bdev, cb_arg, cb);
-	bdev_io->internal.ext_opts = opts;
-	bdev_io->u.bdev.ext_opts = opts;
 
-	if (opts && copy_opts) {
-		memcpy(&bdev_io->internal.ext_opts_copy, opts, opts->size);
-		bdev_io->internal.ext_opts = &bdev_io->internal.ext_opts_copy;
-		bdev_io->u.bdev.ext_opts = &bdev_io->internal.ext_opts_copy;
+	if (opts) {
+		if (copy_opts) {
+			memcpy(&bdev_io->internal.ext_opts_copy, opts, opts->size);
+			opts = &bdev_io->internal.ext_opts_copy;
+		}
+
+		bdev_io->internal.ext_opts = opts;
+
+		if (opts->memory_domain && !desc->memory_domains_supported) {
+			/* bdev doesn't support this memory domain type, thereby buffers in this IO request can't
+			 * be accessed directly. It is needed to allocate buffers before issuing IO operation.
+			 * For write operation we need to pull buffers from memory domain before submitting IO.
+			 * Once read operation completes, we need to use memory_domain push functionality to
+			 * update data in original memory domain IO buffer
+			 * This IO request will go through regular IO flow */
+			bdev_io->u.bdev.ext_opts = NULL;
+			_bdev_memory_domain_io_get_buf(bdev_io, _bdev_memory_domain_get_io_cb,
+						       num_blocks * bdev_io->bdev->blocklen);
+			return 0;
+		} else {
+			bdev_io->u.bdev.ext_opts = opts;
+		}
 	}
 
 	bdev_io_submit(bdev_io);
@@ -4349,6 +4488,10 @@ spdk_bdev_writev_blocks_ext(struct spdk_bdev_desc *desc, struct spdk_io_channel 
 	void *md = NULL;
 
 	if (opts) {
+		if (spdk_unlikely(opts->memory_domain && !(iov && iov[0].iov_base))) {
+			/* When memory domain is used, the user must provide data buffers */
+			return -EINVAL;
+		}
 		if (spdk_unlikely(!opts->size || sizeof(struct spdk_bdev_ext_io_opts) < opts->size)) {
 			return -EINVAL;
 		}
@@ -6220,6 +6363,7 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	TAILQ_INIT(&desc->pending_media_events);
 	TAILQ_INIT(&desc->free_media_events);
 
+	desc->memory_domains_supported = spdk_bdev_get_memory_domains(bdev, NULL, 0) > 0;
 	desc->callback.event_fn = event_cb;
 	desc->callback.ctx = event_ctx;
 	pthread_mutex_init(&desc->mutex, NULL);
