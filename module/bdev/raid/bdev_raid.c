@@ -679,6 +679,42 @@ raid_bdev_write_config_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *
 	spdk_json_write_object_end(w);
 }
 
+static int
+raid_bdev_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
+{
+	struct raid_bdev *raid_bdev = ctx;
+	struct spdk_bdev *base_bdev;
+	uint32_t i;
+	int domains_count = 0, rc;
+
+	/* First loop to get the number of memory domains */
+	for (i = 0; i < raid_bdev->num_base_bdevs; i++) {
+		base_bdev = raid_bdev->base_bdev_info[i].bdev;
+		rc = spdk_bdev_get_memory_domains(base_bdev, NULL, 0);
+		SPDK_NOTICELOG("bdev %s reports %d memory domains\n", spdk_bdev_get_name(base_bdev), rc);
+		if (rc < 0) {
+			return rc;
+		}
+		domains_count += rc;
+	}
+
+	if (!domains || array_size < domains_count) {
+		return domains_count;
+	}
+
+	for (i = 0; i < raid_bdev->num_base_bdevs; i++) {
+		base_bdev = raid_bdev->base_bdev_info[i].bdev;
+		rc = spdk_bdev_get_memory_domains(base_bdev, domains, array_size);
+		if (rc < 0) {
+			return rc;
+		}
+		domains += rc;
+		array_size -= rc;
+	}
+
+	return domains_count;
+}
+
 /* g_raid_bdev_fn_table is the function table for raid bdev */
 static const struct spdk_bdev_fn_table g_raid_bdev_fn_table = {
 	.destruct		= raid_bdev_destruct,
@@ -687,6 +723,7 @@ static const struct spdk_bdev_fn_table g_raid_bdev_fn_table = {
 	.get_io_channel		= raid_bdev_get_io_channel,
 	.dump_info_json		= raid_bdev_dump_info_json,
 	.write_config_json	= raid_bdev_write_config_json,
+	.get_memory_domains	= raid_bdev_get_memory_domains,
 };
 
 /*
