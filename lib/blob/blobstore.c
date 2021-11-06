@@ -46,6 +46,7 @@
 #include "spdk/bdev.h"
 
 #include "spdk_internal/assert.h"
+#include "spdk_internal/usdt.h"
 #include "spdk/log.h"
 
 #include "blobstore.h"
@@ -885,18 +886,26 @@ blob_serialize_add_page(const struct spdk_blob *blob,
 	*last_page = NULL;
 	if (*page_count == 0) {
 		assert(*pages == NULL);
+		/* XXX-mg
+		 * BUG: This malloc is taking 300 - 500+ µs.
+		 * https://redmine.mellanox.com/issues/2857107
+		 */
+		SPDK_DTRACE_PROBE1(blob_serialize_malloc_start, blob);
 		*pages = spdk_malloc(SPDK_BS_PAGE_SIZE, 0,
 				     NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+		SPDK_DTRACE_PROBE1(blob_serialize_malloc_done, blob);
 		if (*pages == NULL) {
 			return -ENOMEM;
 		}
 		*page_count = 1;
 	} else {
 		assert(*pages != NULL);
+		SPDK_DTRACE_PROBE1(blob_serialize_realloc_start, blob);
 		tmp_pages = spdk_realloc(*pages, SPDK_BS_PAGE_SIZE * (*page_count + 1), 0);
 		if (tmp_pages == NULL) {
 			return -ENOMEM;
 		}
+		SPDK_DTRACE_PROBE1(blob_serialize_realloc_done, blob);
 		(*page_count)++;
 		*pages = tmp_pages;
 	}
@@ -2351,6 +2360,8 @@ blob_insert_cluster_cpl(void *cb_arg, int bserrno)
 {
 	struct spdk_blob_copy_cluster_ctx *ctx = cb_arg;
 
+	SPDK_DTRACE_PROBE3(blob_write_md_done, ctx->blob, ctx, bserrno);
+
 	if (bserrno) {
 		if (bserrno == -EEXIST) {
 			/* The metadata insert failed because another thread
@@ -2375,6 +2386,8 @@ blob_write_copy_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 	struct spdk_blob_copy_cluster_ctx *ctx = cb_arg;
 	uint32_t cluster_number;
 
+	SPDK_DTRACE_PROBE3(blob_cow_write_done, ctx->blob, ctx, bserrno);
+
 	if (bserrno) {
 		/* The write failed, so jump to the final completion handler */
 		bs_sequence_finish(seq, bserrno);
@@ -2397,6 +2410,8 @@ blob_write_copy(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 		bs_sequence_finish(seq, bserrno);
 		return;
 	}
+
+	SPDK_DTRACE_PROBE3(blob_cow_read_done, ctx->blob, ctx, bserrno);
 
 	/* Write whole cluster */
 	bs_sequence_write_dev(seq, ctx->buf,
@@ -2423,6 +2438,7 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 		/* There are already operations pending. Queue this user op
 		 * and return because it will be re-executed when the outstanding
 		 * cluster allocation completes. */
+		SPDK_DTRACE_PROBE2(blob_write_enqueue, blob, op);
 		TAILQ_INSERT_TAIL(&ch->need_cluster_alloc, op, link);
 		return;
 	}
@@ -2461,6 +2477,7 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 	rc = bs_allocate_cluster(blob, cluster_number, &ctx->new_cluster, &ctx->new_extent_page,
 				 false);
 	pthread_mutex_unlock(&blob->bs->used_clusters_mutex);
+
 	if (rc != 0) {
 		spdk_free(ctx->buf);
 		free(ctx);
@@ -2484,15 +2501,19 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 	}
 
 	/* Queue the user op to block other incoming operations */
+	/* XXX-mg how is this not a race with the check earlier? */
 	TAILQ_INSERT_TAIL(&ch->need_cluster_alloc, op, link);
 
 	if (blob->parent_id != SPDK_BLOBID_INVALID) {
+		SPDK_DTRACE_PROBE3(blob_cow_read_start, blob, ctx, op);
 		/* Read cluster from backing device */
+		/* XXX-mg this could use "nvmf simple copy" to perform the copy remotely. */
 		bs_sequence_read_bs_dev(ctx->seq, blob->back_bs_dev, ctx->buf,
 					bs_dev_page_to_lba(blob->back_bs_dev, cluster_start_page),
 					bs_dev_byte_to_lba(blob->back_bs_dev, blob->bs->cluster_sz),
 					blob_write_copy, ctx);
 	} else {
+		SPDK_DTRACE_PROBE2(blob_thin_allocate_start, blob, ctx);
 		blob_insert_cluster_on_md_thread(ctx->blob, cluster_number, ctx->new_cluster,
 						 ctx->new_extent_page, blob_insert_cluster_cpl, ctx);
 	}
@@ -2948,6 +2969,7 @@ blob_request_submit_rw_iov(struct spdk_blob *blob, struct spdk_io_channel *_chan
 					return;
 				}
 
+				SPDK_DTRACE_PROBE2(blob_write_dev, blob, cb_arg);
 				bs_sequence_writev_dev(seq, iov, iovcnt, lba, lba_count, rw_iov_done, NULL);
 			} else {
 				/* Queue this operation and allocate the cluster */
@@ -2960,6 +2982,7 @@ blob_request_submit_rw_iov(struct spdk_blob *blob, struct spdk_io_channel *_chan
 					return;
 				}
 
+				SPDK_DTRACE_PROBE3(blob_write_cow, blob, op, cb_arg);
 				bs_allocate_and_copy_cluster(blob, _channel, offset, op);
 			}
 		}
@@ -7406,6 +7429,8 @@ blob_insert_cluster_on_md_thread(struct spdk_blob *blob, uint32_t cluster_num,
 	ctx->extent_page = extent_page;
 	ctx->cb_fn = cb_fn;
 	ctx->cb_arg = cb_arg;
+
+	SPDK_DTRACE_PROBE3(blob_write_md_enqueue, blob, ctx, cb_arg);
 
 	spdk_thread_send_msg(blob->bs->md_thread, blob_insert_cluster_msg, ctx);
 }

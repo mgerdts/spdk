@@ -39,6 +39,8 @@
 
 #if defined(SPDK_CONFIG_USDT) && !defined(SPDK_UNIT_TEST)
 
+#define STAP_SDT_ARG_CONSTRAINT        nr
+
 #include <sys/sdt.h>
 
 #define SPDK_DTRACE_PROBE(name)			DTRACE_PROBE1(spdk,name,spdk_get_ticks())

@@ -1,0 +1,115 @@
+/*
+ * Greatly simplified, the lvol write paths look like:
+ *
+ *    P1             Start                           Done             P9
+ *                     |                               ^
+ *                     V                               |
+ *          /--------------------\   Yes   +-----------------------+
+ *         {  Already Allocated?  }------->|     Write New Data    |
+ *          \--------------------/     P8  +-----------------------+  P8
+ *                     | No                            ^
+ *                     V                               |
+ *         +----------------------+                    |
+ *         | Allocate New Cluster |                    |
+ *         +----------------------+                    |
+ *                     |                               |
+ *                     V                               |
+ *          /--------------------\   No    +-----------------------+  P7
+ *         {     Requires CoW?    }------->|   Sync Blobstore MD   |
+ *          \--------------------/     P6  +-----------------------+  P6
+ *    P2               | Yes                           ^
+ *                     V                               |
+ *         +----------------------+                    |
+ *         | Allocate CoW Buffer  |                    |
+ *         +----------------------+                    |
+ *                     |                               |
+ *                     V                               |
+ *    P3   +----------------------+        +-----------------------+  P5
+ *         | Read Into CoW Buffer |------->| Write From Cow Buffer |
+ *         +----------------------+        +-----------------------+
+ *                                 P4
+ *
+ * Each of of the Pn marks represent USDT probes.
+ *
+ *   P1: lvol_write_start
+ *           struct spdk_lvol *lvol
+ *           struct spdk_bdev_io *bdev_io,
+ *           uint64_t start_page
+ *           uint32_t num_pages
+ *   P2: blob_write_cow
+ *           struct spdk_blob *blob (lvol->blob)
+ *           spdk_bs_user_op_t *op (allocated)
+ *           void *cb_arg (bdev_io from lvol_write_start)
+ *   P3: blob_cow_read_start
+ *           struct spdk_blob *blob
+ *           struct spdk_blob_copy_cluster_ctx *copy_ctx
+ *           spdk_bs_user_op_t *op
+ *   P4: blob_cow_read_done
+ *           struct spdk_blob *blob, struct
+ *           spdk_blob_copy_cluster_ctx *copy_ctx
+ *           int bserrno (negative errno)
+ *   P5: blob_cow_write_done
+ *           struct spdk_blob *blob, struct
+ *           spdk_blob_copy_cluster_ctx *copy_ctx
+ *           int bserrno (negative errno)
+ *   P6: blob_write_md_enqueue
+ *           struct spdk_blob *blob
+ *           struct spdk_blob_insert_cluster_ctx *insert_ctx;
+ *           void *cb_arg (struct spdk_blob_copy_cluster_ctx *copy_ctx)
+ *   P7: blob_write_md_done
+ *           struct spdk_blob *blob
+ *           struct spdk_blob_copy_cluster_ctx *copy_ctx
+ *           int bserrno
+ *   P8: blob_write_dev
+ *           struct spdk_blob *blob
+ *           struct spdk_blob_copy_cluster_ctx *copy_ctx
+ *           int bserrno (negative errno)
+ *   P9: lvol_op_comp
+ *           void *cb_arg (struct spdk_bdev_io from lvol_write_start)
+ *           enum spdk_bdev_io_status status = SPDK_BDEV_IO_STATUS_SUCCESS;
+ *
+ */
+usdt:*:spdk:lvol_write_start
+{
+	@last = nsecs;
+	@interest[arg2] = 1;
+	printf("\nSTART %u %u %s\n", arg2 / 128, arg3 / 128, probe);
+}
+
+usdt:*:spdk:blob_write_dev,
+usdt:*:spdk:blob_write_cow,
+usdt:*:spdk:blob_cow_read_start,
+usdt:*:spdk:blob_cow_read_done,
+usdt:*:spdk:blob_cow_write_done,
+usdt:*:spdk:blob_write_md_enqueue,
+usdt:*:spdk:blob_write_md_done
+{
+	$delta = (nsecs - @last) / 1000;
+	@last = nsecs;
+	@time[probe] = hist($delta);
+	@max[probe] = max($delta);
+	@stats[probe] = stats($delta);
+	printf("CPU %d %6u µs %s\n", cpu, $delta, probe);
+}
+
+usdt:*:spdk:lvol_op_comp
+/ @interest[arg1] == 1 /
+{
+	delete(@interest[arg1]);
+	$delta = (nsecs - @last) / 1000;
+	@last = nsecs;
+	@time[probe] = hist($delta);
+	@max[probe] = max($delta);
+	@stats[probe] = stats($delta);
+	printf("CPU %d %6u µs %s\n", cpu, $delta, probe);
+}
+
+END
+{
+	print(@time);
+	print(@max);
+	print(@stats);
+	clear(@time);
+	clear(@max);
+	clear(@stats);
+}

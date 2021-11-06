@@ -37,6 +37,7 @@
 #include "spdk/log.h"
 #include "spdk/string.h"
 #include "spdk/uuid.h"
+#include "spdk_internal/usdt.h"
 
 #include "vbdev_lvol.h"
 
@@ -803,6 +804,8 @@ lvol_op_comp(void *cb_arg, int bserrno)
 		}
 	}
 
+	SPDK_DTRACE_PROBE2(lvol_op_comp, bdev_io, status);
+
 	spdk_bdev_io_complete(bdev_io, status);
 }
 
@@ -815,6 +818,8 @@ lvol_unmap(struct spdk_lvol *lvol, struct spdk_io_channel *ch, struct spdk_bdev_
 	start_page = bdev_io->u.bdev.offset_blocks;
 	num_pages = bdev_io->u.bdev.num_blocks;
 
+	SPDK_DTRACE_PROBE3(lvol_unmap, bdev_io, start_page, num_pages);
+
 	spdk_blob_io_unmap(blob, ch, start_page, num_pages, lvol_op_comp, bdev_io);
 }
 
@@ -826,6 +831,8 @@ lvol_write_zeroes(struct spdk_lvol *lvol, struct spdk_io_channel *ch, struct spd
 
 	start_page = bdev_io->u.bdev.offset_blocks;
 	num_pages = bdev_io->u.bdev.num_blocks;
+
+	SPDK_DTRACE_PROBE3(lvol_write_zeroes, bdev_io, start_page, num_pages);
 
 	spdk_blob_io_write_zeroes(blob, ch, start_page, num_pages, lvol_op_comp, bdev_io);
 }
@@ -840,6 +847,8 @@ lvol_read(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io)
 	start_page = bdev_io->u.bdev.offset_blocks;
 	num_pages = bdev_io->u.bdev.num_blocks;
 
+	SPDK_DTRACE_PROBE3(lvol_read_start, bdev_io, start_page, num_pages);
+
 	spdk_blob_io_readv(blob, ch, bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt, start_page,
 			   num_pages, lvol_op_comp, bdev_io);
 }
@@ -852,6 +861,8 @@ lvol_write(struct spdk_lvol *lvol, struct spdk_io_channel *ch, struct spdk_bdev_
 
 	start_page = bdev_io->u.bdev.offset_blocks;
 	num_pages = bdev_io->u.bdev.num_blocks;
+
+	SPDK_DTRACE_PROBE4(lvol_write_start, lvol, bdev_io, start_page, num_pages);
 
 	spdk_blob_io_writev(blob, ch, bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt, start_page,
 			    num_pages, lvol_op_comp, bdev_io);
@@ -868,6 +879,7 @@ lvol_reset(struct spdk_bdev_io *bdev_io)
 static void
 lvol_get_buf_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io, bool success)
 {
+	SPDK_DTRACE_PROBE2(lvol_get_buf_complete, bdev_io, success);
 	if (!success) {
 		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
 		return;
@@ -883,6 +895,7 @@ vbdev_lvol_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_
 
 	switch (bdev_io->type) {
 	case SPDK_BDEV_IO_TYPE_READ:
+		SPDK_DTRACE_PROBE1(lvol_get_buf_start, bdev_io);
 		spdk_bdev_io_get_buf(bdev_io, lvol_get_buf_cb,
 				     bdev_io->u.bdev.num_blocks * bdev_io->bdev->blocklen);
 		break;
@@ -918,6 +931,7 @@ static struct spdk_bdev_fn_table vbdev_lvol_fn_table = {
 static void
 lvol_destroy_cb(void *cb_arg, int bdeverrno)
 {
+	SPDK_DTRACE_PROBE2(lvol_destroy_done, cb_arg, bdeverrno);
 }
 
 static void
@@ -930,6 +944,8 @@ _create_lvol_disk_destroy_cb(void *cb_arg, int bdeverrno)
 			    lvol->unique_id);
 		return;
 	}
+
+	SPDK_DTRACE_PROBE1(lvol_destroy_start, lvol);
 
 	spdk_lvol_destroy(lvol, lvol_destroy_cb, NULL);
 }
