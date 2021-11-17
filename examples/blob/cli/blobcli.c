@@ -393,7 +393,7 @@ show_bs_cb(void *arg1, spdk_blob_id blobid, int bserrno)
 	printf("\tAPI Version: %d\n", SPDK_BS_VERSION);
 
 	if (bserrno != -ENOENT) {
-		printf("\tsuper blob ID: %" PRIu64 "\n", cli_context->superid);
+		printf("\tsuper blob ID: 0x%" PRIx64 "\n", cli_context->superid);
 	} else {
 		printf("\tsuper blob ID: none assigned\n");
 	}
@@ -437,7 +437,7 @@ show_blob(struct cli_context_t *cli_context)
 
 	printf("Blob Public Info:\n");
 
-	printf("blob ID: %" PRIu64 "\n", cli_context->blobid);
+	printf("blob ID: 0x%" PRIx64 "\n", cli_context->blobid);
 
 	val = spdk_blob_get_num_clusters(cli_context->blob);
 	printf("# of clusters: %" PRIu64 "\n", val);
@@ -512,7 +512,7 @@ blob_iter_cb(void *arg1, struct spdk_blob *blob, int bserrno)
 
 	if (cli_context->action == CLI_LIST_BLOBS) {
 		printf("\nList BLOBS:\n");
-		printf("Found blob with ID# %" PRIu64 "\n",
+		printf("Found blob with ID# 0x%" PRIx64 "\n",
 		       spdk_blob_get_id(blob));
 	} else if (spdk_blob_get_id(blob) == cli_context->blobid) {
 		/*
@@ -1049,7 +1049,7 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 			if (argv[optind] != NULL) {
 				cmd_chosen++;
 				cli_context->action = CLI_DUMP_BLOB;
-				cli_context->blobid = spdk_strtoll(optarg, 10);
+				cli_context->blobid = spdk_strtoll(optarg, 0);
 				snprintf(cli_context->file, BUFSIZE, "%s", argv[optind]);
 			} else {
 				usage(cli_context, "ERROR: missing parameter.\n");
@@ -1059,8 +1059,8 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 			if (argv[optind] != NULL) {
 				cmd_chosen++;
 				cli_context->action = CLI_FILL;
-				cli_context->blobid = spdk_strtoll(optarg, 10);
-				cli_context->fill_value = spdk_strtol(argv[optind], 10);
+				cli_context->blobid = spdk_strtoll(optarg, 0);
+				cli_context->fill_value = spdk_strtol(argv[optind], 0);
 			} else {
 				usage(cli_context, "ERROR: missing parameter.\n");
 			}
@@ -1099,7 +1099,7 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 			if (argv[optind] != NULL) {
 				cmd_chosen++;
 				cli_context->action = CLI_REM_XATTR;
-				cli_context->blobid = spdk_strtoll(optarg, 10);
+				cli_context->blobid = spdk_strtoll(optarg, 0);
 				snprintf(cli_context->key, BUFSIZE, "%s", argv[optind]);
 			} else {
 				usage(cli_context, "ERROR: missing parameter.\n");
@@ -1120,7 +1120,7 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 			if (argv[optind] != NULL) {
 				cmd_chosen++;
 				cli_context->action = CLI_IMPORT_BLOB;
-				cli_context->blobid = spdk_strtoll(optarg, 10);
+				cli_context->blobid = spdk_strtoll(optarg, 0);
 				snprintf(cli_context->file, BUFSIZE, "%s", argv[optind]);
 			} else {
 				usage(cli_context, "ERROR: missing parameter.\n");
@@ -1138,7 +1138,7 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 		case 'p':
 			cmd_chosen++;
 			cli_context->action = CLI_SET_SUPER;
-			cli_context->superid = spdk_strtoll(optarg, 10);
+			cli_context->superid = spdk_strtoll(optarg, 0);
 			break;
 		case 'S':
 			if (cli_context->cli_mode == CLI_MODE_CMD) {
@@ -1153,7 +1153,7 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 				cli_context->action = CLI_SHOW_BS;
 			} else {
 				cli_context->action = CLI_SHOW_BLOB;
-				cli_context->blobid = spdk_strtoll(optarg, 10);
+				cli_context->blobid = spdk_strtoll(optarg, 0);
 			}
 			break;
 		case 'T':
@@ -1178,7 +1178,7 @@ cmd_parser(int argc, char **argv, struct cli_context_t *cli_context)
 			if (argv[optind] != NULL || argv[optind + 1] != NULL) {
 				cmd_chosen++;
 				cli_context->action = CLI_SET_XATTR;
-				cli_context->blobid = spdk_strtoll(optarg, 10);
+				cli_context->blobid = spdk_strtoll(optarg, 0);
 				snprintf(cli_context->key, BUFSIZE, "%s", argv[optind]);
 				snprintf(cli_context->value, BUFSIZE, "%s", argv[optind + 1]);
 			} else {
