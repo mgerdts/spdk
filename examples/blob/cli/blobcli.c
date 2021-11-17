@@ -43,6 +43,7 @@
 #include "spdk/version.h"
 #include "spdk/string.h"
 #include "spdk/uuid.h"
+#include "spdk/bdev_module.h"
 
 /*
  * The following is not a public header file, but the CLI does expose
@@ -897,7 +898,7 @@ static void
 base_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 		   void *event_ctx)
 {
-	printf("Unsupported bdev event: type %d\n", type);
+	printf("Unsupported bdev event: type %d on bdev %s\n", type, bdev->name);
 }
 
 /*
