@@ -233,6 +233,9 @@ struct spdk_bs_opts {
 	 * After that, new added fields should be put in the end of the struct.
 	 */
 	size_t opts_size;
+
+	/** Force recovery during import. */
+	bool force_recover;
 };
 
 /**
