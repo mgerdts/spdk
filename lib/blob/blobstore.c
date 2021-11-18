@@ -3261,6 +3261,7 @@ spdk_bs_opts_init(struct spdk_bs_opts *opts, size_t opts_size)
 
 	SET_FIELD(iter_cb_fn, NULL);
 	SET_FIELD(iter_cb_arg, NULL);
+	SET_FIELD(force_recover,  false);
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -3302,6 +3303,8 @@ struct spdk_bs_load_ctx {
 	void					*iter_cb_arg;
 	struct spdk_blob			*blob;
 	spdk_blob_id				blobid;
+
+	bool					force_recover;
 
 	/* These fields are used in the spdk_bs_dump path. */
 	bool					dumping;
@@ -3346,6 +3349,7 @@ bs_alloc(struct spdk_bs_dev *dev, struct spdk_bs_opts *opts, struct spdk_blob_st
 	ctx->bs = bs;
 	ctx->iter_cb_fn = opts->iter_cb_fn;
 	ctx->iter_cb_arg = opts->iter_cb_arg;
+	ctx->force_recover = opts->force_recover;
 
 	ctx->super = spdk_zmalloc(sizeof(*ctx->super), 0x1000, NULL,
 				  SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
@@ -4137,6 +4141,14 @@ bs_load_replay_md_chain_cpl(struct spdk_bs_load_ctx *ctx)
 
 	ctx->in_page_chain = false;
 
+	/* XXX-mg
+	 * I don't think this loop has any impact aside from the first
+	 * increment, as it seems used_md_pages was not loaded. If the bit
+	 * arrays were loaded, if a page is marked in used_md_pages but not
+	 * marked in used_blobs, we would not find lost blobs.
+	 *
+	 * Or at least that's what I get from inspection. Poking is needed.
+	 */
 	do {
 		ctx->page_index++;
 	} while (spdk_bit_array_get(ctx->bs->used_md_pages, ctx->page_index) == true);
@@ -4415,7 +4427,7 @@ bs_load_super_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 		return;
 	}
 
-	if (ctx->super->used_blobid_mask_len == 0 || ctx->super->clean == 0) {
+	if (ctx->super->used_blobid_mask_len == 0 || ctx->super->clean == 0 || ctx->force_recover) {
 		bs_recover(ctx);
 	} else {
 		bs_load_read_used_pages(ctx);
@@ -4450,12 +4462,13 @@ bs_opts_copy(struct spdk_bs_opts *src, struct spdk_bs_opts *dst)
 	}
 	SET_FIELD(iter_cb_fn);
 	SET_FIELD(iter_cb_arg);
+	SET_FIELD(force_recover);
 
 	dst->opts_size = src->opts_size;
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 64, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 72, "Incorrect size");
 
 #undef FIELD_OK
 #undef SET_FIELD
