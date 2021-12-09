@@ -12,6 +12,7 @@
 #include "spdk/queue.h"
 #include "spdk/util.h"
 #include "spdk/tree.h"
+#include "spdk/blob_esnap.h"
 
 #include "request.h"
 
@@ -201,6 +202,8 @@ struct spdk_bs_channel {
 
 	TAILQ_HEAD(, spdk_bs_request_set) need_cluster_alloc;
 	TAILQ_HEAD(, spdk_bs_request_set) queued_io;
+
+	struct spdk_esnap_channels	esnap_channels;
 };
 
 /** operation type */
@@ -218,6 +221,7 @@ enum spdk_blob_op_type {
 #define BLOB_SNAPSHOT "SNAP"
 #define SNAPSHOT_IN_PROGRESS "SNAPTMP"
 #define SNAPSHOT_PENDING_REMOVAL "SNAPRM"
+#define BLOB_EXTERNAL_SNAPSHOT_BDEV "EXTSNAP"
 
 struct spdk_blob_bs_dev {
 	struct spdk_bs_dev bs_dev;
@@ -312,10 +316,12 @@ struct spdk_blob_md_descriptor_extent_page {
 	uint32_t	cluster_idx[0];
 };
 
-#define SPDK_BLOB_THIN_PROV (1ULL << 0)
-#define SPDK_BLOB_INTERNAL_XATTR (1ULL << 1)
-#define SPDK_BLOB_EXTENT_TABLE (1ULL << 2)
-#define SPDK_BLOB_INVALID_FLAGS_MASK	(SPDK_BLOB_THIN_PROV | SPDK_BLOB_INTERNAL_XATTR | SPDK_BLOB_EXTENT_TABLE)
+#define SPDK_BLOB_THIN_PROV		(1ULL << 0)
+#define SPDK_BLOB_INTERNAL_XATTR	(1ULL << 1)
+#define SPDK_BLOB_EXTENT_TABLE		(1ULL << 2)
+#define SPDK_BLOB_EXTERNAL_SNAPSHOT	(1ULL << 3)
+#define SPDK_BLOB_INVALID_FLAGS_MASK	(SPDK_BLOB_THIN_PROV | SPDK_BLOB_INTERNAL_XATTR | \
+					 SPDK_BLOB_EXTENT_TABLE | SPDK_BLOB_EXTERNAL_SNAPSHOT)
 
 #define SPDK_BLOB_READ_ONLY (1ULL << 0)
 #define SPDK_BLOB_DATA_RO_FLAGS_MASK	SPDK_BLOB_READ_ONLY
@@ -412,6 +418,8 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super 
 #pragma pack(pop)
 
 struct spdk_bs_dev *bs_create_zeroes_dev(void);
+struct spdk_blob_load_ctx;
+
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
 /* Unit Conversions

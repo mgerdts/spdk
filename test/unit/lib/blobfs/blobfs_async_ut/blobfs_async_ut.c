@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -13,8 +14,11 @@
 #include "blobfs/blobfs.c"
 #include "blobfs/tree.c"
 #include "blob/blobstore.h"
+#include "spdk/bdev.h"
+#include "spdk/bdev_module.h"
 
 #include "unit/lib/blob/bs_dev_common.c"
+#include "../blobfs_stub.c"
 
 struct spdk_filesystem *g_fs;
 struct spdk_file *g_file;
