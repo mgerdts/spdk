@@ -121,6 +121,7 @@ bs_sequence_start(struct spdk_io_channel *_channel,
 	set->cb_args.cb_fn = bs_sequence_completion;
 	set->cb_args.cb_arg = set;
 	set->cb_args.channel = channel->dev_channel;
+	set->ext_io_opts = NULL;
 
 	return (spdk_bs_sequence_t *)set;
 }
@@ -191,8 +192,14 @@ bs_sequence_readv_bs_dev(spdk_bs_sequence_t *seq, struct spdk_bs_dev *bs_dev,
 	set->u.sequence.cb_fn = cb_fn;
 	set->u.sequence.cb_arg = cb_arg;
 
-	bs_dev->readv(bs_dev, spdk_io_channel_from_ctx(channel), iov, iovcnt, lba, lba_count,
-		      &set->cb_args);
+	/* bs_dev points to snapshot or zeroes devices */
+	if (set->ext_io_opts) {
+		bs_dev->readv_ext(bs_dev, spdk_io_channel_from_ctx(channel), iov, iovcnt, lba, lba_count,
+				  &set->cb_args, set->ext_io_opts);
+	} else {
+		bs_dev->readv(bs_dev, spdk_io_channel_from_ctx(channel), iov, iovcnt, lba, lba_count,
+			      &set->cb_args);
+	}
 }
 
 void
@@ -207,8 +214,13 @@ bs_sequence_readv_dev(spdk_bs_sequence_t *seq, struct iovec *iov, int iovcnt,
 
 	set->u.sequence.cb_fn = cb_fn;
 	set->u.sequence.cb_arg = cb_arg;
-	channel->dev->readv(channel->dev, channel->dev_channel, iov, iovcnt, lba, lba_count,
-			    &set->cb_args);
+	/* channel->dev points to the device used by blobstore, the one passed by the user in spdk_bs_init */
+	if (set->ext_io_opts) {
+		channel->dev->readv_ext(channel->dev, channel->dev_channel, iov, iovcnt, lba, lba_count,
+					&set->cb_args, set->ext_io_opts);
+	} else {
+		channel->dev->readv(channel->dev, channel->dev_channel, iov, iovcnt, lba, lba_count, &set->cb_args);
+	}
 }
 
 void
@@ -225,8 +237,13 @@ bs_sequence_writev_dev(spdk_bs_sequence_t *seq, struct iovec *iov, int iovcnt,
 	set->u.sequence.cb_fn = cb_fn;
 	set->u.sequence.cb_arg = cb_arg;
 
-	channel->dev->writev(channel->dev, channel->dev_channel, iov, iovcnt, lba, lba_count,
-			     &set->cb_args);
+	if (set->ext_io_opts) {
+		channel->dev->writev_ext(channel->dev, channel->dev_channel, iov, iovcnt, lba, lba_count,
+					 &set->cb_args, set->ext_io_opts);
+	} else {
+		channel->dev->writev(channel->dev, channel->dev_channel, iov, iovcnt, lba, lba_count,
+				     &set->cb_args);
+	}
 }
 
 void
@@ -438,6 +455,7 @@ bs_user_op_alloc(struct spdk_io_channel *_channel, struct spdk_bs_cpl *cpl,
 
 	set->cpl = *cpl;
 	set->channel = channel;
+	set->ext_io_opts = NULL;
 
 	args = &set->u.user_op;
 
@@ -480,14 +498,28 @@ bs_user_op_execute(spdk_bs_user_op_t *op)
 					  set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg);
 		break;
 	case SPDK_BLOB_READV:
-		spdk_blob_io_readv(args->blob, ch, args->payload, args->iovcnt,
-				   args->offset, args->length,
-				   set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg);
+		if (set->ext_io_opts) {
+			spdk_blob_io_readv_ext(args->blob, ch, args->payload, args->iovcnt,
+					       args->offset, args->length,
+					       set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg,
+					       set->ext_io_opts);
+		} else {
+			spdk_blob_io_readv(args->blob, ch, args->payload, args->iovcnt,
+					   args->offset, args->length,
+					   set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg);
+		}
 		break;
 	case SPDK_BLOB_WRITEV:
-		spdk_blob_io_writev(args->blob, ch, args->payload, args->iovcnt,
-				    args->offset, args->length,
-				    set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg);
+		if (set->ext_io_opts) {
+			spdk_blob_io_writev_ext(args->blob, ch, args->payload, args->iovcnt,
+						args->offset, args->length,
+						set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg,
+						set->ext_io_opts);
+		} else {
+			spdk_blob_io_writev(args->blob, ch, args->payload, args->iovcnt,
+					    args->offset, args->length,
+					    set->cpl.u.blob_basic.cb_fn, set->cpl.u.blob_basic.cb_arg);
+		}
 		break;
 	}
 	TAILQ_INSERT_TAIL(&set->channel->reqs, set, link);

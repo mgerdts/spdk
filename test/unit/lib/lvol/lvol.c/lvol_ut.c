@@ -96,6 +96,9 @@ struct lvol_ut_bs_dev {
 	struct spdk_blob_store	*bs;
 };
 
+DEFINE_STUB(spdk_bdev_get_memory_domains, int, (struct spdk_bdev *bdev,
+		struct spdk_memory_domain **domains, int array_size), 0);
+
 void spdk_bs_inflate_blob(struct spdk_blob_store *bs, struct spdk_io_channel *channel,
 			  spdk_blob_id blobid, spdk_blob_op_complete cb_fn, void *cb_arg)
 {

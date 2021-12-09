@@ -60,5 +60,8 @@
 	spdk_bs_get_bstype;
 	spdk_bs_set_bstype;
 
+	spdk_blob_io_readv_ext;
+	spdk_blob_io_writev_ext;
+
 	local: *;
 };

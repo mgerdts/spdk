@@ -139,7 +139,7 @@ struct spdk_bs_request_set {
 			void			*payload; /* cast to iov for readv/writev */
 		} user_op;
 	} u;
-
+	struct spdk_blob_ext_io_opts *ext_io_opts;
 	TAILQ_ENTRY(spdk_bs_request_set) link;
 };
 

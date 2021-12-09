@@ -62,6 +62,8 @@ bool g_bdev_alias_already_exists = false;
 bool g_lvs_with_name_already_exists = false;
 
 DEFINE_STUB_V(spdk_bdev_module_fini_start_done, (void));
+DEFINE_STUB(spdk_bdev_get_memory_domains, int, (struct spdk_bdev *bdev,
+		struct spdk_memory_domain **domains, int array_size), 0);
 
 const struct spdk_bdev_aliases_list *
 spdk_bdev_get_aliases(const struct spdk_bdev *bdev)
@@ -563,9 +565,36 @@ spdk_blob_io_writev(struct spdk_blob *blob, struct spdk_io_channel *channel,
 }
 
 void
+spdk_blob_io_writev_ext(struct spdk_blob *blob, struct spdk_io_channel *channel,
+			struct iovec *iov, int iovcnt, uint64_t offset, uint64_t length,
+			spdk_blob_op_complete cb_fn, void *cb_arg,
+			struct spdk_blob_ext_io_opts *io_opts)
+{
+	CU_ASSERT(blob == NULL);
+	CU_ASSERT(channel == g_ch);
+	CU_ASSERT(offset == g_io->u.bdev.offset_blocks);
+	CU_ASSERT(length == g_io->u.bdev.num_blocks);
+	cb_fn(cb_arg, 0);
+}
+
+
+void
 spdk_blob_io_readv(struct spdk_blob *blob, struct spdk_io_channel *channel,
 		   struct iovec *iov, int iovcnt, uint64_t offset, uint64_t length,
 		   spdk_blob_op_complete cb_fn, void *cb_arg)
+{
+	CU_ASSERT(blob == NULL);
+	CU_ASSERT(channel == g_ch);
+	CU_ASSERT(offset == g_io->u.bdev.offset_blocks);
+	CU_ASSERT(length == g_io->u.bdev.num_blocks);
+	cb_fn(cb_arg, 0);
+}
+
+void
+spdk_blob_io_readv_ext(struct spdk_blob *blob, struct spdk_io_channel *channel,
+		       struct iovec *iov, int iovcnt, uint64_t offset, uint64_t length,
+		       spdk_blob_op_complete cb_fn, void *cb_arg,
+		       struct spdk_blob_ext_io_opts *io_opts)
 {
 	CU_ASSERT(blob == NULL);
 	CU_ASSERT(channel == g_ch);

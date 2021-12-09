@@ -572,6 +572,20 @@ setup_lvs_opts(struct spdk_bs_opts *bs_opts, struct spdk_lvs_opts *o)
 	bs_opts->clear_method = (enum bs_clear_method)o->clear_method;
 }
 
+static bool
+lvs_check_base_bdev_has_memory_domains(struct spdk_lvol_store *lvs)
+{
+	struct spdk_bdev *bdev = lvs->bs_dev->get_base_bdev(lvs->bs_dev);
+	int rc;
+
+	rc = spdk_bdev_get_memory_domains(bdev, NULL, 0);
+	if (rc <= 0) {
+		return false;
+	}
+
+	return true;
+}
+
 int
 spdk_lvs_init(struct spdk_bs_dev *bs_dev, struct spdk_lvs_opts *o,
 	      spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
@@ -634,6 +648,8 @@ spdk_lvs_init(struct spdk_bs_dev *bs_dev, struct spdk_lvs_opts *o,
 	lvs->destruct = false;
 
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
+	opts.use_zero_cluster = lvs_check_base_bdev_has_memory_domains(lvs);
+	SPDK_NOTICELOG("Blobstore use_zero_cluster %d\n", opts.use_zero_cluster);
 
 	SPDK_INFOLOG(lvol, "Initializing lvol store\n");
 	spdk_bs_init(bs_dev, &opts, lvs_init_cb, lvs_req);

@@ -148,6 +148,19 @@ struct spdk_bs_dev_cb_args {
 	void			*cb_arg;
 };
 
+/**
+ * Structure with optional IO request parameters
+ * The content of this structure must be valid until the IO request is completed
+ */
+struct spdk_blob_ext_io_opts {
+	/** Size of this structure in bytes */
+	size_t size;
+	/** Memory domain which describes payload in this IO request. */
+	struct spdk_memory_domain *memory_domain;
+	/** Context to be passed to memory domain operations */
+	void *memory_domain_ctx;
+};
+
 struct spdk_bs_dev {
 	/* Create a new channel which is a software construct that is used
 	 * to submit I/O. */
@@ -179,7 +192,17 @@ struct spdk_bs_dev {
 		       struct iovec *iov, int iovcnt,
 		       uint64_t lba, uint32_t lba_count,
 		       struct spdk_bs_dev_cb_args *cb_args);
+	void (*readv_ext)(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+			  struct iovec *iov, int iovcnt,
+			  uint64_t lba, uint32_t lba_count,
+			  struct spdk_bs_dev_cb_args *cb_args,
+			  struct spdk_blob_ext_io_opts *ext_io_opts);
 
+	void (*writev_ext)(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+			   struct iovec *iov, int iovcnt,
+			   uint64_t lba, uint32_t lba_count,
+			   struct spdk_bs_dev_cb_args *cb_args,
+			   struct spdk_blob_ext_io_opts *ext_io_opts);
 	void (*flush)(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		      struct spdk_bs_dev_cb_args *cb_args);
 
@@ -236,6 +259,10 @@ struct spdk_bs_opts {
 
 	/** Force recovery during import. */
 	bool force_recover;
+
+	/** If set to true then Blobstore allocates an extra cluster, its content is zeroed and
+	 * the cluster will be used to read unallocated blocks instead of regular zero_device */
+	bool use_zero_cluster;
 };
 
 /**
@@ -780,6 +807,15 @@ void spdk_blob_io_writev(struct spdk_blob *blob, struct spdk_io_channel *channel
 void spdk_blob_io_readv(struct spdk_blob *blob, struct spdk_io_channel *channel,
 			struct iovec *iov, int iovcnt, uint64_t offset, uint64_t length,
 			spdk_blob_op_complete cb_fn, void *cb_arg);
+
+void spdk_blob_io_readv_ext(struct spdk_blob *blob, struct spdk_io_channel *channel,
+			    struct iovec *iov, int iovcnt, uint64_t offset, uint64_t length,
+			    spdk_blob_op_complete cb_fn, void *cb_arg, struct spdk_blob_ext_io_opts *io_opts);
+
+void spdk_blob_io_writev_ext(struct spdk_blob *blob, struct spdk_io_channel *channel,
+			     struct iovec *iov, int iovcnt, uint64_t offset, uint64_t length,
+			     spdk_blob_op_complete cb_fn, void *cb_arg, struct spdk_blob_ext_io_opts *io_opts);
+
 
 /**
  * Unmap 'length' io_units beginning at 'offset' io_units on the blob as unused. Unmapped
