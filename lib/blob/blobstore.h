@@ -440,7 +440,16 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super 
 
 struct spdk_bs_dev *bs_create_zeroes_dev(struct spdk_blob *blob);
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
-int bs_create_seed_dev(struct spdk_blob *front, const char *seedname);
+
+typedef void(*blob_load_seed_cpl)(void *ctx, int rc);
+
+struct blob_load_seed_ctx {
+	struct spdk_blob_load_ctx	*ctx;
+	char *seed_name;
+};
+
+void bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed_cpl cb_fn,
+			void *cb_arg);
 
 /* Unit Conversions
  *

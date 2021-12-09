@@ -115,6 +115,7 @@ bs_claim_cluster(struct spdk_blob_store *bs)
 
 	cluster_num = spdk_bit_pool_allocate_bit(bs->used_clusters);
 	if (cluster_num == UINT32_MAX) {
+		SPDK_ERRLOG("No more free clusters, num_free_clusters %zu\n", bs->num_free_clusters);
 		return UINT32_MAX;
 	}
 
@@ -1353,6 +1354,19 @@ blob_load_snapshot_cpl(void *cb_arg, struct spdk_blob *snapshot, int bserrno)
 
 static void blob_update_clear_method(struct spdk_blob *blob);
 
+static void blob_load_seed_done(void *ctx, int rc)
+{
+	struct blob_load_seed_ctx *seed_load_ctx = ctx;
+	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
+
+	SPDK_DEBUGLOG(blob, "MG blob %zu using seed bdev %s\n", seed_load_ctx->ctx->blob->id,
+		      seed_load_ctx->seed_name);
+	blob_load_final(seed_load_ctx->ctx, rc);
+	blob->parent_id = SPDK_BLOBID_SEED;
+	free(seed_load_ctx->seed_name);
+	free(seed_load_ctx);
+}
+
 static void
 blob_load_backing_dev(void *cb_arg)
 {
@@ -1383,20 +1397,22 @@ blob_load_backing_dev(void *cb_arg)
 		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, false);
 		if (rc == 0) {
 			SPDK_NOTICELOG("Creating seed bs\n");
-			char *seed = strndup(value, len);
-
-			if (seed == NULL) {
+			struct blob_load_seed_ctx *seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
+			if (!seed_ctx) {
 				blob_load_final(ctx, -ENOMEM);
 				return;
 			}
 
-			/* Use an existing bdev for unallocated blocks */
-			rc = bs_create_seed_dev(blob, seed);
-			free(seed);
-			blob_load_final(ctx, rc);
+			seed_ctx->seed_name = strndup(value, len);
+			if (!seed_ctx->seed_name) {
+				free(seed_ctx);
+				blob_load_final(ctx, -ENOMEM);
+				return;
+			}
+			seed_ctx->ctx = ctx;
 
-			blob->parent_id = SPDK_BLOBID_SEED;
-			SPDK_DEBUGLOG(blob, "MG blob %lu using seed bdev %s\n", blob->id, seed);
+			/* Use an existing bdev for unallocated blocks */
+			bs_create_seed_dev(blob, seed_ctx->seed_name, blob_load_seed_done, seed_ctx);
 			return;
 		}
 

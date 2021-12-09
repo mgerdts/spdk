@@ -192,7 +192,7 @@ bs_sequence_readv_bs_dev(spdk_bs_sequence_t *seq, struct spdk_bs_dev *bs_dev,
 	set->u.sequence.cb_fn = cb_fn;
 	set->u.sequence.cb_arg = cb_arg;
 
-	/* bs_dev points to snapshot or zeroes devices */
+	/* bs_dev points to snapshot/zeroes/seed devices */
 	if (set->ext_io_opts) {
 		bs_dev->readv_ext(bs_dev, spdk_io_channel_from_ctx(channel), iov, iovcnt, lba, lba_count,
 				  &set->cb_args, set->ext_io_opts);

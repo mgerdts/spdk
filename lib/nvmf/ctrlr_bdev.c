@@ -288,7 +288,8 @@ nvmf_bdev_ctrlr_read_cmd(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 	nvmf_bdev_ctrlr_get_rw_params(cmd, &start_lba, &num_blocks);
 
 	if (spdk_unlikely(!nvmf_bdev_ctrlr_lba_in_range(bdev_num_blocks, start_lba, num_blocks))) {
-		SPDK_ERRLOG("end of media\n");
+		SPDK_ERRLOG("end of media, subsys %s, nsid %u, LBA %"PRIu64", end %"PRIu64"\n",
+			    req->qpair->ctrlr->subsys->subnqn, cmd->nsid, start_lba, bdev_num_blocks);
 		rsp->status.sct = SPDK_NVME_SCT_GENERIC;
 		rsp->status.sc = SPDK_NVME_SC_LBA_OUT_OF_RANGE;
 		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;

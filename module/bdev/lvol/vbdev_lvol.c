@@ -950,14 +950,46 @@ vbdev_lvol_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_
 static int
 vbdev_lvol_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
 {
-	struct spdk_lvol *lvol = ctx;
+	struct spdk_lvol *lvol = ctx, *lvol_tmp;
 	struct spdk_bdev *base_bdev;
+	struct spdk_lvol_store *lvs;
+	struct spdk_bdev *seed_bdev;
+	int rc, total = 0;
 
-	base_bdev = lvol->lvol_store->bs_dev->get_base_bdev(lvol->lvol_store->bs_dev);
+	lvs = lvol->lvol_store;
+	base_bdev = lvs->bs_dev->get_base_bdev(lvol->lvol_store->bs_dev);
+
+	TAILQ_FOREACH(lvol_tmp, &lvs->lvols, link) {
+		if (strlen(lvol_tmp->seed_bdev) != 0) {
+			seed_bdev = spdk_bdev_get_by_name(lvol_tmp->seed_bdev);
+			if (seed_bdev) {
+				rc = spdk_bdev_get_memory_domains(seed_bdev, domains, array_size);
+				SPDK_NOTICELOG("Seed %s reported %d memory domains\n", lvol_tmp->seed_bdev, rc);
+				if (rc < 0) {
+					return rc;
+				}
+				total += rc;
+				/* array_size can be 0 to get the number of memory domains */
+				if (domains) {
+					domains += spdk_min(array_size, rc);
+				}
+				if (array_size) {
+					array_size -= spdk_min(array_size, rc);
+				}
+			}
+		}
+	}
 
 	/* blobstore created on top of bdev which reports memory domains doesn't touch data.
 	 * refer to spdk_bs_opts::use_zero_cluster */
-	return spdk_bdev_get_memory_domains(base_bdev, domains, array_size);
+	rc = spdk_bdev_get_memory_domains(base_bdev, domains, array_size);
+	if (rc < 0) {
+		return rc;
+	}
+	total += rc;
+	SPDK_NOTICELOG("vbdev_lvol %s reported %d memory domains\n", lvol->name, total);
+
+	return total;
 }
 
 static struct spdk_bdev_fn_table vbdev_lvol_fn_table = {
@@ -1040,6 +1072,8 @@ _create_lvol_disk(struct spdk_lvol *lvol, bool destroy)
 		     spdk_bs_get_cluster_size(lvol->lvol_store->blobstore);
 	assert((total_size % bdev->blocklen) == 0);
 	bdev->blockcnt = total_size / bdev->blocklen;
+	SPDK_NOTICELOG("Creating lvol %s, total_size %zu, blockcnt %zu\n", lvol->name, total_size,
+		       bdev->blockcnt);
 	bdev->uuid = lvol->uuid;
 	bdev->required_alignment = lvs_bdev->bdev->required_alignment;
 	bdev->split_on_optimal_io_boundary = true;

@@ -53,6 +53,9 @@ int g_fserrno;
 DEFINE_STUB_V(spdk_bdev_close, (struct spdk_bdev_desc *desc));
 DEFINE_STUB(spdk_bdev_open_ext, int, (const char *bdev_name, bool write,
 				      spdk_bdev_event_cb_t event_cb, void *event_ctx, struct spdk_bdev_desc **_desc), 0);
+DEFINE_STUB(spdk_bdev_get_name, const char *, (const struct spdk_bdev *bdev), "test_bdev");
+DEFINE_STUB(spdk_bdev_desc_get_bdev, struct spdk_bdev *, (struct spdk_bdev_desc *desc), NULL);
+DEFINE_STUB_V(spdk_bdev_free_io, (struct spdk_bdev_io *bdev_io));
 DEFINE_STUB(spdk_bdev_read_blocks, int,
 	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, void *buf,
 	     uint64_t offset_blocks, uint64_t num_blocks, spdk_bdev_io_completion_cb cb,

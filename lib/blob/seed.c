@@ -30,44 +30,45 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "spdk/bdev_module.h"
+#include "spdk/env.h"
 #include "spdk/stdinc.h"
 #include "spdk/blob.h"
 #include "spdk/bdev.h"
 #include "spdk/thread.h"
 #include "spdk/log.h"
 
+#include "spdk_internal/event.h"
+
 #include "blobstore.h"
 
 struct seed_ctx {
 	struct spdk_bdev *bdev;
 	struct spdk_bdev_desc *bdev_desc;
-	struct spdk_io_channel *bdev_io_channel;
+	struct spdk_io_channel **io_channels;
+	uint64_t io_channels_count;
 };
 
-// XXX-mg
-// This feels like it needs reference counting to handle races with the destroy callback
-
-static struct spdk_io_channel *
-seed_create_channel(struct spdk_bs_dev *dev)
+static void seed_unload_on_thread(void *_ctx)
 {
-	struct spdk_io_channel *channel;
-	struct seed_ctx *ctx = dev->seed_ctx;
+	struct spdk_bs_dev *dev = _ctx;
+	uint64_t tid = spdk_thread_get_id(spdk_get_thread());
 
-	if (ctx == NULL || ctx->bdev_desc == NULL) {
-		SPDK_INFOLOG(blob, "bsdev %p has no seed descriptor\n", dev);
-		return NULL;
+	if (tid <= dev->seed_ctx->io_channels_count && dev->seed_ctx->io_channels[tid]) {
+		spdk_put_io_channel(dev->seed_ctx->io_channels[tid]);
 	}
-
-	channel = spdk_bdev_get_io_channel(ctx->bdev_desc);
-	SPDK_INFOLOG(blob, "bsdev %p created channel %p\n", dev, channel);
-	return channel;
 }
 
-static void
-seed_destroy_channel(struct spdk_bs_dev *dev, struct spdk_io_channel *channel)
+static void seed_unload_on_thread_done(void *_ctx)
 {
-	SPDK_INFOLOG(blob, "bsdev %p destroying channel %p\n", dev, channel);
-	spdk_put_io_channel(channel);
+	struct spdk_bs_dev *dev = _ctx;
+
+	if (dev->seed_ctx->bdev_desc != NULL) {
+		spdk_bdev_close(dev->seed_ctx->bdev_desc);
+	}
+
+	free(dev->seed_ctx->io_channels);
+	free(dev);
 }
 
 static void
@@ -76,15 +77,10 @@ seed_destroy(struct spdk_bs_dev *dev)
 	struct seed_ctx *ctx = dev->seed_ctx;
 
 	if (ctx != NULL) {
-		if (ctx->bdev_io_channel != NULL) {
-			spdk_put_io_channel(ctx->bdev_io_channel);
-		}
-		if (ctx->bdev_desc != NULL) {
-			spdk_bdev_close(ctx->bdev_desc);
-		}
+		spdk_for_each_thread(seed_unload_on_thread, dev, seed_unload_on_thread_done);
+	} else {
+		free(dev);
 	}
-
-	free(dev);
 }
 
 static void
@@ -101,15 +97,17 @@ seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payloa
 	  uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
 {
 	struct seed_ctx *ctx = dev->seed_ctx;
+	uint64_t tid;
+	struct spdk_io_channel *ch;
 
-	if (ctx->bdev_desc == NULL) {
+	tid = spdk_thread_get_id(spdk_get_thread());
+	if (tid > ctx->io_channels_count || ctx->bdev_desc == NULL ||
+	    (ch = ctx->io_channels[tid]) == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
 		return;
 	}
 
-	SPDK_DEBUGLOG(blob, "Read from seed, lba %"PRIu64"\n", lba);
-	spdk_bdev_read_blocks(ctx->bdev_desc, cb_args->channel, payload,
-			      lba, lba_count, seed_complete, cb_args);
+	spdk_bdev_read_blocks(ctx->bdev_desc, ch, payload, lba, lba_count, seed_complete, cb_args);
 }
 
 static void
@@ -127,15 +125,17 @@ seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	   struct spdk_bs_dev_cb_args *cb_args)
 {
 	struct seed_ctx *ctx = dev->seed_ctx;
+	uint64_t tid;
+	struct spdk_io_channel *ch;
 
-	if (ctx->bdev_desc == NULL) {
+	tid = spdk_thread_get_id(spdk_get_thread());
+	if (tid > ctx->io_channels_count || ctx->bdev_desc == NULL ||
+	    (ch = ctx->io_channels[tid]) == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
 		return;
 	}
 
-	SPDK_DEBUGLOG(blob, "Readv from seed, lba %"PRIu64"\n", lba);
-	spdk_bdev_readv_blocks(ctx->bdev_desc, cb_args->channel, iov,
-			       iovcnt, lba, lba_count, seed_complete, cb_args);
+	spdk_bdev_readv_blocks(ctx->bdev_desc, ch, iov, iovcnt, lba, lba_count, seed_complete, cb_args);
 }
 
 static void
@@ -145,14 +145,17 @@ seed_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	       struct spdk_blob_ext_io_opts *ext_io_opts)
 {
 	struct seed_ctx *ctx = dev->seed_ctx;
+	uint64_t tid;
+	struct spdk_io_channel *ch;
 
-	if (ctx->bdev_desc == NULL) {
+	tid = spdk_thread_get_id(spdk_get_thread());
+	if (tid > ctx->io_channels_count || ctx->bdev_desc == NULL ||
+	    (ch = ctx->io_channels[tid]) == NULL) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
 		return;
 	}
 
-	SPDK_DEBUGLOG(blob, "Readv_ext from seed, lba %"PRIu64"\n", lba);
-	spdk_bdev_readv_blocks_ext(ctx->bdev_desc, cb_args->channel, iov, iovcnt, lba, lba_count,
+	spdk_bdev_readv_blocks_ext(ctx->bdev_desc, ch, iov, iovcnt, lba, lba_count,
 				   seed_complete, cb_args, (struct spdk_bdev_ext_io_opts *)ext_io_opts);
 }
 
@@ -212,12 +215,64 @@ static void lvol_seed_bdev_event_cb_t(enum spdk_bdev_event_type type, struct spd
 	}
 }
 
-int
-bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
+struct seed_bs_load_cpl_ctx {
+	blob_load_seed_cpl cb_fn;
+	void *cb_arg;
+	struct seed_ctx *ctx;
+	int rc;
+};
+
+
+static void load_seed_on_thread(void *arg1)
+{
+	struct seed_bs_load_cpl_ctx *ctx = arg1;
+	uint64_t tid;
+
+	if (ctx->rc) {
+		return;
+	}
+
+	tid = spdk_thread_get_id(spdk_get_thread());
+	SPDK_NOTICELOG("Creating io channel for seed bdev %s on thread %"PRIu64"\n",
+		       spdk_bdev_get_name(ctx->ctx->bdev), tid);
+
+	if (tid > ctx->ctx->io_channels_count) {
+		/* realloc needed */
+		SPDK_NOTICELOG("Realloc from %zu to %zu\n", ctx->ctx->io_channels_count, tid + 1);
+		void *tmp = realloc(ctx->ctx->io_channels, (tid + 1) * sizeof(*ctx->ctx->io_channels));
+		if (!tmp) {
+			SPDK_ERRLOG("Memory allocation failed\n");
+			ctx->rc = -ENOMEM;
+			return;
+		}
+		ctx->ctx->io_channels = tmp;
+		ctx->ctx->io_channels_count = tid + 1;
+	}
+
+	ctx->ctx->io_channels[tid] = spdk_bdev_get_io_channel(ctx->ctx->bdev_desc);
+	if (!ctx->ctx->io_channels[tid]) {
+		SPDK_ERRLOG("Failed to create seed bdev io_channel\n");
+		ctx->rc = -ENOMEM;
+	}
+}
+
+static void load_seed_on_thread_done(void *arg1)
+{
+	struct seed_bs_load_cpl_ctx *ctx = arg1;
+
+	assert(ctx->cb_fn);
+	ctx->cb_fn(ctx->cb_arg, ctx->rc);
+	free(ctx);
+}
+
+void
+bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed_cpl cb_fn,
+		   void *cb_arg)
 {
 	struct spdk_bdev *bdev;
 	struct spdk_bs_dev *back;
 	struct seed_ctx *ctx;
+	struct seed_bs_load_cpl_ctx *seed_load_cpl;
 	int ret;
 
 	bdev = spdk_bdev_get_by_name(seedname);
@@ -245,39 +300,58 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 		front->state = SPDK_BLOB_STATE_LOADING;
 		SPDK_ERRLOG("seed device %s is not found for lvol %s\n",
 			    seedname, rc == 0 ? name : "<unknown>");
-		return (-ENOENT);
+		cb_fn(cb_arg, -ENOENT);
+		return;
 	}
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
-		return (-ENOMEM);
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+
+	seed_load_cpl = calloc(1, sizeof(*seed_load_cpl));
+	if (!seed_load_cpl) {
+		free(ctx);
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+
+	/* +1 since thread_id starts from 1 */
+	ctx->io_channels_count = spdk_thread_get_count() + 1;
+	ctx->io_channels = calloc(ctx->io_channels_count, sizeof(*ctx->io_channels));
+	if (!ctx->io_channels) {
+		free(ctx);
+		free(seed_load_cpl);
+		cb_fn(cb_arg, -ENOMEM);
+		return;
 	}
 
 	ctx->bdev = bdev;
 	ret = spdk_bdev_open_ext(seedname, false, lvol_seed_bdev_event_cb_t, ctx, &ctx->bdev_desc);
 	if (ret != 0) {
+		free(ctx->io_channels);
 		free(ctx);
-		return (ret);
+		free(seed_load_cpl);
+		cb_fn(cb_arg, ret);
+		return;
 	}
 
-	ctx->bdev_io_channel = spdk_bdev_get_io_channel(ctx->bdev_desc);
-	if (ctx->bdev_io_channel == NULL) {
-		spdk_bdev_close(ctx->bdev_desc);
-		free(ctx);
-	}
 	// XXX-mg should set bdev->claimed, but need to coordinate among all
 	// instances that have this one open.
 
 	back = calloc(1, sizeof(*back));
 	if (back == NULL) {
 		spdk_bdev_close(ctx->bdev_desc);
-		spdk_put_io_channel(ctx->bdev_io_channel);
+		free(ctx->io_channels);
 		free(ctx);
-		return (-ENOMEM);
+		free(seed_load_cpl);
+		cb_fn(cb_arg, -ENOMEM);
+		return;
 	}
 
-	back->create_channel = seed_create_channel;
-	back->destroy_channel = seed_destroy_channel;
+	back->create_channel = NULL;
+	back->destroy_channel = NULL;
 	back->destroy = seed_destroy;
 	back->read = seed_read;
 	back->write = seed_write;
@@ -293,5 +367,9 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname)
 
 	front->back_bs_dev = back;
 
-	return 0;
+	seed_load_cpl->cb_fn = cb_fn;
+	seed_load_cpl->cb_arg = cb_arg;
+	seed_load_cpl->ctx = ctx;
+
+	spdk_for_each_thread(load_seed_on_thread, seed_load_cpl, load_seed_on_thread_done);
 }
