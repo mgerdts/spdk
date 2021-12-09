@@ -1,8 +1,8 @@
 #
 #  BSD LICENSE
 #
-#  Copyright (c) Intel Corporation.
-#  All rights reserved.
+#  Copyright (c) Intel Corporation. All rights reserved.
+#  Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -37,7 +37,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 SO_VER := 6
 SO_MINOR := 0
 
-C_SRCS = blobstore.c request.c zeroes.c blob_bs_dev.c
+C_SRCS = blobstore.c request.c seed.c zeroes.c blob_bs_dev.c
 LIBNAME = blob
 
 SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_blob.map)

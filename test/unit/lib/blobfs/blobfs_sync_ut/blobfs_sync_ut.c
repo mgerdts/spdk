@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -33,6 +33,7 @@
 
 #include "spdk/stdinc.h"
 
+#include "spdk/bdev.h"
 #include "spdk/blobfs.h"
 #include "spdk/env.h"
 #include "spdk/log.h"
@@ -49,6 +50,28 @@ struct spdk_filesystem *g_fs;
 struct spdk_file *g_file;
 int g_fserrno;
 struct spdk_thread *g_dispatch_thread = NULL;
+
+DEFINE_STUB_V(spdk_bdev_close, (struct spdk_bdev_desc *desc));
+DEFINE_STUB(spdk_bdev_open_ext, int, (const char *bdev_name, bool write,
+				      spdk_bdev_event_cb_t event_cb, void *event_ctx, struct spdk_bdev_desc **_desc), 0);
+DEFINE_STUB(spdk_bdev_read_blocks, int,
+	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, void *buf,
+	     uint64_t offset_blocks, uint64_t num_blocks, spdk_bdev_io_completion_cb cb,
+	     void *cb_arg), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_readv_blocks, int,
+	    (struct spdk_bdev_desc *desc, struct spdk_io_channel *ch, struct iovec *iov,
+	     int iovcnt, uint64_t offset_blocks, uint64_t num_blocks,
+	     spdk_bdev_io_completion_cb cb, void *cb_arg), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *bdev_name), NULL);
+DEFINE_STUB(spdk_bdev_io_type_supported, bool,
+	    (struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type), false);
+DEFINE_STUB(spdk_bdev_open, int,
+	    (struct spdk_bdev *bdev, bool write, spdk_bdev_remove_cb_t remove_cb,
+	     void *remove_ctx, struct spdk_bdev_desc **_desc), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_get_block_size, uint32_t, (const struct spdk_bdev *bdev), 0);
+DEFINE_STUB(spdk_bdev_get_num_blocks, uint64_t, (const struct spdk_bdev *bdev), 0);
+DEFINE_STUB(spdk_bdev_get_io_channel, struct spdk_io_channel *,
+	    (struct spdk_bdev_desc *desc), NULL);
 
 struct ut_request {
 	fs_request_fn fn;

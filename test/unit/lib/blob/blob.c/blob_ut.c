@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -83,6 +83,8 @@ static struct spdk_blob *ut_blob_create_and_open(struct spdk_blob_store *bs,
 static void ut_blob_close_and_delete(struct spdk_blob_store *bs, struct spdk_blob *blob);
 static void suite_blob_setup(void);
 static void suite_blob_cleanup(void);
+
+DEFINE_STUB(bs_create_seed_dev, int, (struct spdk_blob *front, const char *seedname), -ENOTSUP);
 
 static void
 _get_xattr_value(void *arg, const char *name,

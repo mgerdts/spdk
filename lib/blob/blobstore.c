@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -1365,6 +1365,7 @@ blob_load_backing_dev(void *cb_arg)
 	if (spdk_blob_is_thin_provisioned(blob)) {
 		rc = blob_get_xattr_value(blob, BLOB_SNAPSHOT, &value, &len, true);
 		if (rc == 0) {
+			SPDK_NOTICELOG("Creating snapshot bs\n");
 			if (len != sizeof(spdk_blob_id)) {
 				blob_load_final(ctx, -EINVAL);
 				return;
@@ -1377,6 +1378,31 @@ blob_load_backing_dev(void *cb_arg)
 			/* add zeroes_dev for thin provisioned blob */
 			blob->back_bs_dev = bs_create_zeroes_dev(blob);
 		}
+
+		// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
+		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, false);
+		if (rc == 0) {
+			SPDK_NOTICELOG("Creating seed bs\n");
+			char *seed = strndup(value, len);
+
+			if (seed == NULL) {
+				blob_load_final(ctx, -ENOMEM);
+				return;
+			}
+
+			/* Use an existing bdev for unallocated blocks */
+			rc = bs_create_seed_dev(blob, seed);
+			free(seed);
+			blob_load_final(ctx, rc);
+
+			blob->parent_id = SPDK_BLOBID_SEED;
+			SPDK_DEBUGLOG(blob, "MG blob %lu using seed bdev %s\n", blob->id, seed);
+			return;
+		}
+
+		/* add zeroes_dev for thin provisioned blob */
+		SPDK_NOTICELOG("Creating zeroes bs\n");
+		blob->back_bs_dev = bs_create_zeroes_dev(blob);
 	} else {
 		/* standard blob */
 		blob->back_bs_dev = NULL;
@@ -3162,7 +3188,7 @@ bs_blob_list_add(struct spdk_blob *blob)
 	assert(blob != NULL);
 
 	snapshot_id = blob->parent_id;
-	if (snapshot_id == SPDK_BLOBID_INVALID) {
+	if (snapshot_id == SPDK_BLOBID_INVALID || snapshot_id == SPDK_BLOBID_SEED) {
 		return 0;
 	}
 
@@ -5964,6 +5990,7 @@ bs_snapshot_newblob_sync_cpl(void *cb_arg, int bserrno)
 	}
 
 	bs_blob_list_remove(origblob);
+	// XXX-mg does this break bdev clones?
 	origblob->parent_id = newblob->id;
 	/* set clone blob as thin provisioned */
 	blob_set_thin_provision(origblob);
@@ -6185,6 +6212,7 @@ bs_clone_origblob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 	struct spdk_clone_snapshot_ctx	*ctx = (struct spdk_clone_snapshot_ctx *)cb_arg;
 	struct spdk_blob_opts		opts;
 	struct spdk_blob_xattr_opts internal_xattrs;
+	// XXX-mg need something like this function for bdev_clone
 	char *xattr_names[] = { BLOB_SNAPSHOT };
 
 	if (bserrno != 0) {
@@ -6294,6 +6322,14 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 {
 	struct spdk_blob *_blob = ctx->original.blob;
 	struct spdk_blob *_parent;
+	int rc __attribute__((unused));
+
+	// XXX-mg something for seed here?
+	// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
+	const void *value;
+	size_t len;
+	rc = blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &value, &len, false);
+	assert(rc != 0);
 
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
@@ -6342,6 +6378,14 @@ bs_cluster_needs_allocation(struct spdk_blob *blob, uint64_t cluster, bool alloc
 	if (blob->parent_id == SPDK_BLOBID_INVALID) {
 		/* Blob have no parent blob */
 		return allocate_all;
+	}
+
+	if (blob->parent_id == SPDK_BLOBID_SEED) {
+		// XXX-mg verify this.  I assume that this is in the write or
+		// inflate path trying to figure out if it needs to do a CoW.
+		// However, if cluster in question is a zero cluster, it would
+		// be swell to not allocate it.
+		return true;
 	}
 
 	b = (struct spdk_blob_bs_dev *)blob->back_bs_dev;
@@ -6716,6 +6760,9 @@ delete_snapshot_sync_snapshot_cpl(void *cb_arg, int bserrno)
 	assert(TAILQ_EMPTY(&snapshot_entry->clones));
 
 	if (ctx->snapshot->parent_id != SPDK_BLOBID_INVALID) {
+		// XXX-mg verify this is all that is needed.
+		assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
+
 		/* This snapshot is at the same time a clone of another snapshot - we need to
 		 * update parent snapshot (remove current clone, add new one inherited from
 		 * the snapshot that is being removed) */
@@ -6859,6 +6906,10 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 		delete_snapshot_cleanup_clone(ctx, 0);
 		return;
 	}
+
+	// XXX-mg verify this is all that is needed.
+	assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
+	assert(ctx->clone->parent_id != SPDK_BLOBID_SEED);
 
 	/* Copy snapshot map to clone map (only unallocated clusters in clone) */
 	for (i = 0; i < ctx->snapshot->active.num_clusters && i < ctx->clone->active.num_clusters; i++) {

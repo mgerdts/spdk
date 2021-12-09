@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -1149,6 +1149,26 @@ vbdev_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 	req->cb_arg = cb_arg;
 
 	spdk_lvol_create_clone(lvol, clone_name, _vbdev_lvol_create_cb, req);
+}
+
+int
+vbdev_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+			     const char *back_name, const char *clone_name,
+			     spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+
+	req = calloc(1, sizeof(*req));
+	if (req == NULL) {
+		cb_fn(cb_arg, NULL, -ENOMEM);
+		return 0;
+	}
+
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+
+	return spdk_lvol_create_bdev_clone(lvs, back_name, clone_name,
+					   _vbdev_lvol_create_cb, req);
 }
 
 static void

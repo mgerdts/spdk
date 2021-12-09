@@ -1,8 +1,8 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) Intel Corporation.
- *   All rights reserved.
+ *   Copyright (c) Intel Corporation. All rights reserved.
+ *   Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -68,6 +68,7 @@ extern "C" {
 
 typedef uint64_t spdk_blob_id;
 #define SPDK_BLOBID_INVALID	(uint64_t)-1
+#define SPDK_BLOBID_SEED	(uint64_t)-2
 #define SPDK_BLOBSTORE_TYPE_LENGTH 16
 
 enum blob_clear_method {
@@ -148,6 +149,8 @@ struct spdk_bs_dev_cb_args {
 	void			*cb_arg;
 };
 
+struct seed_ctx;
+
 /**
  * Structure with optional IO request parameters
  * The content of this structure must be valid until the IO request is completed
@@ -218,6 +221,9 @@ struct spdk_bs_dev {
 
 	uint64_t	blockcnt;
 	uint32_t	blocklen; /* In bytes */
+
+	/* the seed bdev descriptor for some sparse lvols */
+	struct seed_ctx *seed_ctx;
 };
 
 struct spdk_bs_type {

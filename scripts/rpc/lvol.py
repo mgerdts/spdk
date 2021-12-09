@@ -104,6 +104,25 @@ def bdev_lvol_clone(client, snapshot_name, clone_name):
     return client.call('bdev_lvol_clone', params)
 
 
+def bdev_lvol_clone_bdev(client, lvs_name, bdev_name, clone_name):
+    """Create a logical volume based on a snapshot.
+
+    Args:
+        lvs_name: name of logical volume store to use
+        bdev_name: non-lvol bdev to clone
+        clone_name: name of logical volume to create
+
+    Returns:
+        Name of created logical volume clone.
+    """
+    params = {
+        'lvs_name': lvs_name,
+        'bdev_name': bdev_name,
+        'clone_name': clone_name
+    }
+    return client.call('bdev_lvol_clone_bdev', params)
+
+
 @deprecated_alias('rename_lvol_bdev')
 def bdev_lvol_rename(client, old_name, new_name):
     """Rename a logical volume.
