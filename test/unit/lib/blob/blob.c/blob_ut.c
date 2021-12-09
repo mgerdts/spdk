@@ -12,10 +12,14 @@
 
 #include "common/lib/ut_multithread.c"
 #include "../bs_dev_common.c"
+/* XXX-mg added for g_thread_count. Better to mock spdk_thread_get_count()? How? */
+#include "thread/thread.c"
 #include "blob/blobstore.c"
 #include "blob/request.c"
+#include "blob/esnap.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
+#include "../bs_bdev_malloc.c"
 
 struct spdk_blob_store *g_bs;
 spdk_blob_id g_blobid;
@@ -54,6 +58,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block_ver1) == 0x1000, "Invalid s
 static struct spdk_blob *ut_blob_create_and_open(struct spdk_blob_store *bs,
 		struct spdk_blob_opts *blob_opts);
 static void ut_blob_close_and_delete(struct spdk_blob_store *bs, struct spdk_blob *blob);
+static void suite_bs_cleanup(void);
 static void suite_blob_setup(void);
 static void suite_blob_cleanup(void);
 
@@ -7317,6 +7322,565 @@ blob_decouple_snapshot(void)
 }
 
 static void
+bdev_init_cb(void *arg, int rc)
+{
+	assert(rc == 0);
+}
+
+static void
+bdev_fini_cb(void *arg)
+{
+	return;
+}
+
+static void
+blob_extclone_defaults(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	uint64_t		free_clusters;
+
+	/* No cluster allocations expected */
+	free_clusters = bs->num_free_clusters;
+
+	ut_open_malloc_dev(0);
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[0].uuid);
+
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	CU_ASSERT(blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT);
+	CU_ASSERT(spdk_blob_is_external_clone(blob));
+	CU_ASSERT(spdk_blob_is_thin_provisioned(blob));
+	CU_ASSERT(bs->num_free_clusters == free_clusters);
+
+	ut_blob_close_and_delete(bs, blob);
+	ut_close_malloc_dev(0);
+	poll_threads();
+}
+
+static void
+blob_extclone_size(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	size_t			blob_size, ext_size;
+	int			rc;
+
+	/*
+	 * Each of the external devices in mdisks[] has differently sized blocks
+	 * and block counts. Verify that the blob size matches when num_clusters
+	 * is not specified.
+	 */
+	for (size_t i = 0; i < SPDK_COUNTOF(mdisks); i++) {
+		ut_open_malloc_dev(i);
+		ut_spdk_blob_opts_init(&opts);
+		spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[i].uuid);
+
+		spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_bserrno == 0);
+		CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+		blobid = g_blobid;
+
+		spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_bserrno == 0);
+		SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+		blob = g_blob;
+
+		blob_size = blob->active.num_clusters * bs->cluster_sz;
+		ext_size = mdisks[i].num_blocks * mdisks[i].block_size;
+		CU_ASSERT(blob_size == ext_size);
+
+		ut_blob_close_and_delete(bs, blob);
+		ut_close_malloc_dev(i);
+		poll_threads();
+	}
+
+	/*
+	 * A clone of an external device is possible, even when the external
+	 * device size is not a multiple of cluster size.
+	 */
+	struct spdk_bdev *bdev = NULL;
+	uint32_t block_size = 512;
+	uint64_t num_blocks = bs->cluster_sz / block_size + 1;
+	CU_ASSERT(bs->cluster_sz > block_size);
+
+	rc = create_malloc_disk(&bdev, NULL, NULL, num_blocks, block_size, 0);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(bdev != NULL);
+
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	CU_ASSERT(blob->active.num_clusters == 2);
+	blob_size = blob->active.num_clusters * bs->cluster_sz;
+	ext_size = num_blocks * block_size;
+	CU_ASSERT(blob_size > ext_size);
+
+	ut_blob_close_and_delete(bs, blob);
+	delete_malloc_disk(bdev->name, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+}
+
+static void
+bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+	      void *event_ctx)
+{
+	return;
+}
+
+static void
+bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+{
+	if (success) {
+		g_bserrno = 0;
+	} else {
+		g_bserrno = -EIO;
+	}
+	spdk_bdev_free_io(bdev_io);
+}
+
+static bool
+blob_extclone_verify_blob(struct spdk_blob *blob, struct spdk_io_channel *bs_ch,
+			  uint32_t ext_blksz, uint8_t *contents,
+			  uint64_t ext_num_blocks, const char *how)
+{
+	uint32_t	bs_blksz = blob->bs->io_unit_size;
+	uint8_t		*buf;
+	uint64_t	ext_size = ext_blksz * ext_num_blocks;
+	uint64_t	start, expect, i, ext_block;
+	struct iovec	iov;
+
+	buf = calloc(1, bs_blksz);
+	SPDK_CU_ASSERT_FATAL(buf != NULL);
+
+	iov.iov_base = buf;
+	iov.iov_len = bs_blksz;
+
+	for (start = 0; start < ext_size; start += bs_blksz) {
+		if (strcmp(how, "read") == 0) {
+			spdk_blob_io_read(blob, bs_ch, buf, start / bs_blksz, 1,
+					  bs_op_complete, NULL);
+		} else if (strcmp(how, "readv") == 0) {
+			spdk_blob_io_readv(blob, bs_ch, &iov, 1, start / bs_blksz, 1,
+					   bs_op_complete, NULL);
+		} else if (strcmp(how, "readv_ext") == 0) {
+			/*
+			 * XXX-mg this is currently pointless. NULL ext_opts
+			 * leads to dev->readv(), not dev->readv_ext().
+			 */
+			spdk_blob_io_readv_ext(blob, bs_ch, &iov, 1, start / bs_blksz, 1,
+					       bs_op_complete, NULL, NULL);
+		} else {
+			abort();
+		}
+		poll_threads();
+		SPDK_CU_ASSERT_FATAL(g_bserrno == 0);
+		if (g_bserrno != 0) {
+			continue;
+		}
+		for (i = 0; i < bs_blksz; i++) {
+			ext_block = (start + i) / ext_blksz;
+			SPDK_CU_ASSERT_FATAL(ext_block < ext_num_blocks);
+			expect = contents[ext_block];
+			CU_ASSERT(buf[i] == expect);
+			if (buf[i] != expect) {
+				printf("byte 0x%08" PRIx64 " expected 0x%02" PRIx64
+				       " got 0x%02" PRIx8 " (FAIL)\n",
+				       start + i, expect, buf[i]);
+				free(buf);
+				return false;
+			}
+		}
+	}
+
+	free(buf);
+	return true;
+}
+
+static void
+blob_extclone_io_size(uint32_t bs_blksz, uint32_t ext_blksz)
+{
+	struct spdk_bs_dev	*dev;
+	struct spdk_blob_store	*bs;
+	struct spdk_bs_opts	bsopts;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	struct			spdk_bdev *bdev = NULL;
+	uint64_t		ext_num_blocks = 64;
+	uint64_t		ext_size = ext_num_blocks * ext_blksz;
+	uint8_t			contents[ext_num_blocks];
+	struct spdk_bdev_desc	*ext_desc = NULL;
+	uint8_t			*buf1, *buf2;
+	struct spdk_io_channel	*ext_ch, *bs_ch;
+	int			rc;
+	uint64_t		start, ext_block, i;
+
+	spdk_bs_opts_init(&bsopts, sizeof(bsopts));
+	bsopts.cluster_sz = 16 * 1024;
+
+	/* Create device with desired block size */
+	dev = init_dev();
+	dev->blocklen = bs_blksz;
+	dev->blockcnt =  DEV_BUFFER_SIZE / dev->blocklen;
+
+	/* Initialize a new blob store */
+	spdk_bs_init(dev, &bsopts, bs_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
+	SPDK_CU_ASSERT_FATAL(g_bs->io_unit_size == bs_blksz);
+	bs = g_bs;
+	bs_ch = spdk_bs_alloc_io_channel(bs);
+	SPDK_CU_ASSERT_FATAL(bs_ch != NULL);
+
+	buf1 = calloc(1, spdk_max(bs_blksz, ext_blksz));
+	SPDK_CU_ASSERT_FATAL(buf1 != NULL);
+	buf2 = calloc(1, spdk_max(bs_blksz, ext_blksz));
+	SPDK_CU_ASSERT_FATAL(buf2 != NULL);
+
+	/* Create external device and intialize it. */
+	rc = create_malloc_disk(&bdev, NULL, NULL, ext_num_blocks, ext_blksz, 0);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(bdev != NULL);
+	rc = spdk_bdev_open_ext(spdk_bdev_get_name(bdev), true, bdev_event_cb,
+				NULL, &ext_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ext_desc != NULL);
+	ext_ch = spdk_bdev_get_io_channel(ext_desc);
+	SPDK_CU_ASSERT_FATAL(ext_ch != NULL);
+	for (i = 0; i < ext_num_blocks; i++) {
+		contents[i] = i + 1;
+		memset(buf1, contents[i], ext_blksz);
+		rc = spdk_bdev_write_blocks(ext_desc, ext_ch, buf1, i, 1,
+					    bdev_io_complete_cb, NULL);
+		CU_ASSERT(rc == 0);
+		poll_threads();
+		CU_ASSERT(g_bserrno == 0)
+	}
+	spdk_put_io_channel(ext_ch);
+	spdk_bdev_close(ext_desc);
+
+	/* Clone the malloc device */
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
+	opts.num_clusters = ext_size / bs->cluster_sz;
+	SPDK_CU_ASSERT_FATAL(opts.num_clusters * bs->cluster_sz == ext_size);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	/* Open the clone */
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	/* Verify that reads return the content of the malloc device */
+	blob_extclone_verify_blob(blob, bs_ch, ext_blksz, contents, ext_num_blocks, "read");
+	blob_extclone_verify_blob(blob, bs_ch, ext_blksz, contents, ext_num_blocks, "readv");
+	blob_extclone_verify_blob(blob, bs_ch, ext_blksz, contents, ext_num_blocks, "readv_ext");
+	/* Write one blob block at a time; verify all blocks with each write */
+	for (start = 0; start < ext_size; start += bs_blksz) {
+		for (i = 0; i < bs_blksz; i++) {
+			ext_block = (start + i) / ext_blksz;
+			contents[ext_block] |= 0x80;
+			buf1[i] = contents[ext_block];
+		}
+		spdk_blob_io_write(blob, bs_ch, buf1, start / bs_blksz, 1,
+				   bs_op_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_bserrno == 0);
+		if (!blob_extclone_verify_blob(blob, bs_ch, ext_blksz, contents,
+					       ext_num_blocks, "read")) {
+			/* If one fails, the rest probably will too. */
+			break;
+		}
+		if (!blob_extclone_verify_blob(blob, bs_ch, ext_blksz, contents,
+					       ext_num_blocks, "readv")) {
+			break;
+		}
+	}
+
+	/* Verify that the malloc disk has not changed */
+	rc = spdk_bdev_open_ext(spdk_bdev_get_name(bdev), false, bdev_event_cb,
+				NULL, &ext_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ext_desc != NULL);
+	ext_ch = spdk_bdev_get_io_channel(ext_desc);
+	SPDK_CU_ASSERT_FATAL(ext_ch != NULL);
+	for (i = 0; i < ext_num_blocks; i++) {
+		rc = spdk_bdev_read_blocks(ext_desc, ext_ch, buf1, i, 1,
+					   bdev_io_complete_cb, NULL);
+		CU_ASSERT(rc == 0);
+		poll_threads();
+		SPDK_CU_ASSERT_FATAL(g_bserrno == 0);
+		memset(buf2, i + 1, ext_blksz);
+		CU_ASSERT(memcmp(buf1, buf2, ext_blksz) == 0);
+	}
+	spdk_bdev_close(ext_desc);
+
+	/* Clean up */
+	free(buf1);
+	free(buf2);
+	spdk_put_io_channel(ext_ch);
+	spdk_bs_free_io_channel(bs_ch);
+	suite_blob_cleanup();
+	delete_malloc_disk(bdev->name, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	g_bs = NULL;
+	memset(g_dev_buffer, 0, DEV_BUFFER_SIZE);
+}
+
+static void
+blob_extclone_io_4096_4096(void)
+{
+	blob_extclone_io_size(4096, 4096);
+}
+
+static void
+blob_extclone_io_512_512(void)
+{
+	blob_extclone_io_size(512, 512);
+}
+
+static void
+blob_extclone_io_4096_512(void)
+{
+	blob_extclone_io_size(4096, 512);
+}
+
+static void
+blob_extclone_io_512_4096(void)
+{
+	struct spdk_bs_dev	*dev;
+	struct spdk_blob_store	*bs;
+	struct spdk_bs_opts	bsopts;
+	struct spdk_blob_opts	opts;
+	struct			spdk_bdev *bdev = NULL;
+	uint32_t		bs_blksz = 512;
+	uint32_t		ext_blksz = 4096;
+	uint64_t		ext_num_blocks = 64;
+	int			rc;
+
+	spdk_bs_opts_init(&bsopts, sizeof(bsopts));
+	bsopts.cluster_sz = 16 * 1024;
+
+	/* Create device with desired block size */
+	dev = init_dev();
+	dev->blocklen = bs_blksz;
+	dev->blockcnt =  DEV_BUFFER_SIZE / dev->blocklen;
+
+	/* Initialize a new blob store */
+	spdk_bs_init(dev, &bsopts, bs_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
+	SPDK_CU_ASSERT_FATAL(g_bs->io_unit_size == bs_blksz);
+	bs = g_bs;
+
+	/* Create external device */
+	rc = create_malloc_disk(&bdev, NULL, NULL, ext_num_blocks, ext_blksz, 0);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(bdev != NULL);
+
+	/*
+	 * Clone the external device. This should fail due to the external
+	 * snapshot having a block size that would force the blobstore to
+	 * use a bounce buffer for small IOs.
+	 */
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -EINVAL);
+
+	/* Clean up */
+	suite_bs_cleanup();
+	delete_malloc_disk(bdev->name, bs_op_complete, NULL);
+	CU_ASSERT(g_bserrno == 0);
+	g_bs = NULL;
+	memset(g_dev_buffer, 0, DEV_BUFFER_SIZE);
+}
+
+#ifdef NDEBUG
+static void
+ut_bs_dev_cb_fn(struct spdk_io_channel *channel, void *cb_arg, int bserrno)
+{
+	int *errp = cb_arg;
+
+	*errp = bserrno;
+}
+#endif
+
+static void
+blob_extclone_write(void)
+{
+#ifdef NDEBUG
+	/*
+	 * This tests paths that assert() when hit.  Be sure that when compiled
+	 * without assert() armed that they return errors.
+	 */
+	struct spdk_bs_dev_cb_args cb_args;
+	int err;
+
+	cb_args.cb_fn = ut_bs_dev_cb_fn;
+	cb_args.channel = NULL;
+	cb_args.cb_arg = &err;
+
+	err = 0;
+	esnap_writev(NULL, NULL, NULL, 0, 0, 0, &cb_args);
+	CU_ASSERT(err == -EPERM);
+
+	err = 0;
+	esnap_writev_ext(NULL, NULL, NULL, 0, 0, 0, &cb_args, NULL);
+	CU_ASSERT(err == -EPERM);
+
+	err = 0;
+	esnap_write_zeroes(NULL, NULL, 0, 0, &cb_args);
+	CU_ASSERT(err == -EPERM);
+
+	err = 0;
+	esnap_unmap(NULL, NULL, 0, 0, &cb_args);
+	CU_ASSERT(err == -EPERM);
+#endif
+}
+
+static void
+blob_extclone_thread_add(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	uint64_t		start_thread = g_ut_thread_id;
+	uint32_t		start_g_thread_count = g_thread_count;
+	uint32_t		start_g_ut_num_threads = g_ut_num_threads;
+	void			*buf;
+	struct iovec		iov;
+	struct spdk_io_channel	*bs_ch = spdk_bs_alloc_io_channel(bs);
+	struct esnap_ctx	*esnap_ctx;
+
+	/*
+	 * If IO is performed using a thread that didn't exist when the blob
+	 * was loaded, IO should fail because there is no channel available.
+	 */
+
+	/* Reduce the number of threads while creating the blob */
+	SPDK_CU_ASSERT_FATAL(g_ut_num_threads > 1);
+	set_thread(0);
+	g_thread_count = 1;
+
+	/* Create and open the external clone and a channel to use for reads */
+	ut_open_malloc_dev(0);
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[0].uuid);
+
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	/*
+	 * While opening the the blob, space for (g_thread_count + 1) IO
+	 * channels will be allocated. There is a race: someone could add
+	 * another thread between the allocation of the space for storing
+	 * pointers to these channels and the creation of each channel on a
+	 * thread.  Poll on the one active thread, then increase the number of
+	 * threads before polling on them.
+	 */
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	while (poll_thread(0)) { /* empty */ }
+
+	/*
+	 * Restore the thread count and poll all threads.  io_channels_count
+	 * should not increase beyond that required for thread 0.  IO on the
+	 * new thread should fail.
+	 */
+	g_thread_count = start_g_thread_count;
+	g_ut_num_threads = start_g_ut_num_threads;
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+	esnap_ctx = back_bs_dev_to_esnap_ctx(blob->back_bs_dev);
+	CU_ASSERT(esnap_ctx->io_channels_count == spdk_thread_get_id(spdk_get_thread()) + 1);
+
+	/* Be sure that the above didn't break reads on the first thread. */
+	SPDK_CU_ASSERT_FATAL(bs_ch != NULL);
+	buf = calloc(1, bs->io_unit_size);
+	SPDK_CU_ASSERT_FATAL(buf != NULL);
+	spdk_blob_io_read(blob, bs_ch, buf, 0, 1, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+
+	/* The various forms of read should all fail on a "new" thread. */
+	set_thread(1);
+
+	/* readv should fail with ENODEV. */
+	g_bserrno = 0;
+	spdk_blob_io_read(blob, bs_ch, buf, 0, 1, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -ENODEV);
+
+	/* readv() should fail with ENODEV */
+	iov.iov_base = buf;
+	iov.iov_len = bs->io_unit_size;
+	g_bserrno = 0;
+	spdk_blob_io_readv(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -ENODEV);
+
+	/* readv_ext() should fail with ENODEV */
+	g_bserrno = 0;
+	spdk_blob_io_readv_ext(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -ENODEV);
+
+	/* Clean up */
+	free(buf);
+	set_thread(start_thread);
+	spdk_bs_free_io_channel(bs_ch);
+	ut_blob_close_and_delete(bs, blob);
+	ut_close_malloc_dev(0);
+	poll_threads();
+}
+
+static void
 suite_bs_setup(void)
 {
 	struct spdk_bs_dev *dev;
@@ -7491,9 +8055,22 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_simultaneous_operations);
 	CU_ADD_TEST(suite_bs, blob_persist_test);
 	CU_ADD_TEST(suite_bs, blob_decouple_snapshot);
+	CU_ADD_TEST(suite_bs, blob_extclone_defaults);
+	CU_ADD_TEST(suite_bs, blob_extclone_size);
+	CU_ADD_TEST(suite, blob_extclone_io_4096_4096);
+	CU_ADD_TEST(suite, blob_extclone_io_512_512);
+	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
+	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
+	CU_ADD_TEST(suite_bs, blob_extclone_write);
+	CU_ADD_TEST(suite_bs, blob_extclone_thread_add);
 
+	allocate_cores(1);
 	allocate_threads(2);
 	set_thread(0);
+
+	init_accel();
+	spdk_bdev_initialize(bdev_init_cb, NULL);
+	poll_threads();
 
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
@@ -7506,9 +8083,12 @@ main(int argc, char **argv)
 	num_failures += CU_get_number_of_failures();
 	CU_cleanup_registry();
 
+	spdk_bdev_finish(bdev_fini_cb, NULL);
+	fini_accel();
 	free(g_dev_buffer);
 
 	free_threads();
+	free_cores();
 
 	return num_failures;
 }

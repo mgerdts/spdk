@@ -1,21 +1,25 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
 
+#include "spdk/bdev.h"
 #include "spdk/blobfs.h"
 #include "spdk/env.h"
 #include "spdk/log.h"
 #include "spdk/barrier.h"
 #include "thread/thread_internal.h"
 
+#include "spdk/bdev_module.h"
 #include "spdk_cunit.h"
 #include "unit/lib/blob/bs_dev_common.c"
 #include "common/lib/test_env.c"
 #include "blobfs/blobfs.c"
 #include "blobfs/tree.c"
+#include "../blobfs_stub.c"
 
 struct spdk_filesystem *g_fs;
 struct spdk_file *g_file;
