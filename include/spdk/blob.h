@@ -3,7 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -62,13 +62,15 @@
 #define SPDK_BLOB_H
 
 #include "spdk/stdinc.h"
+#include "spdk/uuid.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef uint64_t spdk_blob_id;
-#define SPDK_BLOBID_INVALID	(uint64_t)-1
+#define SPDK_BLOBID_INVALID		(uint64_t)-1
+#define SPDK_BLOBID_EXTERNAL_SNAPSHOT	(uint64_t)-2
 #define SPDK_BLOBSTORE_TYPE_LENGTH 16
 
 enum blob_clear_method {
@@ -148,6 +150,8 @@ struct spdk_bs_dev_cb_args {
 	struct spdk_io_channel	*channel;
 	void			*cb_arg;
 };
+
+struct esnap_ctx;
 
 /**
  * Structure with optional IO request parameters
@@ -464,6 +468,12 @@ struct spdk_blob_opts {
 	 * New added fields should be put at the end of the struct.
 	 */
 	size_t opts_size;
+
+	/**
+	 * If non-zero, use the bdev with this UUID as the external snapshot
+	 * while creating an external clone.
+	 */
+	struct spdk_uuid external_snapshot_uuid;
 };
 
 /**
@@ -563,6 +573,17 @@ int spdk_blob_get_clones(struct spdk_blob_store *bs, spdk_blob_id blobid, spdk_b
 spdk_blob_id spdk_blob_get_parent_snapshot(struct spdk_blob_store *bs, spdk_blob_id blobid);
 
 /**
+ * Get the UUID string of the external bdev that acts as a clone's parent snapshot.
+ *
+ * If a blob is not a clone of an external snapshot, NULL is returned.
+ *
+ * \param blob Blob.
+ *
+ * \return The UUID of the external parent bdev.
+ */
+const char *spdk_blob_get_external_parent(struct spdk_blob *blob);
+
+/**
  * Check if blob is read only.
  *
  * \param blob Blob.
@@ -597,6 +618,15 @@ bool spdk_blob_is_clone(struct spdk_blob *blob);
  * \return true if blob is thin-provisioned.
  */
 bool spdk_blob_is_thin_provisioned(struct spdk_blob *blob);
+
+/**
+ * Check if blob is a clone of an external bdev.
+ *
+ * \param blob Blob.
+ *
+ * \return true if blob is a clone of an external bdev.
+ */
+bool spdk_blob_is_external_clone(const struct spdk_blob *blob);
 
 /**
  * Delete an existing blob from the given blobstore.
