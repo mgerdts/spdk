@@ -30,6 +30,8 @@
 	spdk_blob_is_read_only;
 	spdk_blob_is_snapshot;
 	spdk_blob_is_clone;
+	spdk_blob_is_external_clone;
+	spdk_blob_get_external_parent;
 	spdk_blob_is_thin_provisioned;
 	spdk_bs_delete_blob;
 	spdk_bs_inflate_blob;
