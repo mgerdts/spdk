@@ -604,7 +604,15 @@ cleanup:
 
 SPDK_RPC_REGISTER("bdev_lvol_clone", rpc_bdev_lvol_clone, SPDK_RPC_RUNTIME)
 SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_lvol_clone, clone_lvol_bdev)
-SPDK_RPC_REGISTER_ALIAS_DEPRECATED(bdev_lvol_clone, bdev_lvol_clone_bdev)
+
+static void
+rpc_bdev_lvol_clone_bdev(struct spdk_jsonrpc_request *request,
+		    const struct spdk_json_val *params)
+{
+	rpc_bdev_lvol_clone(request, params);
+}
+
+SPDK_RPC_REGISTER("bdev_lvol_clone_bdev", rpc_bdev_lvol_clone_bdev, SPDK_RPC_RUNTIME)
 
 struct rpc_bdev_lvol_rename {
 	char *old_name;
