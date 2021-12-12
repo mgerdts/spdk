@@ -2640,7 +2640,12 @@ nvme_ctrlr_set_num_queues_done(void *arg, const struct spdk_nvme_cpl *cpl)
 		 */
 		min_allocated = spdk_min(sq_allocated, cq_allocated);
 
-		/* Set number of queues to be minimum of requested and actually allocated. */
+		/*
+		 * Set number of queues to be minimum of requested and actually allocated.
+		 * If the number allocated is fewer than requested, an SPDK controller
+		 * can be tuned with the max_io_qpairs_per_ctrlr parameter of the
+		 * nvmf_create_transport method.
+		 */
 		ctrlr->opts.num_io_queues = spdk_min(min_allocated, ctrlr->opts.num_io_queues);
 	}
 
@@ -5129,7 +5134,8 @@ spdk_nvme_ctrlr_alloc_qid(struct spdk_nvme_ctrlr *ctrlr)
 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
 	qid = spdk_bit_array_find_first_set(ctrlr->free_io_qids, 1);
 	if (qid > ctrlr->opts.num_io_queues) {
-		NVME_CTRLR_ERRLOG(ctrlr, "No free I/O queue IDs\n");
+		NVME_CTRLR_ERRLOG(ctrlr, "No free I/O queue IDs: all %u in use\n",
+				  ctrlr->opts.num_io_queues);
 		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 		return -1;
 	}
