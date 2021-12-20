@@ -4554,6 +4554,44 @@ bs_dump_finish(spdk_bs_sequence_t *seq, struct spdk_bs_load_ctx *ctx, int bserrn
 }
 
 static void
+bs_dump_print_xattr(struct spdk_bs_load_ctx *ctx, struct spdk_blob_md_descriptor *desc)
+{
+	struct spdk_blob_md_descriptor_xattr *desc_xattr;
+	uint32_t i;
+
+	desc_xattr = (struct spdk_blob_md_descriptor_xattr *)desc;
+
+	if (desc_xattr->length !=
+	    sizeof(desc_xattr->name_length) + sizeof(desc_xattr->value_length) +
+	    desc_xattr->name_length + desc_xattr->value_length) {
+	}
+
+	memcpy(ctx->xattr_name, desc_xattr->name, desc_xattr->name_length);
+	ctx->xattr_name[desc_xattr->name_length] = '\0';
+	fprintf(ctx->fp, "%s: name = \"%s\"\n",
+		desc->type == SPDK_MD_DESCRIPTOR_TYPE_XATTR ? "XATTR" :
+		desc->type == SPDK_MD_DESCRIPTOR_TYPE_XATTR_INTERNAL ? "XATTR_INTERNAL" :
+		"XATTR_?", ctx->xattr_name);
+	fprintf(ctx->fp, "       value = \"");
+	ctx->print_xattr_fn(ctx->fp, ctx->super->bstype.bstype, ctx->xattr_name,
+			    (void *)((uintptr_t)desc_xattr->name + desc_xattr->name_length),
+			    desc_xattr->value_length);
+	fprintf(ctx->fp, "\"\n");
+	for (i = 0; i < desc_xattr->value_length; i++) {
+		if (i % 16 == 0) {
+			fprintf(ctx->fp, "               ");
+		}
+		fprintf(ctx->fp, "%02" PRIx8 " ", *((uint8_t *)desc_xattr->name + desc_xattr->name_length + i));
+		if ((i + 1) % 16 == 0) {
+			fprintf(ctx->fp, "\n");
+		}
+	}
+	if (i % 16 != 0) {
+		fprintf(ctx->fp, "\n");
+	}
+}
+
+static void
 bs_dump_print_md_page(struct spdk_bs_load_ctx *ctx)
 {
 	uint32_t page_idx = ctx->cur_page;
@@ -4625,38 +4663,9 @@ bs_dump_print_md_page(struct spdk_bs_load_ctx *ctx)
 				fprintf(ctx->fp, "\n");
 			}
 		} else if (desc->type == SPDK_MD_DESCRIPTOR_TYPE_XATTR) {
-			struct spdk_blob_md_descriptor_xattr *desc_xattr;
-			uint32_t i;
-
-			desc_xattr = (struct spdk_blob_md_descriptor_xattr *)desc;
-
-			if (desc_xattr->length !=
-			    sizeof(desc_xattr->name_length) + sizeof(desc_xattr->value_length) +
-			    desc_xattr->name_length + desc_xattr->value_length) {
-			}
-
-			memcpy(ctx->xattr_name, desc_xattr->name, desc_xattr->name_length);
-			ctx->xattr_name[desc_xattr->name_length] = '\0';
-			fprintf(ctx->fp, "XATTR: name = \"%s\"\n", ctx->xattr_name);
-			fprintf(ctx->fp, "       value = \"");
-			ctx->print_xattr_fn(ctx->fp, ctx->super->bstype.bstype, ctx->xattr_name,
-					    (void *)((uintptr_t)desc_xattr->name + desc_xattr->name_length),
-					    desc_xattr->value_length);
-			fprintf(ctx->fp, "\"\n");
-			for (i = 0; i < desc_xattr->value_length; i++) {
-				if (i % 16 == 0) {
-					fprintf(ctx->fp, "               ");
-				}
-				fprintf(ctx->fp, "%02" PRIx8 " ", *((uint8_t *)desc_xattr->name + desc_xattr->name_length + i));
-				if ((i + 1) % 16 == 0) {
-					fprintf(ctx->fp, "\n");
-				}
-			}
-			if (i % 16 != 0) {
-				fprintf(ctx->fp, "\n");
-			}
+			bs_dump_print_xattr(ctx, desc);
 		} else if (desc->type == SPDK_MD_DESCRIPTOR_TYPE_XATTR_INTERNAL) {
-			/* TODO */
+			bs_dump_print_xattr(ctx, desc);
 		} else if (desc->type == SPDK_MD_DESCRIPTOR_TYPE_FLAGS) {
 			/* TODO */
 		} else {
