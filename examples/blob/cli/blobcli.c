@@ -1555,6 +1555,10 @@ main(int argc, char **argv)
 	opts.name = "blobcli";
 	opts.json_config_file = cli_context->config_file;
 
+	if (spdk_log_set_flag("blob") != 0) {
+		fprintf(stderr, "Failed to set 'blob' log flag\n");
+	}
+
 	cli_context->app_started = true;
 	rc = spdk_app_start(&opts, cli_start, cli_context);
 	if (rc) {
