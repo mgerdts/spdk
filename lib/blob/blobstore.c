@@ -4591,6 +4591,68 @@ bs_dump_print_xattr(struct spdk_bs_load_ctx *ctx, struct spdk_blob_md_descriptor
 	}
 }
 
+struct type_flag_desc {
+	uint64_t mask;
+	uint64_t val;
+	const char *name;
+};
+
+static void
+bs_dump_print_type_bits(struct spdk_bs_load_ctx *ctx, uint64_t flags,
+			struct type_flag_desc *desc, size_t numflags)
+{
+	uint64_t covered = 0;
+	size_t i;
+
+	for (i = 0; i < numflags; i++) {
+		if ((desc[i].mask & flags) != desc[i].val) {
+			continue;
+		}
+		fprintf(ctx->fp, "\t\t 0x%016" PRIx64 " %s\n", desc[i].val, desc[i].name);
+		covered |= desc[i].mask;
+	}
+	if ((flags & ~covered) != 0) {
+		fprintf(ctx->fp, "\t\t 0x%016" PRIx64 " Unknown\n", flags & ~covered);
+	}
+
+}
+
+static void
+bs_dump_print_type_flags(struct spdk_bs_load_ctx *ctx, struct spdk_blob_md_descriptor *desc)
+{
+	struct spdk_blob_md_descriptor_flags *type_desc;
+#define ADD_FLAG(f) { f, f, #f }
+#define ADD_MASK_VAL(m, v) { m, v, #v }
+	struct type_flag_desc invalid[] = {
+		ADD_FLAG(SPDK_BLOB_THIN_PROV),
+		ADD_FLAG(SPDK_BLOB_INTERNAL_XATTR),
+		ADD_FLAG(SPDK_BLOB_EXTENT_TABLE),
+	};
+	struct type_flag_desc data_ro[] = {
+		ADD_FLAG(SPDK_BLOB_READ_ONLY),
+	};
+	struct type_flag_desc md_ro[] = {
+		ADD_MASK_VAL(SPDK_BLOB_MD_RO_FLAGS_MASK, BLOB_CLEAR_WITH_DEFAULT),
+		ADD_MASK_VAL(SPDK_BLOB_MD_RO_FLAGS_MASK, BLOB_CLEAR_WITH_NONE),
+		ADD_MASK_VAL(SPDK_BLOB_MD_RO_FLAGS_MASK, BLOB_CLEAR_WITH_UNMAP),
+		ADD_MASK_VAL(SPDK_BLOB_MD_RO_FLAGS_MASK, BLOB_CLEAR_WITH_WRITE_ZEROES),
+	};
+#undef ADD_FLAG
+#undef ADD_MASK_VAL
+
+	type_desc = (struct spdk_blob_md_descriptor_flags *)desc;
+	fprintf(ctx->fp, "Flags:\n");
+	fprintf(ctx->fp, "\tinvalid: 0x%016" PRIx64 "\n", type_desc->invalid_flags);
+	bs_dump_print_type_bits(ctx, type_desc->invalid_flags, invalid,
+				SPDK_COUNTOF(invalid));
+	fprintf(ctx->fp, "\tdata_ro: 0x%016" PRIx64 "\n", type_desc->data_ro_flags);
+	bs_dump_print_type_bits(ctx, type_desc->data_ro_flags, data_ro,
+				SPDK_COUNTOF(data_ro));
+	fprintf(ctx->fp, "\t  md_ro: 0x%016" PRIx64 "\n", type_desc->md_ro_flags);
+	bs_dump_print_type_bits(ctx, type_desc->md_ro_flags, md_ro,
+				SPDK_COUNTOF(md_ro));
+}
+
 static void
 bs_dump_print_md_page(struct spdk_bs_load_ctx *ctx)
 {
@@ -4667,7 +4729,7 @@ bs_dump_print_md_page(struct spdk_bs_load_ctx *ctx)
 		} else if (desc->type == SPDK_MD_DESCRIPTOR_TYPE_XATTR_INTERNAL) {
 			bs_dump_print_xattr(ctx, desc);
 		} else if (desc->type == SPDK_MD_DESCRIPTOR_TYPE_FLAGS) {
-			/* TODO */
+			bs_dump_print_type_flags(ctx, desc);
 		} else {
 			/* Error */
 		}
