@@ -44,6 +44,7 @@
 #include "spdk/likely.h"
 #include "spdk/util.h"
 #include "spdk/string.h"
+#include "spdk/bdev.h"
 
 #include "spdk_internal/assert.h"
 #include "spdk/log.h"
@@ -3904,6 +3905,7 @@ bs_load_replay_md_parse_page(struct spdk_bs_load_ctx *ctx, struct spdk_blob_md_p
 					 * in the used cluster map.
 					 */
 					if (cluster_idx != 0) {
+						SPDK_NOTICELOG("Recover: cluster %" PRIu32 "\n", cluster_idx + j);
 						spdk_bit_array_set(ctx->used_clusters, cluster_idx + j);
 						if (bs->num_free_clusters == 0) {
 							return -ENOSPC;
@@ -4240,6 +4242,7 @@ bs_load_replay_md_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 		if (page->sequence_num == 0 || ctx->in_page_chain == true) {
 			bs_claim_md_page(ctx->bs, page_num);
 			if (page->sequence_num == 0) {
+				SPDK_INFOLOG(blob, "Recover: blob %" PRIu32 "\n", page_num);
 				spdk_bit_array_set(ctx->bs->used_blobids, page_num);
 			}
 			if (bs_load_replay_md_parse_page(ctx, page)) {
@@ -4292,6 +4295,7 @@ bs_recover(struct spdk_bs_load_ctx *ctx)
 {
 	int		rc;
 
+	SPDK_NOTICELOG("Performing recovery on blobstore\n");
 	rc = spdk_bit_array_resize(&ctx->bs->used_md_pages, ctx->super->md_len);
 	if (rc < 0) {
 		bs_load_ctx_fail(ctx, -ENOMEM);

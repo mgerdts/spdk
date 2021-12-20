@@ -84,6 +84,8 @@ static void ut_blob_close_and_delete(struct spdk_blob_store *bs, struct spdk_blo
 static void suite_blob_setup(void);
 static void suite_blob_cleanup(void);
 
+DEFINE_STUB(spdk_bdev_get_name, const char *, (const struct spdk_bdev *bdev), "test");
+
 static void
 _get_xattr_value(void *arg, const char *name,
 		 const void **value, size_t *value_len)

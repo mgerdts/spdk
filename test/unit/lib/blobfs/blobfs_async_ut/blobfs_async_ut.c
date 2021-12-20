@@ -48,6 +48,8 @@ struct spdk_filesystem *g_fs;
 struct spdk_file *g_file;
 int g_fserrno;
 
+DEFINE_STUB(spdk_bdev_get_name, const char *, (const struct spdk_bdev *bdev), "test");
+
 static void
 fs_op_complete(void *ctx, int fserrno)
 {

@@ -50,6 +50,8 @@ struct spdk_file *g_file;
 int g_fserrno;
 struct spdk_thread *g_dispatch_thread = NULL;
 
+DEFINE_STUB(spdk_bdev_get_name, const char *, (const struct spdk_bdev *bdev), "test");
+
 struct ut_request {
 	fs_request_fn fn;
 	void *arg;
