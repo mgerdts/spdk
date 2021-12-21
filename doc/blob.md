@@ -581,6 +581,42 @@ result would be:
   Free clusters: 71 - 1000
 ```
 
+### External snapshots
+
+The previous sections described scenarios in which all data exists within the blobstore. In some situations,
+there may be read-only data that resides outside of the blobstore that needs to be presented as read-write
+within the blobstore. An example use case is when the SPDK volume manager is used to create an ephemeral clone
+of a virtual machine disk image. A golden disk image that resides on an NVMe-oF target can be cloned to allow
+writes to stay local to the SPDK instance.
+
+The diagram below illustrates Blob 1 as a clone of an NVMe-oF bdev, nvme1n1.
+
+```text
+,------------------------- SPDK -----------------------.
+|                                                      |
+|  ,--------- Blobstore ----------.                    |     ,--- Remote Target ---.
+|  |                              |                    |     |                     |
+|  |   +-----------------------+  |  +--------------+  |     |   +--------------+  |
+|  |   |      Blob 1 (rw)      |  |  | nvme1n1 (ro) |  |     |   |   Device     |  |
+|  |   |-----------------------|  |  |--------------|  |     |   |--------------|  |
+|  |   | Range (MiB) | Cluster |  |  |  Range (MiB) |  |     |   | Range (MiB)  |  |
+|  |   |-------------|---------|  |  |--------------|  |     |   |--------------|  |
+|  |   |   [0 - 1)   |~~~~~~~~~~~~~~>|    [0 - 1)   |~~~~~~~~~~~>|   [0 - 1)    |  |
+|  |   |   [1 - 2)   |~~~~~~~~~~~~~~>|    [1 - 2)   |~~~~~~~~~~~>|   [1 - 2)    |  |
+|  |   |   [2 - 3)   |~~~~~~~~~~~~~~>|    [2 - 3)   |~~~~~~~~~~~>|   [2 - 3)    |  |
+|  |   +-----------------------+  |  +--------------+  |     |   +--------------+  |
+|  |                              |                    |     |                     |
+|  `------------------------------'                    |     `---------------------'
+`---------------------------------=--------------------'
+```
+
+When Blob 1 is read before a write to that cluster, the read will be serviced by nvme1n1, which will make the
+invoke the appropriate methods to perform a read from the remote device. Writes are handled like writes to any
+other clone. Likewise, inflate and decouple work as they would for any other clone based on a snapshot that
+has no clusters backed by a zeroes device.
+
+Of course, any device known to SPDK may be used as an external snapshot.
+
 ### Sequences and Batches
 
 Internally Blobstore uses the concepts of sequences and batches to submit IO to the underlying device in either
