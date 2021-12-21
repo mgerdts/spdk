@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -100,6 +101,22 @@ void spdk_uuid_generate(struct spdk_uuid *uuid);
  * \param dst Destination UUID to store.
  */
 void spdk_uuid_copy(struct spdk_uuid *dst, const struct spdk_uuid *src);
+
+/**
+ * Generate a Nil/Null/Empty UUID.
+ *
+ * \param uuid Destination UUID to store.
+ */
+void spdk_uuid_clear(struct spdk_uuid *uuid);
+
+/**
+ * Determine if a UUID is a Nil/Null/Empty UUID.
+ *
+ * \param uuid UUID to check
+ *
+ * \return true if the UUID is equal to the Nil/Null/Empty UUID, else false.
+ */
+bool spdk_uuid_is_null(struct spdk_uuid *uuid);
 
 #ifdef __cplusplus
 }

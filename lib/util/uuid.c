@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -70,4 +71,16 @@ void
 spdk_uuid_copy(struct spdk_uuid *dst, const struct spdk_uuid *src)
 {
 	uuid_copy((void *)dst, (void *)src);
+}
+
+void
+spdk_uuid_clear(struct spdk_uuid *uuid)
+{
+	uuid_clear((void *)uuid);
+}
+
+bool
+spdk_uuid_is_null(struct spdk_uuid *uuid)
+{
+	return uuid_is_null((void *)uuid);
 }
