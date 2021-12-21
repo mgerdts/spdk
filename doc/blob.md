@@ -48,7 +48,7 @@ The Blobstore defines a hierarchy of storage abstractions as follows.
   at least the page size.
 * **Cluster**: A cluster is a fixed number of pages defined at Blobstore creation time. The pages that compose a cluster
   are always contiguous. Clusters are also numbered from the beginning of the disk, where cluster 0 is the first cluster
-  worth of pages, cluster 1 is the second grouping of pages, etc. A cluster is typically 1MiB in size, or 256 pages.
+  worth of pages, cluster 1 is the second grouping of pages, etc. A cluster is typically 4MiB in size, or 1024 pages.
 * **Blob**: A blob is an ordered list of clusters. Blobs are manipulated (created, sized, deleted, etc.) by the application
   and persist across power failures and reboots. Applications use a Blobstore provided identifier to access a particular blob.
   Blobs are read and written in units of pages by specifying an offset from the start of the blob. Applications can also
@@ -181,7 +181,7 @@ perform operations on the Blobstore.
 When the Blobstore is initialized, there are multiple configuration options to consider. The
 options and their defaults are:
 
-* **Cluster Size**: By default, this value is 1MB. The cluster size is required to be a multiple of page size and should be
+* **Cluster Size**: By default, this value is 4MiB. The cluster size is required to be a multiple of page size and should be
   selected based on the application’s usage model in terms of allocation. Recall that blobs are made up of clusters so when
   a blob is allocated/deallocated or changes in size, disk LBAs will be manipulated in groups of cluster size.  If the
   application is expecting to deal with mainly very large (always multiple GB) blobs then it may make sense to change the
