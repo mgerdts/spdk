@@ -607,7 +607,7 @@ The diagram below illustrates Blob 1 as a clone of an NVMe-oF bdev, nvme1n1.
 |  |   +-----------------------+  |  +--------------+  |     |   +--------------+  |
 |  |                              |                    |     |                     |
 |  `------------------------------'                    |     `---------------------'
-`---------------------------------=--------------------'
+`------------------------------------------------------'
 ```
 
 When Blob 1 is read before a write to that cluster, the read will be serviced by nvme1n1, which will make the
