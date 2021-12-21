@@ -101,6 +101,22 @@ void spdk_uuid_generate(struct spdk_uuid *uuid);
  */
 void spdk_uuid_copy(struct spdk_uuid *dst, const struct spdk_uuid *src);
 
+/**
+ * Generate a Nil/Null/Empty UUID.
+ *
+ * \param uuid Destination UUID to store.
+ */
+void spdk_uuid_clear(struct spdk_uuid *uuid);
+
+/**
+ * Determine if a UUID is a Nil/Null/Empty UUID.
+ *
+ * \param uuid UUID to check
+ *
+ * \return 1 if the UUID is equal to the Nil/Null/Empty UUID, else 0.
+ */
+int spdk_uuid_is_null(struct spdk_uuid *uuid);
+
 #ifdef __cplusplus
 }
 #endif
