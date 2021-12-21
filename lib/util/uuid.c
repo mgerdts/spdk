@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/uuid.h"
@@ -42,4 +43,16 @@ void
 spdk_uuid_copy(struct spdk_uuid *dst, const struct spdk_uuid *src)
 {
 	uuid_copy((void *)dst, (void *)src);
+}
+
+void
+spdk_uuid_clear(struct spdk_uuid *uuid)
+{
+	uuid_clear((void *)uuid);
+}
+
+bool
+spdk_uuid_is_null(struct spdk_uuid *uuid)
+{
+	return uuid_is_null((void *)uuid);
 }
