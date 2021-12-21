@@ -302,6 +302,286 @@ when creating a blob.
   Extents pointing to contiguous LBA are run-length encoded, including unallocated extents represented by 0.
   Every new cluster allocation incurs serializing whole linked list of pages for the blob.
 
+### Thin Blobs, Snapshots, and Clones
+
+Each in-use cluster is allocated to blobstore metadata or to a particular blob. Once a cluster is allocated to
+a blob it is considered owned by that blob and that particular blob's metadata maintains a reference to the
+cluster as a record of ownership. Cluster ownership is transferred during snapshot operations described later
+in @ref blob_pg_snapshots.
+
+Through the use of thin provisioning, snapshots, and/or clones, a blob may be backed by mixture of clusters it
+owns, those owned by one or more other blobs, or not yet backed by allocated clusters. The behavior of reads
+and writes depend on whether the operation targets blocks that are backed by a cluster owned by the blob or
+not.
+
+* **read from owned cluster**: The read is serviced by reading directly from the appropriate cluster.
+* **read from other clusters**: The read is passed on to the blob's *back device* and the back device services
+  the read.
+* **write to an owned cluster**: The write is serviced by writing directly to the appropriate cluster.
+* **write to other clusters**: A copy-on-write operation is triggered. This causes allocation of a cluster to
+  the blob, resulting in ownership of a cluster into which the write can happen.
+
+#### Copy-on-write {#blob_pg_copy_on_write}
+
+A copy-on-write operation is somewhat expensive, with the cost being proportional to the cluster size. Each
+copy-on-write involves the following steps:
+
+1. Allocate a cluster.
+2. Allocate a cluster-sized buffer into which data can be read.
+3. Trigger a full-cluster read from the back device into the cluster-sized buffer.
+4. Write from the cluster-sized buffer into the newly allocated cluster.
+5. Update the blob's on-disk metadata to record ownership of the newly allocated cluster. This involves at
+   least one page-sized write.
+6. Write the new data to the just allocated and copied cluster.
+
+### Thin Provisioning {#blob_pg_thin_provisioning}
+
+As mentioned in @ref blob_pg_cluster_layout, a blob may be thin provisioned. A thin provisioned blob starts
+out with no allocated clusters. Clusters are allocated as writes occur. A thin provisioned blob's back
+device is a *zeroes device*. A read from a zeroes device fills the read buffer with zeroes.
+
+Because all unallocated clusters are zeroed and the zeroes device will only write zeroes into the requested
+buffer, thin provisioning takes a short cut during copy-on-write. That is:
+
+1. Allocate a cluster. This requires an update to an on-disk bit array that follows the blobstore super block.
+2. Update the blob's on-disk metadata to record ownership of the newly allocated cluster. This involves at
+   least one page-sized writes.
+3. Write the new data to the just allocated cluster.
+
+As an example, consider a 3 MiB blob on a blobstore that uses 1 MiB clusters. When it is first created, all
+clusters are backed by the zeroes device.
+
+```text
++-----------------------+    +---------------+
+|      Blob 1 (rw)      |    | Zeroes Device |
+|-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +---------------+
+
+  Free clusters: 42, 53, 68 - 1000
+```
+
+When a 4 KiB write occurs at offset 1280 KiB, a cluster is allocated for the second 1 MiB chunk of blob.
+
+```text
++-----------------------+    +---------------+
+|      Blob 1 (rw)      |    | Zeroes Device |
+|-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +---------------+
+
+  Free clusters: 53, 68 - 1000
+```
+
+Now when any read or write is performed in the range [1 MiB - 2 MiB), it is performed within the confines of
+cluster 42, which lies at offset [42 MiB - 43 MiB) on the device that contains the blobstore. All other reads
+are still serviced by the zeroes device.
+
+### Snapshots {#blob_pg_snapshots}
+
+A snapshot is a special blob that is a read-only point-in-time representation of another non-snapshot blob.
+There may be many snapshots of a blob. When a snapshot is created, ownership of the blob's clusters is
+transferred to the snapshot.
+
+Starting from the thin provisioned blob from the previous example, before a snapshot the blob looks like:
+
+```text
++-----------------------+    +---------------+
+|      Blob 1 (rw)      |    | Zeroes Device |
+|-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +---------------+
+
+  Free clusters: 53, 68 - 1000
+```
+
+When a snapshot is taken the blobstore now has:
+
+```text
++-----------------------+    +-----------------------+    +---------------+
+|      Blob 1 (rw)      |    |    Snapshot 1 (ro)    |    | Zeroes Device |
+|-----------------------|    |-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |~~~~~~~~~~~~~>|   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +-----------------------+    +---------------+
+
+  Free clusters: 53, 68 - 1000
+```
+
+The diagram above shows the following behavior for reads and writes:
+
+* A read from Blob 1 in the [0 MiB - 1 MiB) or [2 MiB - 3 MiB) ranges triggers a read from the same range in
+  Snapshot 1, described in the next bullet.
+* A read from Snapshot 1 in the [0 MiB - 1 MiB) or [2 MiB - 3 MiB) ranges triggers a read from the zeroes
+  device.
+* Any write to Snapshot 1 fails with `EPERM`.
+* Any write to Blob 1 triggers copy-on-write, even when the snapshot is backed by the zeroes device. See
+  @ref blob_pg_copy_on_write.
+
+After creating Snapshot 1 from Blob 1, Blob 1 may be removed. Snapshot 1 will survive the removal of Blob 1.
+
+If the first 1.5 MiB of the blob were overwritten, two new clusters would be allocated, copied, and written
+across a series of metadata and data operations. After these complete, Blob 1 would look like:
+
+```text
++-----------------------+    +-----------------------+    +---------------+
+|      Blob 1 (rw)      |    |    Snapshot 1 (ro)    |    | Zeroes Device |
+|-----------------------|    |-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |-------------|---------|    |---------------|
+|   [0 - 1)   |    53   |    |   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |    68   |    |   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +-----------------------+    +---------------+
+
+  Free clusters: 69 - 1000
+```
+
+If Snapshot 1 is deleted, the last chunk of Blob 1 references the zeroes device and cluster 42 is returned to
+the free list.
+
+```text
++-----------------------+    +---------------+
+|      Blob 1 (rw)      |    | Zeroes Device |
+|-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |---------------|
+|   [0 - 1)   |    53   |    | 0000000000... |
+|   [1 - 2)   |    68   |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +---------------+
+
+  Free clusters: 42, 69 - 1000
+```
+
+If instead of deleting Snapshot 1, Blob 1 were deleted the snapshot would survive.
+
+```text
++-----------------------+    +---------------+
+|    Snapshot 1 (ro)    |    | Zeroes Device |
+|-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +---------------+
+
+  Free clusters: 53, 68 - 1000
+```
+
+### Clones {#blob_pg_clones}
+
+Through the process of discussing snapshots, clones have largely already been covered. This is because the
+snapshot of Blob 1 turned Blob 1 into a clone. The key concept that has not been covered is having many clones
+of a single snapshot.
+
+This diagram describes the state just after Snapshot 1 was created:
+
+```text
++-----------------------+    +-----------------------+    +---------------+
+|      Blob 1 (rw)      |    |    Snapshot 1 (ro)    |    | Zeroes Device |
+|-----------------------|    |-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |~~~~~~~~~~~~~>|   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +-----------------------+    +---------------+
+
+  Free clusters: 53, 68 - 1000
+```
+
+Another blob can be created as a clone of Snapshot 1, resulting in:
+
+```text
++-----------------------+           +-----------------------+    +---------------+
+|      Blob 1 (rw)      |           |    Snapshot 1 (ro)    |    | Zeroes Device |
+|-----------------------|           |-----------------------|    |---------------|
+| Range (MiB) | Cluster |           | Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|           |-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~+~~~~~~>|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |~~~~~~~~~~~~~|~+~~~~>|   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~|~|~+~~>|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+   | | |   +-----------------------+    +---------------+
+                            | | |
+                            | | |
++-----------------------+   | | |
+|      Blob 2 (rw)      |   | | |
+|-----------------------|   | | |
+| Range (MiB) | Cluster |   | | |
+|-------------|---------|   | | |
+|   [0 - 1)   |~~~~~~~~~~~~~' | |
+|   [1 - 2)   |~~~~~~~~~~~~~~~' |
+|   [2 - 3)   |~~~~~~~~~~~~~~~~~'
++-----------------------+
+
+  Free clusters: 53, 68 - 1000
+```
+
+While both Blob 1 and Blob 2 reference data in Snapshot 1, writes to each of these blobs will be contained
+within the blob that was written.
+
+Clone creation could be repeated an arbitrary number of times to create as many clones of Snapshot 1 as
+needed. Notice how each clone directly references Snapshot 1. If instead of cloning Snapshot 1 repeatedly, a
+new snapshot of Blob 1 were created for each clone, the chain from the most recent clone to the data contained
+in Snapshot 1 and the zeroes device would grow arbitrarily long.
+
+If a snapshot has multiple clones, the snapshot cannot be deleted.
+
+### Inflation and Decoupling
+
+Inflation and decoupling are two similar mechanisms for dissociating a clone from its snapshot. Other systems
+refer to similar concepts as *clone hydration*.
+
+Operation | Dissociate From Snapshot | Thin Provisioned
+--------- | ------------------------ | -----------------------------------
+Inflate   | Yes                      | No
+Decouple  | Yes                      | If snapshot referenced zeroes device
+
+Starting with the state from the previous example, suppose Blob 1 is inflated and Blob 2 is decoupled. The
+result would be:
+
+```text
++-----------------------+       +-----------------------+    +---------------+
+|      Blob 1 (rw)      |       |    Snapshot 1 (ro)    |    | Zeroes Device |
+|-----------------------|       |-----------------------|    |---------------|
+| Range (MiB) | Cluster |       | Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|       |-------------|---------|    |---------------|
+|   [0 - 1)   |   53    |       |   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |   68    |       |   [1 - 2)   |   42    |    | 0000000000... |
+|   [2 - 3)   |   69    |       |   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+       +-----------------------+    +---------------+
+
+
++-----------------------+    +---------------+
+|      Blob 2 (rw)      |    | Zeroes Device |
+|-----------------------|    |---------------|
+| Range (MiB) | Cluster |    | Virtual Data  |
+|-------------|---------|    |---------------|
+|   [0 - 1)   |~~~~~~~~~~~~~>| 0000000000... |
+|   [1 - 2)   |   70    |    | 0000000000... |
+|   [2 - 3)   |~~~~~~~~~~~~~>| 0000000000... |
++-----------------------+    +---------------+
+
+  Free clusters: 71 - 1000
+```
+
 ### Sequences and Batches
 
 Internally Blobstore uses the concepts of sequences and batches to submit IO to the underlying device in either
