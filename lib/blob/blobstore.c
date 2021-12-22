@@ -1391,9 +1391,6 @@ blob_load_backing_dev(void *cb_arg)
 			blob->parent_id = *(spdk_blob_id *)value;
 			spdk_bs_open_blob(blob->bs, blob->parent_id, blob_load_snapshot_cpl, ctx);
 			return;
-		} else {
-			/* add zeroes_dev for thin provisioned blob */
-			blob->back_bs_dev = bs_create_zeroes_dev(blob);
 		}
 
 		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, true);
@@ -4708,6 +4705,7 @@ bs_dump_print_type_flags(struct spdk_bs_load_ctx *ctx, struct spdk_blob_md_descr
 		ADD_FLAG(SPDK_BLOB_THIN_PROV),
 		ADD_FLAG(SPDK_BLOB_INTERNAL_XATTR),
 		ADD_FLAG(SPDK_BLOB_EXTENT_TABLE),
+		ADD_FLAG(SPDK_BLOB_EXTERNAL_SNAPSHOT),
 	};
 	struct type_flag_desc data_ro[] = {
 		ADD_FLAG(SPDK_BLOB_READ_ONLY),
@@ -5771,6 +5769,8 @@ bs_create_blob(struct spdk_blob_store *bs,
 			cb_fn(cb_arg, 0, rc);
 			return;
 		}
+
+		blob->invalid_flags |= SPDK_BLOB_EXTERNAL_SNAPSHOT;
 	}
 
 	rc = blob_resize(blob, opts_local.num_clusters);
