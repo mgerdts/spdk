@@ -93,7 +93,6 @@ _vbdev_lvol_change_bdev_alias(struct spdk_lvol *lvol, const char *new_lvol_name)
 {
 	struct spdk_bdev_alias *tmp;
 	char *old_alias;
-	char *alias;
 	int rc;
 	int alias_number = 0;
 
@@ -115,19 +114,11 @@ _vbdev_lvol_change_bdev_alias(struct spdk_lvol *lvol, const char *new_lvol_name)
 		return -EINVAL;
 	}
 
-	alias = spdk_sprintf_alloc("%s/%s", lvol->lvol_store->name, new_lvol_name);
-	if (alias == NULL) {
-		SPDK_ERRLOG("Cannot alloc memory for alias\n");
-		return -ENOMEM;
-	}
-
-	rc = spdk_bdev_alias_add(lvol->bdev, alias);
+	rc = spdk_bdev_alias_addf(lvol->bdev, "%s/%s", lvol->lvol_store->name, new_lvol_name);
 	if (rc != 0) {
-		SPDK_ERRLOG("cannot add alias '%s'\n", alias);
-		free(alias);
+		SPDK_ERRLOG("cannot add alias '%s/%s'\n", lvol->lvol_store->name, new_lvol_name);
 		return rc;
 	}
-	free(alias);
 
 	rc = spdk_bdev_alias_del(lvol->bdev, old_alias);
 	if (rc != 0) {
@@ -1046,7 +1037,6 @@ _create_lvol_disk(struct spdk_lvol *lvol, bool destroy)
 	struct lvol_bdev *lvol_bdev;
 	struct lvol_store_bdev *lvs_bdev;
 	uint64_t total_size;
-	unsigned char *alias;
 	int rc;
 
 	lvs_bdev = vbdev_get_lvs_bdev_by_lvs(lvol->lvol_store);
@@ -1090,21 +1080,12 @@ _create_lvol_disk(struct spdk_lvol *lvol, bool destroy)
 	}
 	lvol->bdev = bdev;
 
-	alias = spdk_sprintf_alloc("%s/%s", lvs_bdev->lvs->name, lvol->name);
-	if (alias == NULL) {
-		SPDK_ERRLOG("Cannot alloc memory for alias\n");
-		spdk_bdev_unregister(lvol->bdev, (destroy ? _create_lvol_disk_destroy_cb :
-						  _create_lvol_disk_unload_cb), lvol);
-		return -ENOMEM;
-	}
-
-	rc = spdk_bdev_alias_add(bdev, alias);
+	rc = spdk_bdev_alias_addf(bdev, "%s/%s", lvs_bdev->lvs->name, lvol->name);
 	if (rc != 0) {
 		SPDK_ERRLOG("Cannot add alias to lvol bdev\n");
 		spdk_bdev_unregister(lvol->bdev, (destroy ? _create_lvol_disk_destroy_cb :
 						  _create_lvol_disk_unload_cb), lvol);
 	}
-	free(alias);
 
 	return rc;
 }
