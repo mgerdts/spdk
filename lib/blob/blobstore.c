@@ -238,6 +238,9 @@ spdk_blob_opts_init(struct spdk_blob_opts *opts, size_t opts_size)
 	}
 
 	SET_FIELD(use_extent_table, true);
+	if (FIELD_OK(external_snapshot_uuid)) {
+		spdk_uuid_clear(&opts->external_snapshot_uuid);
+	}
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -1360,10 +1363,10 @@ static void blob_load_seed_done(void *ctx, int rc)
 	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
 
 	SPDK_DEBUGLOG(blob, "MG blob %zu using seed bdev %s\n", seed_load_ctx->ctx->blob->id,
-		      seed_load_ctx->seed_name);
+		      seed_load_ctx->seed_uuid);
 	blob_load_final(seed_load_ctx->ctx, rc);
 	blob->parent_id = SPDK_BLOBID_SEED;
-	free(seed_load_ctx->seed_name);
+	free(seed_load_ctx->seed_uuid);
 	free(seed_load_ctx);
 }
 
@@ -1393,8 +1396,7 @@ blob_load_backing_dev(void *cb_arg)
 			blob->back_bs_dev = bs_create_zeroes_dev(blob);
 		}
 
-		// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
-		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, false);
+		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, true);
 		if (rc == 0) {
 			SPDK_NOTICELOG("Creating seed bs\n");
 			struct blob_load_seed_ctx *seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
@@ -1403,8 +1405,8 @@ blob_load_backing_dev(void *cb_arg)
 				return;
 			}
 
-			seed_ctx->seed_name = strndup(value, len);
-			if (!seed_ctx->seed_name) {
+			seed_ctx->seed_uuid = strndup(value, len);
+			if (!seed_ctx->seed_uuid) {
 				free(seed_ctx);
 				blob_load_final(ctx, -ENOMEM);
 				return;
@@ -1412,7 +1414,7 @@ blob_load_backing_dev(void *cb_arg)
 			seed_ctx->ctx = ctx;
 
 			/* Use an existing bdev for unallocated blocks */
-			bs_create_seed_dev(blob, seed_ctx->seed_name, blob_load_seed_done, seed_ctx);
+			bs_create_seed_dev(blob, seed_ctx->seed_uuid, blob_load_seed_done, seed_ctx);
 			return;
 		}
 
@@ -5666,11 +5668,15 @@ blob_opts_copy(const struct spdk_blob_opts *src, struct spdk_blob_opts *dst)
 
 	SET_FIELD(use_extent_table);
 
+	if (FIELD_OK(external_snapshot_uuid)) {
+		spdk_uuid_copy(&dst->external_snapshot_uuid, &src->external_snapshot_uuid);
+	}
+
 	dst->opts_size = src->opts_size;
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_opts) == 64, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_opts) == 80, "Incorrect size");
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -5751,6 +5757,21 @@ bs_create_blob(struct spdk_blob_store *bs,
 	}
 
 	blob_set_clear_method(blob, opts_local.clear_method);
+
+	if (!spdk_uuid_is_null(&opts_local.external_snapshot_uuid)) {
+		char uuid_str[SPDK_UUID_STRING_LEN];
+
+		if ((rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str),
+					      &opts_local.external_snapshot_uuid) != 0) ||
+		    (rc = blob_set_xattr(blob, BLOB_SEED_BDEV, uuid_str,
+					 sizeof (uuid_str), true)) != 0) {
+			blob_free(blob);
+			spdk_bit_array_clear(bs->used_blobids, page_idx);
+			bs_release_md_page(bs, page_idx);
+			cb_fn(cb_arg, 0, rc);
+			return;
+		}
+	}
 
 	rc = blob_resize(blob, opts_local.num_clusters);
 	if (rc < 0) {
@@ -6339,13 +6360,6 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 	struct spdk_blob *_blob = ctx->original.blob;
 	struct spdk_blob *_parent;
 	int rc __attribute__((unused));
-
-	// XXX-mg something for seed here?
-	// XXX-mg BLOB_SEED_BDEV is not in internal_xattrs but should be
-	const void *value;
-	size_t len;
-	rc = blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &value, &len, false);
-	assert(rc != 0);
 
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
@@ -7861,7 +7875,7 @@ spdk_blob_remove_xattr(struct spdk_blob *blob, const char *name)
 	return blob_remove_xattr(blob, name, false);
 }
 
-static int
+int
 blob_get_xattr_value(struct spdk_blob *blob, const char *name,
 		     const void **value, size_t *value_len, bool internal)
 {

@@ -198,8 +198,9 @@ seed_unmap(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	assert(false);
 }
 
-static void lvol_seed_bdev_event_cb_t(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
-				      void *event_ctx)
+static void
+seed_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+		   void *event_ctx)
 {
 	struct seed_ctx *ctx = event_ctx;
 
@@ -221,7 +222,6 @@ struct seed_bs_load_cpl_ctx {
 	struct seed_ctx *ctx;
 	int rc;
 };
-
 
 static void load_seed_on_thread(void *arg1)
 {
@@ -266,7 +266,7 @@ static void load_seed_on_thread_done(void *arg1)
 }
 
 void
-bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed_cpl cb_fn,
+bs_create_seed_dev(struct spdk_blob *front, const char *seeduuid, blob_load_seed_cpl cb_fn,
 		   void *cb_arg)
 {
 	struct spdk_bdev *bdev;
@@ -275,31 +275,16 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed
 	struct seed_bs_load_cpl_ctx *seed_load_cpl;
 	int ret;
 
-	bdev = spdk_bdev_get_by_name(seedname);
+	bdev = spdk_bdev_get_by_name(seeduuid);
 	if (bdev == NULL) {
 		/*
 		 * Someone removed the seed device or there is an initialization
 		 * order problem.
-		 * XXX-mg we now have an unremovable child because the lvol will
+		 * XXX-mg we now have an unremovable child because the blob will
 		 * not open.
 		 */
-		const char *name;
-		size_t len;
-		int rc;
-
-		// XXX-mg hack alert!
-		// Blobstore does not like to access xattrs before the blob is
-		// fully loaded.  We know that the blob is loaded far enough to
-		// get xattrs, so fake the state for a bit.  It would be better
-		// to have a bs-private blob_get_xattr_value that works across
-		// blobstore source files.
-		assert(front->state == SPDK_BLOB_STATE_LOADING);
-		front->state = SPDK_BLOB_STATE_CLEAN;
-		rc = spdk_blob_get_xattr_value(front, "name",
-					       (const void **)&name, &len);
-		front->state = SPDK_BLOB_STATE_LOADING;
-		SPDK_ERRLOG("seed device %s is not found for lvol %s\n",
-			    seedname, rc == 0 ? name : "<unknown>");
+		SPDK_ERRLOG("seed device %s is not found for blob %" PRIu64 "\n",
+			    seeduuid, front->id);
 		cb_fn(cb_arg, -ENOENT);
 		return;
 	}
@@ -328,7 +313,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed
 	}
 
 	ctx->bdev = bdev;
-	ret = spdk_bdev_open_ext(seedname, false, lvol_seed_bdev_event_cb_t, ctx, &ctx->bdev_desc);
+	ret = spdk_bdev_open_ext(seeduuid, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
 	if (ret != 0) {
 		free(ctx->io_channels);
 		free(ctx);

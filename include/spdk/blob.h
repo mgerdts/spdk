@@ -61,6 +61,7 @@
 #define SPDK_BLOB_H
 
 #include "spdk/stdinc.h"
+#include "spdk/uuid.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -462,6 +463,8 @@ struct spdk_blob_opts {
 
 	/** Enable separate extent pages in metadata */
 	bool use_extent_table;
+
+	struct spdk_uuid external_snapshot_uuid;
 
 	/**
 	 * The size of spdk_blob_opts according to the caller of this library is used for ABI

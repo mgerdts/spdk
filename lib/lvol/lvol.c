@@ -1109,7 +1109,7 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 	struct spdk_lvol *lvol;
 	struct spdk_blob_opts opts;
 	uint64_t num_clusters;
-	char *xattr_names[] = {LVOL_NAME, "uuid", BLOB_SEED_BDEV};
+	char *xattr_names[] = {LVOL_NAME, "uuid"};
 	struct spdk_bdev *bdev = spdk_bdev_get_by_name(back_name);;
 	uint64_t sz;
 	int rc;
@@ -1162,6 +1162,7 @@ spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
 	req->lvol = lvol;
 
 	spdk_blob_opts_init(&opts, sizeof(opts));
+	spdk_uuid_copy(&opts.external_snapshot_uuid, spdk_bdev_get_uuid(bdev));
 	opts.thin_provision = true;
 	opts.num_clusters = num_clusters;
 	opts.clear_method = lvol->clear_method;
