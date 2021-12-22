@@ -94,6 +94,13 @@ spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias)
 }
 
 int
+spdk_bdev_alias_addf(struct spdk_bdev *bdev, const char *fmt, ...)
+{
+	SPDK_CU_ASSERT_FATAL(0);
+	return -1;
+}
+
+int
 spdk_bdev_alias_del(struct spdk_bdev *bdev, const char *alias)
 {
 	struct spdk_bdev_alias *tmp;

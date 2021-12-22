@@ -3360,6 +3360,43 @@ spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias)
 }
 
 int
+spdk_bdev_alias_addf(struct spdk_bdev *bdev, const char *fmt, ...)
+{
+	va_list ap;
+	char *alias;
+	int len, len2;
+	int ret;
+
+	va_start(ap, fmt);
+	len = vsnprintf(NULL, 0, fmt, ap);
+	va_end(ap);
+	if (len < 0) {
+		SPDK_ERRLOG("Unable to determine alias length\n");
+		return -EINVAL;
+	}
+
+	len++;
+	alias = calloc(1, len);
+	if (alias == NULL) {
+		SPDK_ERRLOG("Unable to allocate alias, len = %d\n", len);
+		return -ENOMEM;
+	}
+
+	va_start(ap, fmt);
+	len2 = vsnprintf(alias, len, fmt, ap);
+	va_end(ap);
+	if (len2 + 1 != len) {
+		SPDK_ERRLOG("Error formatting bdev alias\n");
+		free(alias);
+		return -EINVAL;
+	}
+
+	ret = spdk_bdev_alias_add(bdev, alias);
+	free(alias);
+	return ret;
+}
+
+int
 spdk_bdev_alias_del(struct spdk_bdev *bdev, const char *alias)
 {
 	struct spdk_bdev_alias *tmp;

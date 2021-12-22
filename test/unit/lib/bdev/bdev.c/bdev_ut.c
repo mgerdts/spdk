@@ -805,6 +805,7 @@ alias_add_del_test(void)
 {
 	struct spdk_bdev *bdev[3];
 	int rc;
+	char alias[64];
 
 	/* Creating and registering bdevs */
 	bdev[0] = allocate_bdev("bdev0");
@@ -875,6 +876,59 @@ alias_add_del_test(void)
 	CU_ASSERT(rc == 0);
 	spdk_bdev_alias_del_all(bdev[2]);
 	CU_ASSERT(TAILQ_EMPTY(&bdev[2]->aliases));
+
+	/* Clear all aliases from the other bdevs to set up for varargs tests */
+	spdk_bdev_alias_del_all(bdev[0]);
+	CU_ASSERT(TAILQ_EMPTY(&bdev[0]->aliases));
+	spdk_bdev_alias_del_all(bdev[1]);
+	CU_ASSERT(TAILQ_EMPTY(&bdev[1]->aliases));
+
+	/* Formatted string should match bdev name and not be allowed */
+	rc = spdk_bdev_alias_addf(bdev[0], "%s", bdev[0]->name);
+	CU_ASSERT(rc == -EEXIST);
+
+	/* Variations of the bdev name should be OK */
+	rc = spdk_bdev_alias_addf(bdev[0], "%s-%s", bdev[0]->name, "test");
+	CU_ASSERT(rc == 0);
+	rc = spdk_bdev_alias_addf(bdev[0], "%s-%s", "test", bdev[0]->name);
+	CU_ASSERT(rc == 0);
+
+	/* Duplicates not allowed on same bdev */
+	rc = spdk_bdev_alias_addf(bdev[0], "%s-%s", "test", bdev[0]->name);
+	CU_ASSERT(rc == -EEXIST);
+
+	/* Duplicates not allowed on different bdev */
+	rc = spdk_bdev_alias_addf(bdev[1], "%s-%s", "test", bdev[0]->name);
+	CU_ASSERT(rc == -EEXIST);
+
+	/* Each bdev's UUID as an alias should be fine */
+	for (size_t i = 0; i < SPDK_COUNTOF(bdev); i++) {
+		char uuid[SPDK_UUID_STRING_LEN];
+
+		spdk_uuid_fmt_lower(uuid, sizeof (uuid), &bdev[i]->uuid);
+		rc = spdk_bdev_alias_addf(bdev[i], "%s", uuid);
+		CU_ASSERT(rc == 0);
+	}
+
+	/* Since they were added successfully, they should be removable */
+	snprintf(alias, sizeof (alias), "%s-%s", bdev[0]->name, "test");
+	rc = spdk_bdev_alias_del(bdev[0], alias);
+	CU_ASSERT(rc == 0);
+	snprintf(alias, sizeof (alias), "%s-%s", "test", bdev[0]->name);
+	rc = spdk_bdev_alias_del(bdev[0], alias);
+	CU_ASSERT(rc == 0);
+	for (size_t i = 0; i < SPDK_COUNTOF(bdev); i++) {
+		char uuid[SPDK_UUID_STRING_LEN];
+
+		spdk_uuid_fmt_lower(uuid, sizeof (uuid), &bdev[i]->uuid);
+		rc = spdk_bdev_alias_del(bdev[i], uuid);
+		CU_ASSERT(rc == 0);
+	}
+
+	/* Everything that was added above should be gone now */
+	for (size_t i = 0; i < SPDK_COUNTOF(bdev); i++) {
+		CU_ASSERT(TAILQ_EMPTY(&bdev[i]->aliases));
+	}
 
 	/* Unregister and free bdevs */
 	spdk_bdev_unregister(bdev[0], NULL, NULL);

@@ -864,6 +864,21 @@ void spdk_bdev_module_fini_start_done(void);
 int spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias);
 
 /**
+ * Add alias to block device names list using a variable argument list.
+ * Aliases can be add only to registered bdev.
+ *
+ * \param bdev Block device to query.
+ * \param fmt Format compatible with printf(3).
+ * \param ... Variable argument list, as with printf(3).
+ *
+ * \return 0 on success
+ * \return -EEXIST if alias already exists as name or alias on any bdev
+ * \return -ENOMEM if memory cannot be allocated to store alias
+ * \return -EINVAL if passed alias is empty
+ */
+int spdk_bdev_alias_addf(struct spdk_bdev *bdev, const char *fmt, ...);
+
+/**
  * Removes name from block device names list.
  *
  * \param bdev Block device to query.

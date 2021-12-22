@@ -110,6 +110,7 @@
 	spdk_bdev_module_claim_bdev;
 	spdk_bdev_module_release_bdev;
 	spdk_bdev_alias_add;
+	spdk_bdev_alias_addf;
 	spdk_bdev_alias_del;
 	spdk_bdev_alias_del_all;
 	spdk_bdev_get_aliases;
