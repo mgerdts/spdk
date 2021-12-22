@@ -4370,10 +4370,8 @@ static void
 bs_recover(struct spdk_bs_load_ctx *ctx)
 {
 	int		rc;
-	struct spdk_bs_dev *bs_dev = ctx->bs->dev;
 
-	SPDK_NOTICELOG("Performing recovery on blobstore on bdev %s\n",
-		       spdk_bdev_get_name(bs_dev->get_base_bdev(bs_dev)));
+	SPDK_NOTICELOG("Performing recovery on blobstore\n");
 	rc = spdk_bit_array_resize(&ctx->bs->used_md_pages, ctx->super->md_len);
 	if (rc < 0) {
 		bs_load_ctx_fail(ctx, -ENOMEM);
