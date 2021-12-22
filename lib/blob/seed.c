@@ -283,7 +283,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seeduuid, blob_load_seed
 		 * XXX-mg we now have an unremovable child because the blob will
 		 * not open.
 		 */
-		SPDK_ERRLOG("seed device %s is not found for blob %" PRIu64 "\n",
+		SPDK_ERRLOG("seed device %s is not found for blob 0x%" PRIx64 "\n",
 			    seeduuid, front->id);
 		cb_fn(cb_arg, -ENOENT);
 		return;
