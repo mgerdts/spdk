@@ -72,9 +72,9 @@ BuildRequires: numactl-devel
 BuildRequires: libiscsi-devel
 
 # SPDK build dependencies
-BuildRequires:	make gcc gcc-c++
+BuildRequires:	make gcc gcc-c++ meson python3-pyelftools
 BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel 
-BuildRequires:	libiscsi-devel
+BuildRequires:	libiscsi-devel ncurses-devel
 
 %if 0%{rhel} == 8
 BuildRequires:  git-core
