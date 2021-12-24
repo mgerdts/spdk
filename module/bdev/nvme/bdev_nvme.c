@@ -737,6 +737,10 @@ nvme_io_path_is_failed(struct nvme_io_path *io_path)
 		return true;
 	}
 
+	if (nvme_ctrlr->reconnect_timedout) {
+		return true;
+	}
+
 	/* In a full reset sequence, ctrlr is set to unfailed but it is after
 	 * destroying all qpairs. Ctrlr may be still failed even after starting
 	 * a full reset sequence. Hence we check the resetting flag first.
@@ -1313,6 +1317,23 @@ bdev_nvme_check_ctrlr_loss_timeout(struct nvme_ctrlr *nvme_ctrlr)
 	}
 }
 
+static bool
+bdev_nvme_check_ctrlr_fail_timeout(struct nvme_ctrlr *nvme_ctrlr)
+{
+	uint32_t elapsed;
+
+	if (nvme_ctrlr->ctrlr_fail_timeout_sec == 0) {
+		return false;
+	}
+
+	elapsed = (spdk_get_ticks() - nvme_ctrlr->reconnect_start_tsc) / spdk_get_ticks_hz();
+	if (elapsed >= nvme_ctrlr->ctrlr_fail_timeout_sec) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
 static int bdev_nvme_reconnect_ctrlr(void *ctx);
 
 enum bdev_nvme_op_after_reset {
@@ -1332,10 +1353,14 @@ bdev_nvme_check_op_after_reset(struct nvme_ctrlr *nvme_ctrlr, bool success)
 		return COMPLETE_PENDING_DESTRUCT;
 	} else if (success || nvme_ctrlr->ctrlr_loss_timeout_sec == 0) {
 		nvme_ctrlr->reconnect_start_tsc = 0;
+		nvme_ctrlr->reconnect_timedout = false;
 		return NONE;
 	} else if (bdev_nvme_check_ctrlr_loss_timeout(nvme_ctrlr)) {
 		return DESTRUCT;
 	} else {
+		if (bdev_nvme_check_ctrlr_fail_timeout(nvme_ctrlr)) {
+			nvme_ctrlr->reconnect_timedout = true;
+		}
 		bdev_nvme_failover_trid(nvme_ctrlr, false);
 		return RECONNECT;
 	}
@@ -3363,6 +3388,7 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 		nvme_ctrlr->prchk_flags = ctx->prchk_flags;
 		nvme_ctrlr->ctrlr_loss_timeout_sec = ctx->ctrlr_loss_timeout_sec;
 		nvme_ctrlr->reconnect_delay_sec = ctx->reconnect_delay_sec;
+		nvme_ctrlr->ctrlr_fail_timeout_sec = ctx->ctrlr_fail_timeout_sec;
 	}
 
 	nvme_ctrlr->adminq_timer_poller = SPDK_POLLER_REGISTER(bdev_nvme_poll_adminq, nvme_ctrlr,
@@ -3834,7 +3860,8 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		 struct spdk_nvme_ctrlr_opts *opts,
 		 bool multipath,
 		 int32_t ctrlr_loss_timeout_sec,
-		 uint32_t reconnect_delay_sec)
+		 uint32_t reconnect_delay_sec,
+		 uint32_t ctrlr_fail_timeout_sec)
 {
 	struct nvme_probe_skip_entry	*entry, *tmp;
 	struct nvme_async_probe_ctx	*ctx;
@@ -3861,6 +3888,7 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 	ctx->trid = *trid;
 	ctx->ctrlr_loss_timeout_sec = ctrlr_loss_timeout_sec;
 	ctx->reconnect_delay_sec = reconnect_delay_sec;
+	ctx->ctrlr_fail_timeout_sec = ctrlr_fail_timeout_sec;
 
 	if (trid->trtype == SPDK_NVME_TRANSPORT_PCIE) {
 		TAILQ_FOREACH_SAFE(entry, &g_skipped_nvme_ctrlrs, tailq, tmp) {
@@ -5096,6 +5124,7 @@ nvme_ctrlr_config_json(struct spdk_json_write_ctx *w,
 				   (nvme_ctrlr->prchk_flags & SPDK_NVME_IO_FLAGS_PRCHK_GUARD) != 0);
 	spdk_json_write_named_int32(w, "ctrlr_loss_timeout_sec", nvme_ctrlr->ctrlr_loss_timeout_sec);
 	spdk_json_write_named_uint32(w, "reconnect_delay_sec", nvme_ctrlr->reconnect_delay_sec);
+	spdk_json_write_named_uint32(w, "ctrlr_fail_timeout_sec", nvme_ctrlr->ctrlr_fail_timeout_sec);
 
 	spdk_json_write_object_end(w);
 
