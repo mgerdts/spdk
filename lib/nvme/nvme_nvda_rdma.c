@@ -33,7 +33,7 @@
  */
 
 /*
- * NVMe over RDMA transport
+ * Nvidia NVMe over RDMA transport
  */
 
 #include "spdk/stdinc.h"
@@ -130,7 +130,7 @@ struct spdk_nvmf_cmd {
 	struct spdk_nvme_sgl_descriptor sgl[NVME_RDMA_MAX_SGL_DESCRIPTORS];
 };
 
-struct spdk_nvme_rdma_hooks g_nvme_hooks = {};
+static struct spdk_nvme_rdma_hooks g_nvme_hooks = {};
 
 /* STAILQ wrapper for cm events. */
 struct nvme_rdma_cm_event_entry {
@@ -306,7 +306,7 @@ static const char *rdma_cm_event_str[] = {
 	"RDMA_CM_EVENT_TIMEWAIT_EXIT"
 };
 
-struct nvme_rdma_qpair *nvme_rdma_poll_group_get_qpair_by_id(struct nvme_rdma_poll_group *group,
+static struct nvme_rdma_qpair *nvme_rdma_poll_group_get_qpair_by_id(struct nvme_rdma_poll_group *group,
 		uint32_t qp_num);
 
 static TAILQ_HEAD(, nvme_rdma_memory_domain) g_memory_domains = TAILQ_HEAD_INITIALIZER(
@@ -412,7 +412,7 @@ static int nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 static inline struct nvme_rdma_qpair *
 nvme_rdma_qpair(struct spdk_nvme_qpair *qpair)
 {
-	assert(qpair->trtype == SPDK_NVME_TRANSPORT_RDMA);
+	assert(qpair->trtype == SPDK_NVME_TRANSPORT_CUSTOM);
 	return SPDK_CONTAINEROF(qpair, struct nvme_rdma_qpair, qpair);
 }
 
@@ -425,7 +425,7 @@ nvme_rdma_poll_group(struct spdk_nvme_transport_poll_group *group)
 static inline struct nvme_rdma_ctrlr *
 nvme_rdma_ctrlr(struct spdk_nvme_ctrlr *ctrlr)
 {
-	assert(ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_RDMA);
+	assert(ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_CUSTOM);
 	return SPDK_CONTAINEROF(ctrlr, struct nvme_rdma_ctrlr, ctrlr);
 }
 
@@ -2551,7 +2551,7 @@ nvme_rdma_poll_group_create(void)
 	return &group->group;
 }
 
-struct nvme_rdma_qpair *
+static struct nvme_rdma_qpair *
 nvme_rdma_poll_group_get_qpair_by_id(struct nvme_rdma_poll_group *group, uint32_t qp_num)
 {
 	struct spdk_nvme_qpair *qpair;
@@ -2839,7 +2839,7 @@ nvme_rdma_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
 		SPDK_ERRLOG("Can't allocate memory for RDMA stats\n");
 		return -ENOMEM;
 	}
-	stats->trtype = SPDK_NVME_TRANSPORT_RDMA;
+	stats->trtype = SPDK_NVME_TRANSPORT_CUSTOM;
 	stats->rdma.num_devices = group->num_pollers;
 	stats->rdma.device_stats = calloc(stats->rdma.num_devices, sizeof(*stats->rdma.device_stats));
 	if (!stats->rdma.device_stats) {
@@ -2891,14 +2891,17 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 }
 
 void
-spdk_nvme_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
+spdk_nvme_nvda_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks);
+
+void
+spdk_nvme_nvda_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
 {
 	g_nvme_hooks = *hooks;
 }
 
-const struct spdk_nvme_transport_ops rdma_ops = {
-	.name = "RDMA",
-	.type = SPDK_NVME_TRANSPORT_RDMA,
+static const struct spdk_nvme_transport_ops rdma_ops = {
+	.name = "NVDA_RDMA",
+	.type = SPDK_NVME_TRANSPORT_CUSTOM,
 	.ctrlr_construct = nvme_rdma_ctrlr_construct,
 	.ctrlr_scan = nvme_fabric_ctrlr_scan,
 	.ctrlr_destruct = nvme_rdma_ctrlr_destruct,

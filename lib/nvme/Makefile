@@ -44,6 +44,7 @@ C_SRCS = nvme_ctrlr_cmd.c nvme_ctrlr.c nvme_fabric.c nvme_ns_cmd.c \
 	nvme_opal.c nvme_io_msg.c nvme_poll_group.c nvme_zns.c
 C_SRCS-$(CONFIG_VFIO_USER) += nvme_vfio_user.c
 C_SRCS-$(CONFIG_RDMA) += nvme_rdma.c
+C_SRCS-$(CONFIG_RDMA) += nvme_nvda_rdma.c
 C_SRCS-$(CONFIG_NVME_CUSE) += nvme_cuse.c
 
 LIBNAME = nvme
