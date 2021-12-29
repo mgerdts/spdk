@@ -8014,6 +8014,13 @@ spdk_blob_is_thin_provisioned(struct spdk_blob *blob)
 	return !!(blob->invalid_flags & SPDK_BLOB_THIN_PROV);
 }
 
+bool
+spdk_blob_is_external_clone(struct spdk_blob *blob)
+{
+	assert(blob != NULL);
+	return !!(blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT);
+}
+
 static void
 blob_update_clear_method(struct spdk_blob *blob)
 {
@@ -8076,6 +8083,17 @@ spdk_blob_get_clones(struct spdk_blob_store *bs, spdk_blob_id blobid, spdk_blob_
 		ids[n++] = clone_entry->id;
 	}
 
+	return 0;
+}
+
+int
+spdk_blob_get_external_parent(struct spdk_blob *blob, struct spdk_bdev **parent)
+{
+	if (!spdk_blob_is_external_clone(blob)) {
+		return -EINVAL;
+	}
+	assert(blob->back_bs_dev->seed_ctx != NULL);
+	*parent = blob->back_bs_dev->seed_ctx->bdev;
 	return 0;
 }
 

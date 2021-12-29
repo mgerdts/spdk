@@ -42,13 +42,6 @@
 
 #include "blobstore.h"
 
-struct seed_ctx {
-	struct spdk_bdev *bdev;
-	struct spdk_bdev_desc *bdev_desc;
-	struct spdk_io_channel **io_channels;
-	uint64_t io_channels_count;
-};
-
 static void seed_unload_on_thread(void *_ctx)
 {
 	struct spdk_bs_dev *dev = _ctx;

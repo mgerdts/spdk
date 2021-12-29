@@ -450,6 +450,13 @@ struct blob_load_seed_ctx {
 	char *seed_uuid;
 };
 
+struct seed_ctx {
+	struct spdk_bdev *bdev;
+	struct spdk_bdev_desc *bdev_desc;
+	struct spdk_io_channel **io_channels;
+	uint64_t io_channels_count;
+};
+
 void bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed_cpl cb_fn,
 			void *cb_arg);
 

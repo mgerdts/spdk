@@ -572,6 +572,20 @@ int spdk_blob_get_clones(struct spdk_blob_store *bs, spdk_blob_id blobid, spdk_b
 spdk_blob_id spdk_blob_get_parent_snapshot(struct spdk_blob_store *bs, spdk_blob_id blobid);
 
 /**
+ * Get the external bdev that acts as a clone's parent snapshot.
+ *
+ * If a blob is not a clone of an external snapshot, -EINVAL is returned and
+ * *parent is not changed. If a blob is an external clone but the parent bdev
+ * is not present, 0 is returned and *parent is updated to NULL.
+ *
+ * \param blob Blob.
+ * \param parent Updated on successfull return with the external bdev that has been cloned.
+ *
+ * \return -EINVAL if blob is not a clone of an external bdev.
+ */
+int spdk_blob_get_external_parent(struct spdk_blob *blob, struct spdk_bdev **parent);
+
+/**
  * Check if blob is read only.
  *
  * \param blob Blob.
@@ -606,6 +620,15 @@ bool spdk_blob_is_clone(struct spdk_blob *blob);
  * \return true if blob is thin-provisioned.
  */
 bool spdk_blob_is_thin_provisioned(struct spdk_blob *blob);
+
+/**
+ * Check if blob is a clone of an external bdev.
+ *
+ * \param blob Blob.
+ *
+ * \return true if blob is a clone of an external bdev.
+ */
+bool spdk_blob_is_external_clone(struct spdk_blob *blob);
 
 /**
  * Delete an existing blob from the given blobstore.
