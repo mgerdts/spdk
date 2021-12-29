@@ -78,6 +78,7 @@ DEFINE_STUB(spdk_bdev_get_block_size, uint32_t, (const struct spdk_bdev *bdev), 
 DEFINE_STUB(spdk_bdev_get_num_blocks, uint64_t, (const struct spdk_bdev *bdev), 0);
 DEFINE_STUB(spdk_bdev_get_io_channel, struct spdk_io_channel *,
 	    (struct spdk_bdev_desc *desc), NULL);
+DEFINE_STUB(spdk_bdev_get_by_uuid, struct spdk_bdev *, (const char *uuid), NULL);
 
 static void
 fs_op_complete(void *ctx, int fserrno)

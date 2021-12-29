@@ -10,6 +10,7 @@
 	spdk_bdev_finish;
 	spdk_bdev_subsystem_config_json;
 	spdk_bdev_get_by_name;
+	spdk_bdev_get_by_uuid;
 	spdk_bdev_get_module_name;
 	spdk_bdev_first;
 	spdk_bdev_next;

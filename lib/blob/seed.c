@@ -259,8 +259,8 @@ static void load_seed_on_thread_done(void *arg1)
 }
 
 void
-bs_create_seed_dev(struct spdk_blob *front, const char *seeduuid, blob_load_seed_cpl cb_fn,
-		   void *cb_arg)
+bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
+		   blob_load_seed_cpl cb_fn, void *cb_arg)
 {
 	struct spdk_bdev *bdev;
 	struct spdk_bs_dev *back;
@@ -268,7 +268,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seeduuid, blob_load_seed
 	struct seed_bs_load_cpl_ctx *seed_load_cpl;
 	int ret;
 
-	bdev = spdk_bdev_get_by_name(seeduuid);
+	bdev = spdk_bdev_get_by_uuid(seed_uuid);
 	if (bdev == NULL) {
 		/*
 		 * Someone removed the seed device or there is an initialization
@@ -277,7 +277,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seeduuid, blob_load_seed
 		 * not open.
 		 */
 		SPDK_ERRLOG("seed device %s is not found for blob 0x%" PRIx64 "\n",
-			    seeduuid, front->id);
+			    seed_uuid, front->id);
 		cb_fn(cb_arg, -ENOENT);
 		return;
 	}
@@ -306,7 +306,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seeduuid, blob_load_seed
 	}
 
 	ctx->bdev = bdev;
-	ret = spdk_bdev_open_ext(seeduuid, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
+	ret = spdk_bdev_open_ext(bdev->name, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
 	if (ret != 0) {
 		free(ctx->io_channels);
 		free(ctx);

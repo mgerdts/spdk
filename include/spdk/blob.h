@@ -572,18 +572,15 @@ int spdk_blob_get_clones(struct spdk_blob_store *bs, spdk_blob_id blobid, spdk_b
 spdk_blob_id spdk_blob_get_parent_snapshot(struct spdk_blob_store *bs, spdk_blob_id blobid);
 
 /**
- * Get the external bdev that acts as a clone's parent snapshot.
+ * Get the UUID string of the external bdev that acts as a clone's parent snapshot.
  *
- * If a blob is not a clone of an external snapshot, -EINVAL is returned and
- * *parent is not changed. If a blob is an external clone but the parent bdev
- * is not present, 0 is returned and *parent is updated to NULL.
+ * If a blob is not a clone of an external snapshot, NULL is returned.
  *
  * \param blob Blob.
- * \param parent Updated on successfull return with the external bdev that has been cloned.
  *
- * \return -EINVAL if blob is not a clone of an external bdev.
+ * \return The UUID of the external parent bdev.
  */
-int spdk_blob_get_external_parent(struct spdk_blob *blob, struct spdk_bdev **parent);
+const char *spdk_blob_get_external_parent(struct spdk_blob *blob);
 
 /**
  * Check if blob is read only.

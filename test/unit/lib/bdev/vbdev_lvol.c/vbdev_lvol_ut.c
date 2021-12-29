@@ -64,6 +64,8 @@ bool g_lvs_with_name_already_exists = false;
 DEFINE_STUB_V(spdk_bdev_module_fini_start_done, (void));
 DEFINE_STUB(spdk_bdev_get_memory_domains, int, (struct spdk_bdev *bdev,
 		struct spdk_memory_domain **domains, int array_size), 0);
+DEFINE_STUB(spdk_blob_is_external_clone, bool, (struct spdk_blob *blob), false);
+DEFINE_STUB(spdk_blob_get_external_parent, const char *, (struct spdk_blob *blob), NULL);
 
 const struct spdk_bdev_aliases_list *
 spdk_bdev_get_aliases(const struct spdk_bdev *bdev)

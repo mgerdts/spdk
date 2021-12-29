@@ -447,18 +447,19 @@ typedef void(*blob_load_seed_cpl)(void *ctx, int rc);
 
 struct blob_load_seed_ctx {
 	struct spdk_blob_load_ctx	*ctx;
-	char *seed_uuid;
+	struct spdk_uuid		uuid;
 };
 
 struct seed_ctx {
-	struct spdk_bdev *bdev;
-	struct spdk_bdev_desc *bdev_desc;
-	struct spdk_io_channel **io_channels;
-	uint64_t io_channels_count;
+	struct spdk_uuid		uuid;
+	struct spdk_bdev		*bdev;
+	struct spdk_bdev_desc		*bdev_desc;
+	struct spdk_io_channel		**io_channels;
+	uint64_t			io_channels_count;
 };
 
-void bs_create_seed_dev(struct spdk_blob *front, const char *seedname, blob_load_seed_cpl cb_fn,
-			void *cb_arg);
+void bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
+			blob_load_seed_cpl cb_fn, void *cb_arg);
 
 /* Unit Conversions
  *

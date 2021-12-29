@@ -1362,11 +1362,8 @@ static void blob_load_seed_done(void *ctx, int rc)
 	struct blob_load_seed_ctx *seed_load_ctx = ctx;
 	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
 
-	SPDK_DEBUGLOG(blob, "MG blob %zu using seed bdev %s\n", seed_load_ctx->ctx->blob->id,
-		      seed_load_ctx->seed_uuid);
 	blob_load_final(seed_load_ctx->ctx, rc);
 	blob->parent_id = SPDK_BLOBID_SEED;
-	free(seed_load_ctx->seed_uuid);
 	free(seed_load_ctx);
 }
 
@@ -1393,25 +1390,28 @@ blob_load_backing_dev(void *cb_arg)
 			return;
 		}
 
-		rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &len, true);
-		if (rc == 0) {
+		if (spdk_blob_is_external_clone(blob)) {
+			struct blob_load_seed_ctx	*seed_ctx;
+			const char			*uuid;
+
+			uuid = spdk_blob_get_external_parent(blob);
+			if (uuid == NULL) {
+				SPDK_NOTICELOG("blob 0x%" PRIx64 " is an external clone without a parent\n",
+					       blob->id);
+				blob_load_final(ctx, -EINVAL);
+			}
+
 			SPDK_NOTICELOG("Creating seed bs\n");
-			struct blob_load_seed_ctx *seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
+			seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
 			if (!seed_ctx) {
 				blob_load_final(ctx, -ENOMEM);
 				return;
 			}
 
-			seed_ctx->seed_uuid = strndup(value, len);
-			if (!seed_ctx->seed_uuid) {
-				free(seed_ctx);
-				blob_load_final(ctx, -ENOMEM);
-				return;
-			}
 			seed_ctx->ctx = ctx;
 
 			/* Use an existing bdev for unallocated blocks */
-			bs_create_seed_dev(blob, seed_ctx->seed_uuid, blob_load_seed_done, seed_ctx);
+			bs_create_seed_dev(blob, uuid, blob_load_seed_done, seed_ctx);
 			return;
 		}
 
@@ -8086,15 +8086,21 @@ spdk_blob_get_clones(struct spdk_blob_store *bs, spdk_blob_id blobid, spdk_blob_
 	return 0;
 }
 
-int
-spdk_blob_get_external_parent(struct spdk_blob *blob, struct spdk_bdev **parent)
+const char *
+spdk_blob_get_external_parent(struct spdk_blob *blob)
 {
+	const void	*value;
+	size_t		value_len;
+	int		rc;
+
 	if (!spdk_blob_is_external_clone(blob)) {
-		return -EINVAL;
+		return NULL;
 	}
-	assert(blob->back_bs_dev->seed_ctx != NULL);
-	*parent = blob->back_bs_dev->seed_ctx->bdev;
-	return 0;
+	rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &value_len, true);
+	if (rc != 0) {
+		return NULL;
+	}
+	return (const char *)value;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(blob)

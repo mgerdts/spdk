@@ -316,6 +316,15 @@ const char *spdk_bdev_get_module_name(const struct spdk_bdev *bdev);
 struct spdk_bdev *spdk_bdev_get_by_name(const char *bdev_name);
 
 /**
+ * Get block device by the block device uuid.
+ *
+ * \param bdev_uuid The UUID of the block device.
+ * \return Block device associated with the name or NULL if no block device with
+ * bdev_uuid is currently registered.
+ */
+struct spdk_bdev *spdk_bdev_get_by_uuid(const char *bdev_uuid);
+
+/**
  * Get the first registered block device.
  *
  * \return The first registered block device.

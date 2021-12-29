@@ -498,6 +498,26 @@ spdk_bdev_get_by_name(const char *bdev_name)
 	return bdev;
 }
 
+struct spdk_bdev *
+spdk_bdev_get_by_uuid(const char *bdev_uuid)
+{
+	struct spdk_bdev *bdev;
+	struct spdk_uuid uuid;
+
+	if (spdk_uuid_parse(&uuid, bdev_uuid) != 0) {
+		return NULL;
+	}
+
+	/* XXX-mg change to RB tree */
+	for (bdev = spdk_bdev_first(); bdev != NULL; bdev = spdk_bdev_next(bdev)) {
+		if (spdk_uuid_compare(&uuid, &bdev->uuid) == 0) {
+			return bdev;
+		}
+	}
+
+	return NULL;
+}
+
 struct spdk_bdev_wait_for_examine_ctx {
 	struct spdk_poller              *poller;
 	spdk_bdev_wait_for_examine_cb	cb_fn;

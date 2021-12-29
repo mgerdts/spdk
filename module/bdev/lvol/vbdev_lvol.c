@@ -747,6 +747,16 @@ vbdev_lvol_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 
 	}
 
+	spdk_json_write_named_bool(w, "external_clone", spdk_blob_is_external_clone(blob));
+
+	if (spdk_blob_is_external_clone(blob)) {
+		const char *uuid = spdk_blob_get_external_parent(blob);
+
+		if (uuid != NULL) {
+			spdk_json_write_named_string(w, "external_clone_uuid", uuid);
+		}
+	}
+
 end:
 	spdk_json_write_object_end(w);
 
