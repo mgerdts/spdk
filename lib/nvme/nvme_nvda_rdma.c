@@ -106,6 +106,16 @@
 #define NVME_RDMA_POLL_GROUP_CHECK_QPN(_rqpair, qpn)				\
 	((_rqpair)->rdma_qp && (_rqpair)->rdma_qp->qp->qp_num == (qpn))	\
 
+struct __attribute__((packed)) spdk_nvme_ctrlr_data_vendor {
+	union {
+		uint32_t raw;
+		struct {
+			uint32_t passthrough_sqe : 1;
+			uint32_t reserved : 31;
+		} bits;
+	} ovsncs;
+};
+
 enum nvme_rdma_wr_type {
 	RDMA_WR_TYPE_RECV,
 	RDMA_WR_TYPE_SEND,
@@ -3105,6 +3115,25 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 	return 1;
 }
 
+static int
+nvme_rdma_ctrlr_ready(struct spdk_nvme_ctrlr *ctrlr)
+{
+	struct spdk_nvme_ctrlr_data_vendor *cdata_vendor;
+
+	cdata_vendor = (struct spdk_nvme_ctrlr_data_vendor *)ctrlr->cdata.vs;
+	SPDK_NOTICELOG("NVDA_RDMA controller init: vendor cdata 0x%08x\n",
+		       cdata_vendor->ovsncs.raw);
+	if (!cdata_vendor->ovsncs.bits.passthrough_sqe) {
+		SPDK_ERRLOG("Target doesn't support SQE mode, failing connection\n");
+		return -1;
+	}
+
+	ctrlr->ioccsz_bytes = ctrlr->cdata.nvmf_specific.ioccsz * 16 -
+		sizeof(struct spdk_nvme_cmd);
+	ctrlr->icdoff = ctrlr->cdata.nvmf_specific.icdoff;
+	return 0;
+}
+
 void
 spdk_nvme_nvda_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks);
 
@@ -3157,6 +3186,8 @@ static const struct spdk_nvme_transport_ops rdma_ops = {
 	.poll_group_destroy = nvme_rdma_poll_group_destroy,
 	.poll_group_get_stats = nvme_rdma_poll_group_get_stats,
 	.poll_group_free_stats = nvme_rdma_poll_group_free_stats,
+
+	.ctrlr_ready = nvme_rdma_ctrlr_ready,
 };
 
 SPDK_NVME_TRANSPORT_REGISTER(rdma, &rdma_ops);
