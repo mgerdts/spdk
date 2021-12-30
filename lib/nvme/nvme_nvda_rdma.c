@@ -154,6 +154,9 @@ struct nvme_rdma_ctrlr {
 	STAILQ_HEAD(, nvme_rdma_cm_event_entry)	free_cm_events;
 
 	struct nvme_rdma_cm_event_entry		*cm_events;
+
+	struct spdk_memory_domain			*host_memory_domain;
+	struct spdk_memory_domain_host_ctx		host_memory_domain_ctx;
 };
 
 struct nvme_rdma_poller_stats {
@@ -360,7 +363,7 @@ nvme_rdma_poll_group(struct spdk_nvme_transport_poll_group *group)
 }
 
 static inline struct nvme_rdma_ctrlr *
-nvme_rdma_ctrlr(struct spdk_nvme_ctrlr *ctrlr)
+nvme_rdma_ctrlr(const struct spdk_nvme_ctrlr *ctrlr)
 {
 	assert(ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_CUSTOM);
 	return SPDK_CONTAINEROF(ctrlr, struct nvme_rdma_ctrlr, ctrlr);
@@ -2151,6 +2154,7 @@ static struct spdk_nvme_ctrlr *nvme_rdma_ctrlr_construct(const struct spdk_nvme_
 	struct nvme_rdma_ctrlr *rctrlr;
 	struct ibv_context **contexts;
 	struct ibv_device_attr dev_attr;
+	struct spdk_memory_domain_ctx memory_domain_ctx = {};
 	int i, flag, rc;
 
 	rctrlr = nvme_rdma_calloc(1, sizeof(struct nvme_rdma_ctrlr));
@@ -2173,6 +2177,24 @@ static struct spdk_nvme_ctrlr *nvme_rdma_ctrlr_construct(const struct spdk_nvme_
 			       NVME_RDMA_CTRLR_MAX_TRANSPORT_ACK_TIMEOUT);
 		rctrlr->ctrlr.opts.transport_ack_timeout = NVME_RDMA_CTRLR_MAX_TRANSPORT_ACK_TIMEOUT;
 	}
+
+	rctrlr->host_memory_domain_ctx.size = sizeof(rctrlr->host_memory_domain_ctx);
+	rctrlr->host_memory_domain_ctx.host_id = rctrlr->ctrlr.opts.host_memory_domain_id;
+	memory_domain_ctx.size = sizeof(memory_domain_ctx);
+	memory_domain_ctx.user_ctx = &rctrlr->host_memory_domain_ctx;
+	rc = spdk_memory_domain_create(&rctrlr->host_memory_domain,
+				       SPDK_DMA_DEVICE_TYPE_HOST,
+				       &memory_domain_ctx,
+				       SPDK_HOST_DMA_DEVICE);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create HOST memory domain: rc %d\n", rc);
+		nvme_rdma_free(rctrlr);
+		return NULL;
+	}
+
+	SPDK_NOTICELOG("Created HOST memory domain %p, host_id %"PRIu64"\n",
+		       rctrlr->host_memory_domain,
+		       rctrlr->host_memory_domain_ctx.host_id);
 
 	contexts = rdma_get_devices(NULL);
 	if (contexts == NULL) {
@@ -2271,6 +2293,12 @@ nvme_rdma_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
 		rdma_destroy_event_channel(rctrlr->cm_channel);
 		rctrlr->cm_channel = NULL;
 	}
+
+	SPDK_NOTICELOG("Destroyed HOST memory domain %p, host_id %"PRIu64"\n",
+		       rctrlr->host_memory_domain,
+		       rctrlr->host_memory_domain_ctx.host_id);
+	spdk_memory_domain_destroy(rctrlr->host_memory_domain);
+	rctrlr->host_memory_domain = NULL;
 
 	nvme_ctrlr_destruct_finish(ctrlr);
 
@@ -3050,12 +3078,20 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 				   struct spdk_memory_domain **domains, int array_size)
 {
 	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(ctrlr->adminq);
+	const struct nvme_rdma_ctrlr *rctrlr = nvme_rdma_ctrlr(ctrlr);
+	int count = 0;
 
-	if (domains && array_size > 0) {
-		domains[0] = rqpair->memory_domain->domain;
+	if (domains && count < array_size) {
+		domains[count] = rqpair->memory_domain->domain;
 	}
 
-	return 1;
+	++count;
+	if (domains && count < array_size) {
+		domains[count] = rctrlr->host_memory_domain;
+	}
+
+	++count;
+	return count;
 }
 
 static int
