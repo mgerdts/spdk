@@ -53,6 +53,11 @@
 #include "nvme_internal.h"
 #include "spdk_internal/rdma.h"
 
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP 0x80
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP_LIST 0x81
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP 0x84
+#define SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP_LIST 0x85
+
 #define NVME_RDMA_TIME_OUT_IN_MS 2000
 #define NVME_RDMA_RW_BUFFER_SIZE 131072
 
@@ -64,6 +69,14 @@
 
 /* Max number of NVMe-oF SGL descriptors supported by the host */
 #define NVME_RDMA_MAX_SGL_DESCRIPTORS		16
+
+/* Max number of NVMe-oF PRP entries in nvmf command */
+#define NVME_RDMA_MAX_CMD_PRP_LIST_ENTRIES	(NVME_RDMA_MAX_SGL_DESCRIPTORS * 2)
+
+#define NVME_RDMA_PRP_PAGE_SIZE			4096
+
+/* Max number of NVMe-oF PRP entries in single page */
+#define NVME_RDMA_MAX_PAGE_PRP_LIST_ENTRIES	(NVME_RDMA_PRP_PAGE_SIZE / 8)
 
 /* number of STAILQ entries for holding pending RDMA CM events. */
 #define NVME_RDMA_NUM_CM_EVENTS			256
@@ -128,7 +141,10 @@ struct nvme_rdma_wr {
 
 struct spdk_nvmf_cmd {
 	struct spdk_nvme_cmd cmd;
-	struct spdk_nvme_sgl_descriptor sgl[NVME_RDMA_MAX_SGL_DESCRIPTORS];
+	union {
+		struct spdk_nvme_sgl_descriptor sgl[NVME_RDMA_MAX_SGL_DESCRIPTORS];
+		uint64_t prp[NVME_RDMA_MAX_CMD_PRP_LIST_ENTRIES];
+	};
 };
 
 static struct spdk_nvme_rdma_hooks g_nvme_hooks = {};
@@ -290,6 +306,12 @@ struct spdk_nvme_rdma_req {
 
 	struct ibv_sge				send_sgl[NVME_RDMA_DEFAULT_TX_SGE];
 
+	bool					sqe_mode;
+	uint32_t				num_prps;
+	uint64_t				last_prp_length;
+	uint64_t				*prp_list;
+	bool					external_prp_page;
+
 	TAILQ_ENTRY(spdk_nvme_rdma_req)		link;
 };
 
@@ -321,6 +343,11 @@ static const char *rdma_cm_event_str[] = {
 
 static struct nvme_rdma_qpair *nvme_rdma_poll_group_get_qpair_by_id(struct nvme_rdma_poll_group *group,
 		uint32_t qp_num);
+
+#define PRP_PAGE_POOL_SIZE 1024
+#define PRP_PAGE_POOL_CACHE_SIZE 8
+
+static struct spdk_mempool *g_prp_page_pool;
 
 static inline void *
 nvme_rdma_calloc(size_t nmemb, size_t size)
@@ -388,6 +415,14 @@ nvme_rdma_req_put(struct nvme_rdma_qpair *rqpair, struct spdk_nvme_rdma_req *rdm
 {
 	rdma_req->completion_flags = 0;
 	rdma_req->req = NULL;
+	/* @todo: we can release PRP page sooner, on SEND WR completion */
+	if (rdma_req->external_prp_page) {
+		spdk_mempool_put(g_prp_page_pool, rdma_req->prp_list);
+		rdma_req->external_prp_page = false;
+	}
+
+	rdma_req->prp_list = NULL;
+	rdma_req->sqe_mode = false;
 	TAILQ_INSERT_HEAD(&rqpair->free_reqs, rdma_req, link);
 }
 
@@ -402,6 +437,19 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 
 	rqpair = nvme_rdma_qpair(req->qpair);
 	TAILQ_REMOVE(&rqpair->outstanding_reqs, rdma_req, link);
+
+	if (rdma_req->sqe_mode) {
+		if (req->cmd.opc == SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP ||
+		    req->cmd.opc == SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP_LIST) {
+			req->cmd.opc = SPDK_NVME_OPC_READ;
+		} else if (req->cmd.opc == SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP ||
+			   req->cmd.opc == SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP_LIST) {
+			req->cmd.opc = SPDK_NVME_OPC_WRITE;
+		} else {
+			SPDK_ERRLOG("Unexpected opcode in completed SQE mode request: opc %u\n",
+				    req->cmd.opc);
+		}
+	}
 
 	nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
 	nvme_free_request(req);
@@ -1767,12 +1815,333 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 }
 
 static int
+nvme_rdma_get_host_domain_translation(struct nvme_request *req,
+				      struct nvme_rdma_qpair *rqpair,
+				      struct spdk_rdma_memory_translation_ctx *_ctx)
+{
+	struct spdk_nvme_ctrlr *ctrlr = rqpair->qpair.ctrlr;
+	struct nvme_rdma_ctrlr *rctrlr = nvme_rdma_ctrlr(ctrlr);
+	struct spdk_memory_domain *src_domain = req->payload.opts->memory_domain;
+	void *src_domain_io_ctx = req->payload.opts->memory_domain_ctx;
+	struct spdk_memory_domain_translation_ctx ctx;
+	struct spdk_memory_domain_translation_result dma_translation;
+	int rc;
+
+	if (spdk_memory_domain_get_dma_device_type(src_domain) == SPDK_DMA_DEVICE_TYPE_HOST) {
+		struct spdk_memory_domain_ctx *src_domain_ctx =
+			spdk_memory_domain_get_context(src_domain);
+
+		if (src_domain_ctx &&
+		    src_domain_ctx->size >= sizeof(struct spdk_memory_domain_ctx)) {
+			struct spdk_memory_domain_host_ctx *host_domain_ctx =
+				(struct spdk_memory_domain_host_ctx *)src_domain_ctx->user_ctx;
+
+			if (host_domain_ctx &&
+			    host_domain_ctx->size >= sizeof(struct spdk_memory_domain_host_ctx) &&
+			    host_domain_ctx->host_id != ctrlr->opts.host_memory_domain_id) {
+				/* Translation is not possible between different hosts */
+				return -1;
+			}
+		}
+	}
+
+	ctx.size = sizeof(struct spdk_memory_domain_translation_ctx);
+	ctx.host.host_id = ctrlr->opts.host_memory_domain_id;
+	dma_translation.size = sizeof(struct spdk_memory_domain_translation_result);
+
+	rc = spdk_memory_domain_translate_data(src_domain, src_domain_io_ctx,
+					       rctrlr->host_memory_domain, &ctx, _ctx->addr,
+					       _ctx->length, &dma_translation);
+
+	if (rc) {
+		return rc;
+	} else if (dma_translation.iov_count != 1) {
+		/* @todo: add support for multi-iov translation */
+		SPDK_ERRLOG("Translation to multiple iovs is not supported, iov count %u\n",
+			    dma_translation.iov_count);
+		return -ENOTSUP;
+	}
+
+	_ctx->addr = dma_translation.iov.iov_base;
+	_ctx->length = dma_translation.iov.iov_len;
+	return 0;
+}
+
+static int
+nvme_rdma_build_sqe_mode_request_append_chunk(struct nvme_rdma_qpair *rqpair,
+					      struct spdk_nvme_rdma_req *rdma_req,
+					      void *addr, size_t length)
+{
+	static const uint64_t PRP_PAGE_MASK = NVME_RDMA_PRP_PAGE_SIZE - 1;
+	uint64_t page_offset = (uint64_t)addr & PRP_PAGE_MASK;
+	size_t prp_length;
+
+	SPDK_DEBUGLOG(nvme, "Append chunk to prp list: req %p, addr %p, length %lu, num_prps %u\n",
+		      rdma_req, addr, length, rdma_req->num_prps);
+
+	if (rdma_req->num_prps == 0) {
+		/* Adding the first chunk. Check if PRPs fit into NVMf command.
+		 * Allocate external PRP page from pool if not.
+		 */
+		uint32_t total_prps = SPDK_CEIL_DIV(rdma_req->req->payload_size + page_offset,
+						    NVME_RDMA_PRP_PAGE_SIZE);
+
+		if (total_prps <= NVME_RDMA_MAX_CMD_PRP_LIST_ENTRIES) {
+			rdma_req->prp_list = rqpair->cmds[rdma_req->id].prp;
+			rdma_req->external_prp_page = false;
+			SPDK_DEBUGLOG(nvme, "Use command PRP list: req %p, total_prps %u, addr %p, size %u\n",
+				      rdma_req, total_prps, addr, rdma_req->req->payload_size);
+		} else if (total_prps <= NVME_RDMA_MAX_PAGE_PRP_LIST_ENTRIES) {
+			struct spdk_rdma_memory_translation translation;
+			int rc;
+
+			rdma_req->prp_list = spdk_mempool_get(g_prp_page_pool);
+			if (!rdma_req->prp_list) {
+				SPDK_ERRLOG("Failed to allocate PRP list page\n");
+				return -ENOMEM;
+			}
+
+			rc = spdk_rdma_get_translation(rqpair->mr_map, rdma_req->prp_list,
+						       NVME_RDMA_PRP_PAGE_SIZE, &translation);
+			if (spdk_unlikely(rc)) {
+				SPDK_ERRLOG("RDMA memory translation for PRP page failed, rc %d\n", rc);
+				spdk_mempool_put(g_prp_page_pool, rdma_req->prp_list);
+				rdma_req->prp_list = NULL;
+				return rc;
+			}
+
+			if (translation.translation_type == SPDK_RDMA_TRANSLATION_MR) {
+				rdma_req->send_sgl[1].lkey = translation.mr_or_key.mr->lkey;
+			} else {
+				rdma_req->send_sgl[1].lkey = (uint32_t)translation.mr_or_key.key;
+			}
+
+			rdma_req->send_sgl[1].addr = (uintptr_t)rdma_req->prp_list;
+			rdma_req->external_prp_page = true;
+			SPDK_DEBUGLOG(nvme, "Use external PRP list: req %p, total_prps %u, addr %p, size %u\n",
+				      rdma_req, total_prps, addr, rdma_req->req->payload_size);
+		} else {
+			SPDK_DEBUGLOG(nvme, "Payload does not fit in max PRP entries: request prps %u, "
+				      "max prps %d, payload size %u, payload addr %p\n",
+				      total_prps, NVME_RDMA_MAX_PAGE_PRP_LIST_ENTRIES,
+				      rdma_req->req->payload_size, addr);
+			return -ENOMEM;
+		}
+	} else {
+		/* Validate PRP */
+		uint64_t last_prp_end = rdma_req->prp_list[rdma_req->num_prps] +
+			rdma_req->last_prp_length;
+
+		/* The second and next PRPs should be page aligned
+		 * and the previous one should be end of page aligned
+		 */
+		if ((page_offset != 0) ||
+		    ((last_prp_end & PRP_PAGE_MASK) != 0)) {
+			SPDK_ERRLOG("Malformed PRP list: num_prps %u, addr %p, prev_addr %p, prev_length %lu\n",
+				    rdma_req->num_prps,
+				    addr,
+				    (void *)rdma_req->prp_list[rdma_req->num_prps],
+				    rdma_req->last_prp_length);
+			return -1;
+		}
+	}
+
+	rdma_req->prp_list[rdma_req->num_prps++] = (uint64_t)addr;
+	prp_length = spdk_min(NVME_RDMA_PRP_PAGE_SIZE - page_offset, length);
+	addr += prp_length;
+	length -= prp_length;
+	while (length > 0) {
+		prp_length = spdk_min(NVME_RDMA_PRP_PAGE_SIZE, length);
+		rdma_req->prp_list[rdma_req->num_prps++] = (uint64_t)addr;
+		addr += prp_length;
+		length -= prp_length;
+		rdma_req->last_prp_length = prp_length;
+	}
+
+	return 0;
+}
+
+static int
+nvme_rdma_build_sqe_mode_request_finalize(struct nvme_rdma_qpair *rqpair,
+					  struct spdk_nvme_rdma_req *rdma_req)
+{
+	struct nvme_request *req = rdma_req->req;
+
+	SPDK_DEBUGLOG(nvme, "Finalize SQE mode request: num_prps %u\n", rdma_req->num_prps);
+
+	if (rdma_req->num_prps <= 2) {
+		rdma_req->send_sgl[0].length = sizeof(struct spdk_nvme_cmd);
+		rdma_req->send_wr.num_sge = 1;
+
+		req->cmd.psdt = SPDK_NVME_PSDT_SGL_MPTR_CONTIG;
+		req->cmd.dptr.prp.prp1 = rdma_req->prp_list[0];
+		if (rdma_req->num_prps == 2) {
+			req->cmd.dptr.prp.prp2 = rdma_req->prp_list[1];
+		}
+
+		if (req->cmd.opc == SPDK_NVME_OPC_READ) {
+			req->cmd.opc = SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP;
+		} else if (req->cmd.opc == SPDK_NVME_OPC_WRITE) {
+			req->cmd.opc = SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP;
+		} else {
+			SPDK_ERRLOG("Unsupported opcode for SQE mode: opc %u\n", req->cmd.opc);
+			return -1;
+		}
+	} else {
+		uint32_t prp_list_size = sizeof(uint64_t) * rdma_req->num_prps;
+
+		/*
+		 * The SGL descriptor embedded in the command must point to the list of
+		 * PRP entries used to describe the operation. In that case it is a data block descriptor.
+		 */
+		if (spdk_unlikely(prp_list_size > rqpair->qpair.ctrlr->ioccsz_bytes)) {
+			SPDK_ERRLOG("Size of PRP list (%u) exceeds ICD (%u)\n",
+				    prp_list_size, rqpair->qpair.ctrlr->ioccsz_bytes);
+			return -1;
+		}
+
+		if (!rdma_req->external_prp_page) {
+			rdma_req->send_sgl[0].length = sizeof(struct spdk_nvme_cmd) + prp_list_size;
+			rdma_req->send_wr.num_sge = 1;
+		} else {
+			rdma_req->send_sgl[0].length = sizeof(struct spdk_nvme_cmd);
+			rdma_req->send_sgl[1].length = prp_list_size;
+			rdma_req->send_wr.num_sge = 2;
+		}
+
+		req->cmd.dptr.sgl1.unkeyed.type = SPDK_NVME_SGL_TYPE_DATA_BLOCK;
+		req->cmd.dptr.sgl1.unkeyed.subtype = SPDK_NVME_SGL_SUBTYPE_OFFSET;
+		req->cmd.dptr.sgl1.unkeyed.length = prp_list_size;
+		req->cmd.dptr.sgl1.address = (uint64_t)0;
+
+		req->cmd.psdt = SPDK_NVME_PSDT_SGL_MPTR_CONTIG;
+
+		if (req->cmd.opc == SPDK_NVME_OPC_READ) {
+			req->cmd.opc = SPDK_NVME_OPC_PASSTHROUGH_SQE_READ_PRP_LIST;
+		} else if (req->cmd.opc == SPDK_NVME_OPC_WRITE) {
+			req->cmd.opc = SPDK_NVME_OPC_PASSTHROUGH_SQE_WRITE_PRP_LIST;
+		} else {
+			SPDK_ERRLOG("Unsupported opcode for SQE mode: opc %u\n", req->cmd.opc);
+			return -1;
+		}
+	}
+
+	rdma_req->num_prps = 0;
+	return 0;
+}
+
+/*
+ * Build SQE mode request describing contiguous payload buffer.
+ */
+static int
+nvme_rdma_try_build_contig_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
+					    struct spdk_nvme_rdma_req *rdma_req)
+{
+	struct nvme_request *req = rdma_req->req;
+	struct spdk_rdma_memory_translation_ctx ctx = {
+		.addr = req->payload.contig_or_cb_arg + req->payload_offset,
+		.length = req->payload_size
+	};
+	int rc;
+
+	assert(ctx.length != 0);
+	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_CONTIG);
+
+	rc = nvme_rdma_get_host_domain_translation(req, rqpair, &ctx);
+	if (spdk_unlikely(rc)) {
+		return -1;
+	}
+
+	rc = nvme_rdma_build_sqe_mode_request_append_chunk(rqpair, rdma_req,
+							   ctx.addr, ctx.length);
+	if (rc != 0) {
+		goto cleanup;
+	}
+
+	rc = nvme_rdma_build_sqe_mode_request_finalize(rqpair, rdma_req);
+	if (rc != 0) {
+		goto cleanup;
+	}
+
+	return 0;
+
+ cleanup:
+	if (rdma_req->external_prp_page) {
+		spdk_mempool_put(g_prp_page_pool, rdma_req->prp_list);
+		rdma_req->external_prp_page = false;
+	}
+
+	rdma_req->prp_list = NULL;
+	return -1;
+}
+
+/*
+ * Build SQE mode request describing scattered payload buffer.
+ */
+static int
+nvme_rdma_try_build_sgl_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
+					 struct spdk_nvme_rdma_req *rdma_req)
+{
+	struct nvme_request *req = rdma_req->req;
+	struct spdk_rdma_memory_translation_ctx ctx;
+	uint32_t remaining_size;
+	uint32_t sge_length;
+	int rc;
+
+	assert(req->payload_size != 0);
+	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
+	assert(req->payload.reset_sgl_fn != NULL);
+	assert(req->payload.next_sge_fn != NULL);
+	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+
+	remaining_size = req->payload_size;
+	do {
+		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &ctx.addr, &sge_length);
+		if (rc != 0) {
+			goto cleanup;
+		}
+
+		sge_length = spdk_min(remaining_size, sge_length);
+		ctx.length = sge_length;
+		rc = nvme_rdma_get_host_domain_translation(req, rqpair, &ctx);
+		if (spdk_unlikely(rc)) {
+			goto cleanup;
+		}
+
+		rc = nvme_rdma_build_sqe_mode_request_append_chunk(rqpair, rdma_req,
+								   ctx.addr, ctx.length);
+		if (rc != 0) {
+			goto cleanup;
+		}
+
+		remaining_size -= ctx.length;
+	} while (remaining_size > 0);
+
+	rc = nvme_rdma_build_sqe_mode_request_finalize(rqpair, rdma_req);
+	if (rc != 0) {
+		goto cleanup;
+	}
+
+	return 0;
+
+ cleanup:
+	if (rdma_req->external_prp_page) {
+		spdk_mempool_put(g_prp_page_pool, rdma_req->prp_list);
+		rdma_req->external_prp_page = false;
+	}
+
+	rdma_req->prp_list = NULL;
+	return -1;
+}
+
+static int
 nvme_rdma_req_init(struct nvme_rdma_qpair *rqpair, struct nvme_request *req,
 		   struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct spdk_nvme_ctrlr *ctrlr = rqpair->qpair.ctrlr;
 	enum nvme_payload_type payload_type;
 	bool icd_supported;
+	bool mem_domains_used = req->payload.opts && req->payload.opts->memory_domain;
 	int rc;
 
 	assert(rdma_req->req == NULL);
@@ -1791,13 +2160,21 @@ nvme_rdma_req_init(struct nvme_rdma_qpair *rqpair, struct nvme_request *req,
 	if (req->payload_size == 0) {
 		rc = nvme_rdma_build_null_request(rdma_req);
 	} else if (payload_type == NVME_PAYLOAD_TYPE_CONTIG) {
-		if (icd_supported) {
+		if (mem_domains_used &&
+		    (rc = nvme_rdma_try_build_contig_sqe_mode_request(rqpair, rdma_req)) == 0) {
+			SPDK_DEBUGLOG(nvme, "Contig SQE mode request was built successfully\n");
+			rdma_req->sqe_mode = true;
+		} else if (icd_supported) {
 			rc = nvme_rdma_build_contig_inline_request(rqpair, rdma_req);
 		} else {
 			rc = nvme_rdma_build_contig_request(rqpair, rdma_req);
 		}
 	} else if (payload_type == NVME_PAYLOAD_TYPE_SGL) {
-		if (icd_supported) {
+		if (mem_domains_used &&
+		    (rc = nvme_rdma_try_build_sgl_sqe_mode_request(rqpair, rdma_req)) == 0) {
+			SPDK_DEBUGLOG(nvme, "SGL SQE mode request was built successfully\n");
+			rdma_req->sqe_mode = true;
+		} else if (icd_supported) {
 			rc = nvme_rdma_build_sgl_inline_request(rqpair, rdma_req);
 		} else {
 			rc = nvme_rdma_build_sgl_request(rqpair, rdma_req);
@@ -3105,6 +3482,18 @@ nvme_rdma_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_in
 	if (!cdata_vendor->ovsncs.bits.passthrough_sqe) {
 		SPDK_ERRLOG("Target doesn't support SQE mode, failing connection\n");
 		return -1;
+	}
+
+	if (!g_prp_page_pool) {
+		g_prp_page_pool = spdk_mempool_create("prp_page_pool",
+						      PRP_PAGE_POOL_SIZE,
+						      NVME_RDMA_PRP_PAGE_SIZE,
+						      PRP_PAGE_POOL_CACHE_SIZE,
+						      SPDK_ENV_SOCKET_ID_ANY);
+		if (!g_prp_page_pool) {
+			SPDK_ERRLOG("Failed to create PRP page pool\n");
+			return -ENOMEM;
+		}
 	}
 
 	nvme_fabric_ctrlr_update_ioccsz(ctrlr);
