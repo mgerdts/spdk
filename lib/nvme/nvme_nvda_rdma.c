@@ -106,6 +106,16 @@
 #define NVME_RDMA_POLL_GROUP_CHECK_QPN(_rqpair, qpn)				\
 	((_rqpair)->rdma_qp && (_rqpair)->rdma_qp->qp->qp_num == (qpn))	\
 
+struct __attribute__((packed)) spdk_nvme_ctrlr_data_vendor {
+	union {
+		uint32_t raw;
+		struct {
+			uint32_t passthrough_sqe : 1;
+			uint32_t reserved : 31;
+		} bits;
+	} ovsncs;
+};
+
 enum nvme_rdma_wr_type {
 	RDMA_WR_TYPE_RECV,
 	RDMA_WR_TYPE_SEND,
@@ -389,6 +399,23 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 
 	rqpair = nvme_rdma_qpair(req->qpair);
 	TAILQ_REMOVE(&rqpair->outstanding_reqs, rdma_req, link);
+
+	if (spdk_unlikely(rqpair->qpair.id == 0) &&
+	    spdk_unlikely(req->cmd.opc == SPDK_NVME_OPC_IDENTIFY &&
+			  req->cmd.cdw10_bits.identify.cns == SPDK_NVME_IDENTIFY_CTRLR)) {
+		struct spdk_nvme_ctrlr_data *cdata;
+		struct spdk_nvme_ctrlr_data_vendor *cdata_vendor;
+		assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_CONTIG);
+		cdata = req->payload.contig_or_cb_arg;
+		cdata_vendor = (struct spdk_nvme_ctrlr_data_vendor *)cdata->vs;
+		SPDK_NOTICELOG("Identify controller response: vendor cdata 0x%08x\n",
+			       cdata_vendor->ovsncs.raw);
+		if (!cdata_vendor->ovsncs.bits.passthrough_sqe) {
+			SPDK_ERRLOG("Target doesn't support SQE mode, failing connection\n");
+			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+		}
+	}
 
 	nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
 	nvme_free_request(req);
