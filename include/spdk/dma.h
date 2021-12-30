@@ -51,6 +51,11 @@ extern "C" {
  */
 #define SPDK_RDMA_DMA_DEVICE "SPDK_RDMA_DMA_DEVICE"
 
+/**
+ * Identifier of SPDK internal DMA device of HOST type
+ */
+#define SPDK_HOST_DMA_DEVICE "SPDK_HOST_DMA_DEVICE"
+
 enum spdk_dma_device_type {
 	/** RDMA devices are capable of performing DMA operations on memory domains using the standard
 	 *  RDMA model (protection domain, remote key, address). */
@@ -62,6 +67,11 @@ enum spdk_dma_device_type {
 	 * Start of the range of vendor-specific DMA device types
 	 */
 	SPDK_DMA_DEVICE_VENDOR_SPECIFIC_TYPE_START = 1000,
+
+	/** HOST devices are capable of performing DMA operations on memory domains using physical
+	 * addresses in host address space. */
+	SPDK_DMA_DEVICE_TYPE_HOST = SPDK_DMA_DEVICE_VENDOR_SPECIFIC_TYPE_START,
+
 	/**
 	 * End of the range of vendor-specific DMA device types
 	 */
@@ -146,6 +156,10 @@ struct spdk_memory_domain_translation_ctx {
 			/* Opaque handle for ibv_qp */
 			void *ibv_qp;
 		} rdma;
+
+		struct {
+			uint64_t host_id;
+		} host;
 	};
 };
 
@@ -172,6 +186,18 @@ struct spdk_memory_domain_rdma_ctx {
 	size_t size;
 	/** Opaque handle for ibv_pd */
 	void *ibv_pd;
+};
+
+/* @todo: In theory, can be used to match host_id in SPDK.
+ * SNAP has to register HOST memory domain instead of RDMA in this case.
+ * SPDK will get context for memory domain in payload, cast to this type and match host_ids.
+ */
+/** Context of memory domain of HOST type */
+struct spdk_memory_domain_host_ctx {
+	/** size of this structure in bytes */
+	size_t size;
+	/** Host ID */
+	uint64_t host_id;
 };
 
 struct spdk_memory_domain_ctx {
