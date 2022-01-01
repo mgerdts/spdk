@@ -1387,7 +1387,7 @@ blob_load_backing_dev(void *cb_arg)
 			blob_load_final(ctx, -EINVAL);
 		}
 
-		SPDK_NOTICELOG("Creating seed bs\n");
+		SPDK_INFOLOG(blob, "Creating seed bs\n");
 		seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
 		if (!seed_ctx) {
 			blob_load_final(ctx, -ENOMEM);

@@ -226,12 +226,12 @@ static void load_seed_on_thread(void *arg1)
 	}
 
 	tid = spdk_thread_get_id(spdk_get_thread());
-	SPDK_NOTICELOG("Creating io channel for seed bdev %s on thread %"PRIu64"\n",
+	SPDK_INFOLOG(blob, "Creating io channel for seed bdev %s on thread %"PRIu64"\n",
 		       spdk_bdev_get_name(ctx->ctx->bdev), tid);
 
 	if (tid > ctx->ctx->io_channels_count) {
 		/* realloc needed */
-		SPDK_NOTICELOG("Realloc from %zu to %zu\n", ctx->ctx->io_channels_count, tid + 1);
+		SPDK_INFOLOG(blob, "Realloc from %zu to %zu\n", ctx->ctx->io_channels_count, tid + 1);
 		void *tmp = realloc(ctx->ctx->io_channels, (tid + 1) * sizeof(*ctx->ctx->io_channels));
 		if (!tmp) {
 			SPDK_ERRLOG("Memory allocation failed\n");
