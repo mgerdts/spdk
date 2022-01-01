@@ -308,6 +308,8 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 	ctx->bdev = bdev;
 	ret = spdk_bdev_open_ext(bdev->name, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
 	if (ret != 0) {
+		SPDK_ERRLOG("seed device %s (uuid %s) could not be opened for blob 0x%"
+			    PRIx64 ": error %d\n", bdev->name, seed_uuid, front->id, ret);
 		free(ctx->io_channels);
 		free(ctx);
 		free(seed_load_cpl);

@@ -1376,6 +1376,31 @@ blob_load_backing_dev(void *cb_arg)
 	size_t				len;
 	int				rc;
 
+	if (spdk_blob_is_external_clone(blob)) {
+		struct blob_load_seed_ctx	*seed_ctx;
+		const char			*uuid;
+
+		uuid = spdk_blob_get_external_parent(blob);
+		if (uuid == NULL) {
+			SPDK_NOTICELOG("blob 0x%" PRIx64 " is an external clone without a parent\n",
+				       blob->id);
+			blob_load_final(ctx, -EINVAL);
+		}
+
+		SPDK_NOTICELOG("Creating seed bs\n");
+		seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
+		if (!seed_ctx) {
+			blob_load_final(ctx, -ENOMEM);
+			return;
+		}
+
+		seed_ctx->ctx = ctx;
+
+		/* Use an existing bdev for unallocated blocks */
+		bs_create_seed_dev(blob, uuid, blob_load_seed_done, seed_ctx);
+		return;
+	}
+
 	if (spdk_blob_is_thin_provisioned(blob)) {
 		rc = blob_get_xattr_value(blob, BLOB_SNAPSHOT, &value, &len, true);
 		if (rc == 0) {
@@ -1387,31 +1412,6 @@ blob_load_backing_dev(void *cb_arg)
 			/* open snapshot blob and continue in the callback function */
 			blob->parent_id = *(spdk_blob_id *)value;
 			spdk_bs_open_blob(blob->bs, blob->parent_id, blob_load_snapshot_cpl, ctx);
-			return;
-		}
-
-		if (spdk_blob_is_external_clone(blob)) {
-			struct blob_load_seed_ctx	*seed_ctx;
-			const char			*uuid;
-
-			uuid = spdk_blob_get_external_parent(blob);
-			if (uuid == NULL) {
-				SPDK_NOTICELOG("blob 0x%" PRIx64 " is an external clone without a parent\n",
-					       blob->id);
-				blob_load_final(ctx, -EINVAL);
-			}
-
-			SPDK_NOTICELOG("Creating seed bs\n");
-			seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
-			if (!seed_ctx) {
-				blob_load_final(ctx, -ENOMEM);
-				return;
-			}
-
-			seed_ctx->ctx = ctx;
-
-			/* Use an existing bdev for unallocated blocks */
-			bs_create_seed_dev(blob, uuid, blob_load_seed_done, seed_ctx);
 			return;
 		}
 
@@ -5144,7 +5144,6 @@ spdk_bs_init(struct spdk_bs_dev *dev, struct spdk_bs_opts *o,
 	ctx->super->crc = blob_md_page_calc_crc(ctx->super);
 
 	num_md_clusters = spdk_divide_round_up(num_md_pages, bs->pages_per_cluster);
-	SPDK_NOTICELOG("Number of used MD clusters %lu\n", num_md_clusters);
 	if (num_md_clusters > bs->total_clusters) {
 		SPDK_ERRLOG("Blobstore metadata cannot use more clusters than is available, "
 			    "please decrease number of pages reserved for metadata "
@@ -5756,6 +5755,8 @@ bs_create_blob(struct spdk_blob_store *bs,
 
 	if (!spdk_uuid_is_null(&opts_local.external_snapshot_uuid)) {
 		char uuid_str[SPDK_UUID_STRING_LEN];
+
+		blob_set_thin_provision(blob);
 
 		if ((rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str),
 					      &opts_local.external_snapshot_uuid) != 0) ||
