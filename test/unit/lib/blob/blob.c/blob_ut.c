@@ -41,8 +41,12 @@
 #include "../bs_dev_common.c"
 #include "blob/blobstore.c"
 #include "blob/request.c"
+#include "blob/seed.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
+#include "../bs_bdev_malloc.c"
+
+#pragma GCC diagnostic ignored "-Wunused-function"
 
 struct spdk_blob_store *g_bs;
 spdk_blob_id g_blobid;
@@ -83,9 +87,6 @@ static struct spdk_blob *ut_blob_create_and_open(struct spdk_blob_store *bs,
 static void ut_blob_close_and_delete(struct spdk_blob_store *bs, struct spdk_blob *blob);
 static void suite_blob_setup(void);
 static void suite_blob_cleanup(void);
-
-DEFINE_STUB_V(bs_create_seed_dev, (struct spdk_blob *front, const char *seedname,
-				   blob_load_seed_cpl cb_fn, void *cb_arg));
 
 static void
 _get_xattr_value(void *arg, const char *name,
@@ -6998,6 +6999,92 @@ blob_decouple_snapshot(void)
 }
 
 static void
+bdev_init_cb(void *arg, int rc)
+{
+	CU_ASSERT(rc == 0);
+}
+
+static void
+blob_extclone_defaults(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	uint64_t		free_clusters;
+
+	spdk_bdev_initialize(bdev_init_cb, NULL);
+	poll_threads();
+
+	/* No cluster allocations expected */
+	free_clusters = bs->num_free_clusters;
+
+	ut_open_malloc_dev(0);
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[0].uuid);
+
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	CU_ASSERT(blob->parent_id == SPDK_BLOBID_SEED);
+	CU_ASSERT(spdk_blob_is_external_clone(blob));
+	CU_ASSERT(spdk_blob_is_thin_provisioned(blob));
+	CU_ASSERT(bs->num_free_clusters == free_clusters);
+
+	ut_blob_close_and_delete(bs, blob);
+	poll_threads();
+}
+
+static void
+blob_extclone_size(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	size_t			blob_size, ext_size;
+
+	/*
+	 * Each of the external devices in mdisks[] has differently sized blocks
+	 * and block counts. Verify that the blob size matches when num_clusters
+	 * is not specified.
+	 */
+	for (size_t i = 0; i < SPDK_COUNTOF(mdisks); i++) {
+		ut_open_malloc_dev(i);
+		ut_spdk_blob_opts_init(&opts);
+		spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[i].uuid);
+
+		spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_bserrno == 0);
+		CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+		blobid = g_blobid;
+
+		spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_bserrno == 0);
+		SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+		blob = g_blob;
+
+		blob_size = blob->active.num_clusters * bs->cluster_sz;
+		ext_size = mdisks[i].num_blocks * mdisks[i].block_size;
+		CU_ASSERT_EQUAL(blob_size, ext_size);
+
+		ut_blob_close_and_delete(bs, blob);
+		poll_threads();
+	}
+}
+
+static void
 suite_bs_setup(void)
 {
 	struct spdk_bs_dev *dev;
@@ -7008,6 +7095,7 @@ suite_bs_setup(void)
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
 	CU_ASSERT(g_bs != NULL);
+	init_accel();
 }
 
 static void
@@ -7018,6 +7106,8 @@ suite_bs_cleanup(void)
 	CU_ASSERT(g_bserrno == 0);
 	g_bs = NULL;
 	memset(g_dev_buffer, 0, DEV_BUFFER_SIZE);
+	ut_close_malloc_devs();
+	fini_accel();
 }
 
 static struct spdk_blob *
@@ -7100,7 +7190,7 @@ int main(int argc, char **argv)
 			suite_bs_setup, suite_bs_cleanup);
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
-
+#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -7168,7 +7258,11 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_simultaneous_operations);
 	CU_ADD_TEST(suite_bs, blob_persist_test);
 	CU_ADD_TEST(suite_bs, blob_decouple_snapshot);
+#endif
+	CU_ADD_TEST(suite_bs, blob_extclone_defaults);
+	CU_ADD_TEST(suite_bs, blob_extclone_size);
 
+	allocate_cores(1);
 	allocate_threads(2);
 	set_thread(0);
 
