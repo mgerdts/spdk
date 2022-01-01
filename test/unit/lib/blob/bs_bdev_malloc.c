@@ -99,6 +99,25 @@ struct ut_disk_info {
 	{ "malloc1", "feb1f488-9df8-48c6-8f14-bff88b9dbfdd", 256, 512 },
 };
 
+static struct spdk_bdev *
+ut_open_malloc_dev(size_t devidx)
+{
+	struct ut_disk_info	*disk;
+	int rc;
+
+	SPDK_CU_ASSERT_FATAL(devidx <= SPDK_COUNTOF(mdisks));
+
+	disk = &mdisks[devidx];
+	SPDK_CU_ASSERT_FATAL(disk->bdev == NULL);
+	SPDK_CU_ASSERT_FATAL(spdk_uuid_parse(&disk->uuid, disk->uuid_str) == 0);
+
+	rc = create_malloc_disk(&disk->bdev, disk->name, &disk->uuid,
+				disk->num_blocks, disk->block_size);
+	CU_ASSERT(rc == 0);
+
+	return disk->bdev;
+}
+
 static void
 ut_close_malloc_dev_done(void *cb_arg, int bdeverrno)
 {
@@ -126,34 +145,4 @@ ut_close_malloc_dev(size_t devidx)
 	delete_malloc_disk(disk->bdev, ut_close_malloc_dev_done, (void*)devidx);
 	poll_threads();
 	CU_ASSERT(disk->bdev == NULL);
-}
-
-static void
-ut_close_malloc_devs(void)
-{
-	for (size_t i = 0; i < SPDK_COUNTOF(mdisks); i++) {
-		ut_close_malloc_dev(i);
-	}
-}
-
-static struct spdk_bdev *
-ut_open_malloc_dev(size_t devidx)
-{
-	struct ut_disk_info	*disk;
-	int rc;
-
-	SPDK_CU_ASSERT_FATAL(devidx <= SPDK_COUNTOF(mdisks));
-
-	disk = &mdisks[devidx];
-	if (disk->bdev != NULL) {
-		ut_close_malloc_dev(devidx);
-	}
-
-	SPDK_CU_ASSERT_FATAL(spdk_uuid_parse(&disk->uuid, disk->uuid_str) == 0);
-
-	rc = create_malloc_disk(&disk->bdev, disk->name, &disk->uuid,
-				disk->num_blocks, disk->block_size);
-	CU_ASSERT(rc == 0);
-
-	return disk->bdev;
 }

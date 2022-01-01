@@ -44,6 +44,7 @@
 #include "blob/seed.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
+#include "thread/thread.c"
 #include "../bs_bdev_malloc.c"
 
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -7001,7 +7002,7 @@ blob_decouple_snapshot(void)
 static void
 bdev_init_cb(void *arg, int rc)
 {
-	CU_ASSERT(rc == 0);
+	assert(rc == 0);
 }
 
 static void
@@ -7012,9 +7013,6 @@ blob_extclone_defaults(void)
 	struct spdk_blob	*blob;
 	spdk_blob_id		blobid;
 	uint64_t		free_clusters;
-
-	spdk_bdev_initialize(bdev_init_cb, NULL);
-	poll_threads();
 
 	/* No cluster allocations expected */
 	free_clusters = bs->num_free_clusters;
@@ -7041,6 +7039,7 @@ blob_extclone_defaults(void)
 	CU_ASSERT(bs->num_free_clusters == free_clusters);
 
 	ut_blob_close_and_delete(bs, blob);
+	ut_close_malloc_dev(0);
 	poll_threads();
 }
 
@@ -7077,9 +7076,11 @@ blob_extclone_size(void)
 
 		blob_size = blob->active.num_clusters * bs->cluster_sz;
 		ext_size = mdisks[i].num_blocks * mdisks[i].block_size;
+		printf("blob_size: %lu, ext_size: %lu\n", blob_size, ext_size);
 		CU_ASSERT_EQUAL(blob_size, ext_size);
 
 		ut_blob_close_and_delete(bs, blob);
+		ut_close_malloc_dev(i);
 		poll_threads();
 	}
 }
@@ -7095,7 +7096,6 @@ suite_bs_setup(void)
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
 	CU_ASSERT(g_bs != NULL);
-	init_accel();
 }
 
 static void
@@ -7106,8 +7106,6 @@ suite_bs_cleanup(void)
 	CU_ASSERT(g_bserrno == 0);
 	g_bs = NULL;
 	memset(g_dev_buffer, 0, DEV_BUFFER_SIZE);
-	ut_close_malloc_devs();
-	fini_accel();
 }
 
 static struct spdk_blob *
@@ -7266,6 +7264,10 @@ int main(int argc, char **argv)
 	allocate_threads(2);
 	set_thread(0);
 
+	init_accel();
+	spdk_bdev_initialize(bdev_init_cb, NULL);
+	poll_threads();
+
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
@@ -7277,6 +7279,7 @@ int main(int argc, char **argv)
 	num_failures += CU_get_number_of_failures();
 	CU_cleanup_registry();
 
+	fini_accel();
 	free(g_dev_buffer);
 
 	free_threads();
