@@ -1362,8 +1362,8 @@ static void blob_load_seed_done(void *ctx, int rc)
 	struct blob_load_seed_ctx *seed_load_ctx = ctx;
 	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
 
-	blob_load_final(seed_load_ctx->ctx, rc);
 	blob->parent_id = SPDK_BLOBID_SEED;
+	blob_load_final(seed_load_ctx->ctx, rc);
 	free(seed_load_ctx);
 }
 
@@ -5770,6 +5770,33 @@ bs_create_blob(struct spdk_blob_store *bs,
 		}
 
 		blob->invalid_flags |= SPDK_BLOB_EXTERNAL_SNAPSHOT;
+
+		/*
+		 * If the size was not specified, make the clone at least as
+		 * large as the bdev it is cloning.
+		 */
+		if (opts_local.num_clusters == 0) {
+			struct spdk_bdev *parent;
+			uint64_t size;
+
+			parent = spdk_bdev_get_by_uuid(uuid_str);
+			if (parent == NULL) {
+				SPDK_ERRLOG("Cannot find parent bdev %s\n",
+					    uuid_str);
+				blob_free(blob);
+				spdk_bit_array_clear(bs->used_blobids, page_idx);
+				bs_release_md_page(bs, page_idx);
+				cb_fn(cb_arg, 0, -ENXIO);
+				return;
+			}
+
+			size = spdk_bdev_get_block_size(parent) *
+			       spdk_bdev_get_num_blocks(parent);
+			opts_local.num_clusters = size / bs->cluster_sz;
+			if ((size % bs->cluster_sz) != 0) {
+				opts_local.num_clusters++;
+			}
+		}
 	}
 
 	rc = blob_resize(blob, opts_local.num_clusters);

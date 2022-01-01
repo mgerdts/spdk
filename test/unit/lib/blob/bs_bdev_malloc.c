@@ -1,7 +1,7 @@
 /*-
  *   BSD LICENSE
  *
- *   Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+ *   Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -82,7 +82,7 @@ fini_accel(void)
         spdk_io_device_unregister(g_accel_p, NULL);
 }
 
-
+#define MIB(x) ((x) * 1024 * 1024)
 /*
  * Helpers for malloc devices used in unit tests
  */
@@ -95,8 +95,8 @@ struct ut_disk_info {
 	struct spdk_uuid	uuid;
 	struct spdk_bdev	*bdev;
 } mdisks[] = {
-	{ "malloc0", "8a9ceb91-e50f-46cb-b589-2bcd03ed0a65", 64, 4096 },
-	{ "malloc1", "feb1f488-9df8-48c6-8f14-bff88b9dbfdd", 256, 512 },
+	{ "malloc0", "8a9ceb91-e50f-46cb-b589-2bcd03ed0a65", MIB(4) / 4096, 4096 },
+	{ "malloc1", "feb1f488-9df8-48c6-8f14-bff88b9dbfdd", MIB(4) / 512, 512 },
 };
 
 static struct spdk_bdev *

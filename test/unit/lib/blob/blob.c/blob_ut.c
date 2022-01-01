@@ -7076,13 +7076,17 @@ blob_extclone_size(void)
 
 		blob_size = blob->active.num_clusters * bs->cluster_sz;
 		ext_size = mdisks[i].num_blocks * mdisks[i].block_size;
-		printf("blob_size: %lu, ext_size: %lu\n", blob_size, ext_size);
 		CU_ASSERT_EQUAL(blob_size, ext_size);
 
 		ut_blob_close_and_delete(bs, blob);
 		ut_close_malloc_dev(i);
 		poll_threads();
 	}
+	/* XXX-mg
+	 * - Test that size matches the requested size even when it doesn't match
+	 *   the parent size (larger and smaller).
+	 * - Test that an extra cluster is added when needed.
+	 */
 }
 
 static void
