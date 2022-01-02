@@ -3,7 +3,7 @@
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -683,6 +683,37 @@ open_write_test(void)
 	free_bdev(bdev[1]);
 	free_bdev(bdev[2]);
 	free_bdev(bdev[3]);
+}
+
+static void
+claim_test(void)
+{
+	struct spdk_bdev *bdev;
+	struct spdk_bdev_desc *desc;
+	int rc;
+
+	/*
+	 * A vbdev that uses a read-only bdev may need it to remain read-only.
+	 * To do so, it opens the bdev read-only, then claims it without
+	 * passing a spdk_bdev_desc.
+	 */
+	bdev = allocate_bdev("bdev0");
+	rc = spdk_bdev_open_ext("bdev0", false, bdev_ut_event_cb, NULL, &desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(desc->write == false);
+
+	rc = spdk_bdev_module_claim_bdev(bdev, NULL, &bdev_ut_if);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(desc->write == false);
+
+	/* A read-only bdev is upgraded to read-write if desc is passed. */
+	spdk_bdev_module_release_bdev(bdev);
+	rc = spdk_bdev_module_claim_bdev(bdev, desc, &bdev_ut_if);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(desc->write == true);
+
+	spdk_bdev_close(desc);
+	free_bdev(bdev);
 }
 
 static void
@@ -4955,6 +4986,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, num_blocks_test);
 	CU_ADD_TEST(suite, io_valid_test);
 	CU_ADD_TEST(suite, open_write_test);
+	CU_ADD_TEST(suite, claim_test);
 	CU_ADD_TEST(suite, alias_add_del_test);
 	CU_ADD_TEST(suite, get_device_stat_test);
 	CU_ADD_TEST(suite, bdev_io_types_test);
