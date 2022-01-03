@@ -554,7 +554,7 @@ typedef void (*spdk_bdev_io_get_buf_cb)(struct spdk_io_channel *ch, struct spdk_
  *
  * \param ch The I/O channel the bdev I/O was handled on.
  * \param bdev_io The bdev I/O
- * \param aux_buf Pointer to the allocated buffer.  NULL if there was a failuer such as
+ * \param aux_buf Pointer to the allocated buffer.  NULL if there was a failure such as
  * the size of the buffer to allocate is greater than the permitted maximum.
  */
 typedef void (*spdk_bdev_io_get_aux_buf_cb)(struct spdk_io_channel *ch,
@@ -925,7 +925,7 @@ const struct spdk_bdev_aliases_list *spdk_bdev_get_aliases(const struct spdk_bde
 void spdk_bdev_io_get_buf(struct spdk_bdev_io *bdev_io, spdk_bdev_io_get_buf_cb cb, uint64_t len);
 
 /**
- * Allocate an auxillary buffer for given bdev_io. The length of the
+ * Allocate an auxiliary buffer for given bdev_io. The length of the
  * buffer will be the same size as the bdev_io primary buffer. The buffer
  * must be freed using \c spdk_bdev_io_put_aux_buf() before completing
  * the associated bdev_io.  This call will never fail. In case of lack of
@@ -947,7 +947,7 @@ void spdk_bdev_io_put_aux_buf(struct spdk_bdev_io *bdev_io, void *aux_buf);
 /**
  * Set the given buffer as the data buffer described by this bdev_io.
  *
- * The portion of the buffer used may be adjusted for memory alignement
+ * The portion of the buffer used may be adjusted for memory alignment
  * purposes.
  *
  * \param bdev_io I/O to set the buffer on.
@@ -1186,7 +1186,7 @@ void spdk_bdev_part_base_hotremove(struct spdk_bdev_part_base *part_base,
  * \param channel_size Channel size in bytes.
  * \param ch_create_cb Called after a new channel is allocated.
  * \param ch_destroy_cb Called upon channel deletion.
- * \param base output parameter for the part object when operation is succssful.
+ * \param base output parameter for the part object when operation is successful.
  *
  * \return 0 if operation is successful, or suitable errno value otherwise.
  */
