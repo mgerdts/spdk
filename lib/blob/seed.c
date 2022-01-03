@@ -199,9 +199,9 @@ seed_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 
 	switch (type) {
 	case SPDK_BDEV_EVENT_REMOVE:
-		ctx->bdev_desc = NULL;
 		// XXX-mg what about channel?
 		spdk_bdev_close(ctx->bdev_desc);
+		ctx->bdev_desc = NULL;
 		break;
 	default:
 		SPDK_NOTICELOG("Unsupported event %d\n", type);

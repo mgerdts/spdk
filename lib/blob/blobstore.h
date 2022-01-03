@@ -451,7 +451,6 @@ struct blob_load_seed_ctx {
 };
 
 struct seed_ctx {
-	struct spdk_uuid		uuid;
 	struct spdk_bdev		*bdev;
 	struct spdk_bdev_desc		*bdev_desc;
 	struct spdk_io_channel		**io_channels;

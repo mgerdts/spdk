@@ -57,11 +57,17 @@ static void *g_accel_p = (void *)0xdeadbeef;
 DEFINE_STUB(spdk_accel_submit_fill, int,
 	    (struct spdk_io_channel *ch, void *dst, uint8_t fill, uint64_t nbytes,
 	     spdk_accel_completion_cb cb_fn, void *cb_arg), -ENOTSUP);
-DEFINE_STUB(spdk_accel_submit_copy, int,
-	    (struct spdk_io_channel *ch, void *dst, void *src, uint64_t nbytes,
-	     spdk_accel_completion_cb cb_fn, void *cb_arg), -ENOTSUP);
 DEFINE_STUB(accel_engine_create_cb, int, (void *io_device, void *ctx_buf), 0);
 DEFINE_STUB_V(accel_engine_destroy_cb, (void *io_device, void *ctx_buf));
+
+int
+spdk_accel_submit_copy(struct spdk_io_channel *ch, void *dst, void *src, uint64_t nbytes,
+		       spdk_accel_completion_cb cb_fn, void *cb_arg)
+{
+	memcpy(dst, src, (size_t)nbytes);
+	cb_fn(cb_arg, 0);
+	return 0;
+}
 
 struct spdk_io_channel *
 spdk_accel_engine_get_io_channel(void)
