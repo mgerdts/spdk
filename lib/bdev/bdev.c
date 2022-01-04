@@ -76,7 +76,7 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 #define SPDK_BDEV_QOS_LIMIT_NOT_DEFINED		UINT64_MAX
 #define SPDK_BDEV_IO_POLL_INTERVAL_IN_MSEC	1000
 
-#define SPDK_BDEV_POOL_ALIGNMENT 4096
+#define SPDK_BDEV_POOL_ALIGNMENT 512
 
 /* The maximum number of children requests for a UNMAP or WRITE ZEROES command
  * when splitting into children requests at a time.
