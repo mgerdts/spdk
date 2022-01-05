@@ -7098,6 +7098,7 @@ blob_extclone_size(void)
 	CU_ASSERT(bdev != NULL);
 
 	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
 	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
@@ -7185,7 +7186,7 @@ bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 static void
 blob_extclone_io_size(uint32_t bs_blksz, uint32_t ext_blksz)
 {
-	struct spdk_bs_dev 	*dev;
+	struct spdk_bs_dev	*dev;
 	struct spdk_blob_store	*bs;
 	struct spdk_bs_opts	bsopts;
 	struct spdk_blob_opts	opts;
@@ -7307,6 +7308,7 @@ blob_extclone_io_size(uint32_t bs_blksz, uint32_t ext_blksz)
 	spdk_bs_free_io_channel(bs_ch);
 	suite_blob_cleanup();
 	delete_malloc_disk(bdev, bs_op_complete, NULL);
+	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
 	g_bs = NULL;
 	memset(g_dev_buffer, 0, DEV_BUFFER_SIZE);
