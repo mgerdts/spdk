@@ -282,6 +282,15 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		return;
 	}
 
+	if (spdk_bdev_get_block_size(bdev) > front->bs->io_unit_size) {
+		SPDK_ERRLOG("seed device %s (%s) block size %" PRIu32
+			    " larger than blobstore io_unit_size %" PRIu32 "\n",
+			    spdk_bdev_get_name(bdev), seed_uuid,
+			    spdk_bdev_get_block_size(bdev), front->bs->io_unit_size);
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
+
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM);

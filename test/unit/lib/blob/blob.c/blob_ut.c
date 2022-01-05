@@ -86,6 +86,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block_ver1) == 0x1000, "Invalid s
 static struct spdk_blob *ut_blob_create_and_open(struct spdk_blob_store *bs,
 		struct spdk_blob_opts *blob_opts);
 static void ut_blob_close_and_delete(struct spdk_blob_store *bs, struct spdk_blob *blob);
+static void suite_bs_cleanup(void);
 static void suite_blob_setup(void);
 static void suite_blob_cleanup(void);
 
@@ -7341,7 +7342,54 @@ blob_extclone_io_4096_512(void)
 static void
 blob_extclone_io_512_4096(void)
 {
-	blob_extclone_io_size(512, 4096);
+	struct spdk_bs_dev	*dev;
+	struct spdk_blob_store	*bs;
+	struct spdk_bs_opts	bsopts;
+	struct spdk_blob_opts	opts;
+	struct			spdk_bdev *bdev = NULL;
+	uint32_t		bs_blksz = 512;
+	uint32_t		ext_blksz = 4096;
+	uint64_t		ext_num_blocks = 64;
+	int			rc;
+
+	spdk_bs_opts_init(&bsopts, sizeof(bsopts));
+	bsopts.cluster_sz = 16 * 1024;
+
+	/* Create device with desired block size */
+	dev = init_dev();
+	dev->blocklen = bs_blksz;
+	dev->blockcnt =  DEV_BUFFER_SIZE / dev->blocklen;
+
+	/* Initialize a new blob store */
+	spdk_bs_init(dev, &bsopts, bs_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
+	SPDK_CU_ASSERT_FATAL(g_bs->io_unit_size == bs_blksz);
+	bs = g_bs;
+
+	/* Create external device */
+	rc = create_malloc_disk(&bdev, NULL, NULL, ext_num_blocks, ext_blksz);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(bdev != NULL);
+
+	/*
+	 * Clone the external device. This should fail due to the external
+	 * snapshot having a block size that would force the blobstore to
+	 * use a bounce buffer for small IOs.
+	 */
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -EINVAL);
+
+	/* Clean up */
+	suite_bs_cleanup();
+	delete_malloc_disk(bdev, bs_op_complete, NULL);
+	CU_ASSERT(g_bserrno == 0);
+	g_bs = NULL;
+	memset(g_dev_buffer, 0, DEV_BUFFER_SIZE);
 }
 
 static void

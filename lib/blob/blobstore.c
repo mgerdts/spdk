@@ -5755,13 +5755,51 @@ bs_create_blob(struct spdk_blob_store *bs,
 
 	if (!spdk_uuid_is_null(&opts_local.external_snapshot_uuid)) {
 		char uuid_str[SPDK_UUID_STRING_LEN];
+		struct spdk_bdev *parent;
 
+		rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str),
+					 &opts_local.external_snapshot_uuid);
+		if (rc != 0) {
+			SPDK_ERRLOG("Invalid external snapshot UUID\n");
+			blob_free(blob);
+			spdk_bit_array_clear(bs->used_blobids, page_idx);
+			bs_release_md_page(bs, page_idx);
+			cb_fn(cb_arg, 0, rc);
+		}
+
+		parent = spdk_bdev_get_by_uuid(uuid_str);
+		if (parent == NULL) {
+			SPDK_ERRLOG("Cannot find external snapshot bdev %s\n",
+				    uuid_str);
+			blob_free(blob);
+			spdk_bit_array_clear(bs->used_blobids, page_idx);
+			bs_release_md_page(bs, page_idx);
+			cb_fn(cb_arg, 0, -ENXIO);
+			return;
+		}
+
+		if (spdk_bdev_get_block_size(parent) > blob->bs->io_unit_size) {
+			/*
+			 * Do not allow the external snapshot block size to be
+			 * larger than the blobstore's io_unit_size, as that
+			 * would force the blobstore to use a block sized bounce
+			 * buffer perform small IOs.
+			 */
+			SPDK_ERRLOG("seed device %s (%s) block size %" PRIu32
+				    "larger than blobstore io_unit_size %"
+				    PRIu32 "\n", spdk_bdev_get_name(parent),
+				    uuid_str, spdk_bdev_get_block_size(parent),
+				    blob->bs->io_unit_size);
+			blob_free(blob);
+			spdk_bit_array_clear(bs->used_blobids, page_idx);
+			bs_release_md_page(bs, page_idx);
+			cb_fn(cb_arg, 0, -EINVAL);
+			return;
+		}
 		blob_set_thin_provision(blob);
 
-		if ((rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str),
-					      &opts_local.external_snapshot_uuid) != 0) ||
-		    (rc = blob_set_xattr(blob, BLOB_SEED_BDEV, uuid_str,
-					 sizeof (uuid_str), true)) != 0) {
+		rc = blob_set_xattr(blob, BLOB_SEED_BDEV, uuid_str, sizeof (uuid_str), true);
+		if (rc != 0) {
 			blob_free(blob);
 			spdk_bit_array_clear(bs->used_blobids, page_idx);
 			bs_release_md_page(bs, page_idx);
@@ -5776,19 +5814,7 @@ bs_create_blob(struct spdk_blob_store *bs,
 		 * large as the bdev it is cloning.
 		 */
 		if (opts_local.num_clusters == 0) {
-			struct spdk_bdev *parent;
 			uint64_t size;
-
-			parent = spdk_bdev_get_by_uuid(uuid_str);
-			if (parent == NULL) {
-				SPDK_ERRLOG("Cannot find parent bdev %s\n",
-					    uuid_str);
-				blob_free(blob);
-				spdk_bit_array_clear(bs->used_blobids, page_idx);
-				bs_release_md_page(bs, page_idx);
-				cb_fn(cb_arg, 0, -ENXIO);
-				return;
-			}
 
 			size = spdk_bdev_get_block_size(parent) *
 			       spdk_bdev_get_num_blocks(parent);
