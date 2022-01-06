@@ -7006,6 +7006,12 @@ bdev_init_cb(void *arg, int rc)
 }
 
 static void
+bdev_fini_cb(void *arg)
+{
+	return;
+}
+
+static void
 blob_extclone_defaults(void)
 {
 	struct spdk_blob_store	*bs = g_bs;
@@ -7536,6 +7542,7 @@ int main(int argc, char **argv)
 	num_failures += CU_get_number_of_failures();
 	CU_cleanup_registry();
 
+	spdk_bdev_finish(bdev_fini_cb, NULL);
 	fini_accel();
 	free(g_dev_buffer);
 
