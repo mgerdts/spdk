@@ -23,6 +23,7 @@ function unittest_bdev() {
 	$valgrind $testdir/lib/bdev/vbdev_lvol.c/vbdev_lvol_ut
 	$valgrind $testdir/lib/bdev/vbdev_zone_block.c/vbdev_zone_block_ut
 	$valgrind $testdir/lib/bdev/mt/bdev.c/bdev_ut
+	$valgrind $testdir/lib/bdev/vbdev_ro.c/vbdev_ro_ut
 }
 
 function unittest_blob() {

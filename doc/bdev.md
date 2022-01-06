@@ -523,6 +523,21 @@ Example commands
 
 `rpc.py bdev_raid_delete Raid0`
 
+## Read-only {#bdev_ut_ro}
+
+The read-only vbdev module, bdev_ro, opens the underlying bdev read-only and
+takes a claim on the underlying bdev. This prevents other consumers from
+opening the underlying bdev for write access. Multiple bdev_ro instances that
+use the same underlying bdev will share the claim on the underlying bdev. The
+claim on the underlying bdev is released when the last bdev_ro device that uses
+it is closed.
+
+Example commands
+
+`rpc.py bdev_ro_create -n ro0 nvme0n1p4`
+
+`rpc.py bdev_ro_delete -n ro0`
+
 ## Split {#bdev_ug_split}
 
 The split block device module takes an underlying block device and splits it into
