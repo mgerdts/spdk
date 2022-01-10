@@ -255,12 +255,19 @@ spdk_bdev_notify_blockcnt_change(struct spdk_bdev *bdev, uint64_t size)
 	return 0;
 }
 
+static struct spdk_bdev *
+ut_get_base_bdev(struct spdk_bs_dev *dev)
+{
+	return NULL;
+}
+
 static void
 init_dev(struct lvol_ut_bs_dev *dev)
 {
 	memset(dev, 0, sizeof(*dev));
 	dev->bs_dev.blockcnt = DEV_BUFFER_BLOCKCNT;
 	dev->bs_dev.blocklen = DEV_BUFFER_BLOCKLEN;
+	dev->bs_dev.get_base_bdev = ut_get_base_bdev;
 }
 
 static void
