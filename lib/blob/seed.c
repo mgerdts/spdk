@@ -37,6 +37,8 @@
 #include "spdk/bdev.h"
 #include "spdk/thread.h"
 #include "spdk/log.h"
+#include "spdk/string.h"
+#include "bdev/ro/bdev_ro.h"
 
 #include "spdk_internal/event.h"
 
@@ -55,9 +57,13 @@ static void seed_unload_on_thread(void *_ctx)
 static void seed_unload_on_thread_done(void *_ctx)
 {
 	struct spdk_bs_dev *dev = _ctx;
+	struct spdk_bdev_desc *ro_desc = dev->seed_ctx->bdev_desc;
 
-	if (dev->seed_ctx->bdev_desc != NULL) {
-		spdk_bdev_close(dev->seed_ctx->bdev_desc);
+	if (ro_desc != NULL) {
+		struct spdk_bdev *ro_bdev = spdk_bdev_desc_get_bdev(ro_desc);
+
+		spdk_bdev_close(ro_desc);
+		delete_ro_disk(ro_bdev, NULL, NULL);
 	}
 
 	free(dev->seed_ctx->io_channels);
@@ -262,10 +268,12 @@ void
 bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		   blob_load_seed_cpl cb_fn, void *cb_arg)
 {
-	struct spdk_bdev *bdev;
+	struct spdk_bdev *bdev, *ro_bdev;
 	struct spdk_bs_dev *back;
 	struct seed_ctx *ctx;
 	struct seed_bs_load_cpl_ctx *seed_load_cpl;
+	struct vbdev_ro_opts opts = { 0 };
+	char *ro_name;
 	int ret;
 
 	bdev = spdk_bdev_get_by_uuid(seed_uuid);
@@ -291,6 +299,28 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		return;
 	}
 
+	ro_name = spdk_sprintf_alloc("blob_base_0x%016" PRIx64, front->id);
+	if (ro_name == NULL) {
+		SPDK_ERRLOG("Unable to allocate memory for ro blob name\n");
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+
+	opts.name = ro_name;
+	ret = create_ro_disk(bdev->name, &opts, &ro_bdev);
+	if (ret != 0) {
+		SPDK_ERRLOG("Unable to create external snapshot %s from %s\n",
+			    opts.name, bdev->name);
+		free(ro_name);
+		cb_fn(cb_arg, ret);
+		return;
+	}
+	SPDK_NOTICELOG("Created read-only device %s with base bdev %s\n",
+		       opts.name, bdev->name);
+	free(ro_name);
+	/* Prevent accidental use of the wrong bdev below. */
+	bdev = NULL;
+
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM);
@@ -314,11 +344,12 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		return;
 	}
 
-	ctx->bdev = bdev;
-	ret = spdk_bdev_open_ext(bdev->name, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
+	ctx->bdev = ro_bdev;
+	ret = spdk_bdev_open_ext(ro_bdev->name, false, seed_bdev_event_cb, ctx,
+				 &ctx->bdev_desc);
 	if (ret != 0) {
-		SPDK_ERRLOG("seed device %s (uuid %s) could not be opened for blob 0x%"
-			    PRIx64 ": error %d\n", bdev->name, seed_uuid, front->id, ret);
+		SPDK_ERRLOG("Unable to open read-only bdev %s\n", ro_bdev->name);
+		delete_ro_disk(ro_bdev, NULL, NULL);
 		free(ctx->io_channels);
 		free(ctx);
 		free(seed_load_cpl);
@@ -326,12 +357,10 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		return;
 	}
 
-	// XXX-mg should set bdev->claimed, but need to coordinate among all
-	// instances that have this one open.
-
 	back = calloc(1, sizeof(*back));
 	if (back == NULL) {
 		spdk_bdev_close(ctx->bdev_desc);
+		delete_ro_disk(ro_bdev, NULL, NULL);
 		free(ctx->io_channels);
 		free(ctx);
 		free(seed_load_cpl);
@@ -350,8 +379,8 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 	back->writev_ext = seed_writev_ext;
 	back->write_zeroes = seed_write_zeroes;
 	back->unmap = seed_unmap;
-	back->blockcnt = spdk_bdev_get_num_blocks(bdev);
-	back->blocklen = spdk_bdev_get_block_size(bdev);
+	back->blockcnt = spdk_bdev_get_num_blocks(ro_bdev);
+	back->blocklen = spdk_bdev_get_block_size(ro_bdev);
 	back->seed_ctx = ctx;
 
 	front->back_bs_dev = back;

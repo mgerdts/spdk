@@ -40,6 +40,8 @@
 #include "spdk/barrier.h"
 #include "thread/thread_internal.h"
 
+#include "spdk/bdev_module.h"
+#include "bdev/ro/bdev_ro.h"
 #include "spdk_cunit.h"
 #include "unit/lib/blob/bs_dev_common.c"
 #include "common/lib/test_env.c"
@@ -80,6 +82,11 @@ DEFINE_STUB(spdk_bdev_get_num_blocks, uint64_t, (const struct spdk_bdev *bdev), 
 DEFINE_STUB(spdk_bdev_get_io_channel, struct spdk_io_channel *,
 	    (struct spdk_bdev_desc *desc), NULL);
 DEFINE_STUB(spdk_bdev_get_by_uuid, struct spdk_bdev *, (const char *uuid), NULL);
+DEFINE_STUB(create_ro_disk, int,
+	    (const char *bdev_name, const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp), -ENOTSUP);
+DEFINE_STUB_V(delete_ro_disk,
+	      (struct spdk_bdev *ro_bdev, spdk_bdev_unregister_cb cb_fn, void *cb_arg));
+DEFINE_STUB_V(seed_unload_on_thread_done, (void *_ctx));
 
 struct ut_request {
 	fs_request_fn fn;

@@ -45,6 +45,7 @@
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
 #include "thread/thread.c"
+#include "bdev/ro/bdev_ro.c"
 #include "../bs_bdev_malloc.c"
 
 #pragma GCC diagnostic ignored "-Wunused-function"
