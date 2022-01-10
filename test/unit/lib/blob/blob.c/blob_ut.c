@@ -7393,150 +7393,6 @@ blob_extclone_io_512_4096(void)
 }
 
 static void
-blob_extclone_claim(void)
-{
-	struct spdk_blob_store	*bs = g_bs;
-	struct spdk_blob	*blob1, *blob2;
-	spdk_blob_id		blobid1, blobid2;
-	struct spdk_bdev_desc	*desc = NULL;
-	struct spdk_blob_opts	opts;
-	struct spdk_bdev	*bdev = NULL;
-	struct spdk_bdev_module	fake_module;
-	int			rc;
-
-	/* Create bdev to be used as external device */
-	rc = create_malloc_disk(&bdev, NULL, NULL, 2048, 512);
-	CU_ASSERT(rc == 0);
-	CU_ASSERT(bdev != NULL);
-	CU_ASSERT(bdev->internal.claim_module == NULL);
-
-	/* Clone the bdev.  It should not be claimed until opened. */
-	ut_spdk_blob_opts_init(&opts);
-	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
-	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
-	blobid1 = g_blobid;
-	CU_ASSERT(bdev->internal.claim_module == NULL);
-
-	/* Open the clone */
-	spdk_bs_open_blob(bs, blobid1, blob_op_with_handle_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blob != NULL);
-	blob1 = g_blob;
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-	CU_ASSERT(blob1->back_bs_dev->seed_ctx->bdev_desc->write == false);
-
-	/* Try to open the bdev rw; should fail due to claim. */
-	rc = spdk_bdev_open_ext(spdk_bdev_get_name(bdev), true, bdev_event_cb,
-				NULL, &desc);
-	CU_ASSERT(rc == -EPERM);
-
-	/* Open the bdev ro, then try to claim. Should fail. */
-	rc = spdk_bdev_open_ext(spdk_bdev_get_name(bdev), false, bdev_event_cb,
-				NULL, &desc);
-	CU_ASSERT(rc == 0);
-	rc = spdk_bdev_module_claim_bdev(bdev, NULL, &fake_module);
-	CU_ASSERT(rc == -EPERM);
-	rc = spdk_bdev_module_claim_bdev(bdev, desc, &fake_module);
-	CU_ASSERT(rc == -EPERM);
-
-	/* Close blob, should be no claim. */
-	spdk_blob_close(blob1, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bdev->internal.claim_module == NULL);
-
-	/*
-	 * Open same blob twice, close once, claim should remain.
-	 */
-	spdk_bs_open_blob(bs, blobid1, blob_op_with_handle_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blob != NULL);
-	blob1 = g_blob;
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-	CU_ASSERT(blob1->back_bs_dev->seed_ctx->bdev_desc->write == false);
-
-	spdk_bs_open_blob(bs, blobid1, blob_op_with_handle_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blob != NULL);
-	blob2 = g_blob;
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-	CU_ASSERT(blob2->back_bs_dev->seed_ctx->bdev_desc->write == false);
-
-	spdk_blob_close(blob1, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-
-	/* Close the second one, claim should be gone. */
-	spdk_blob_close(blob2, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bdev->internal.claim_module == NULL);
-
-	/*
-	 * Create a second clone of the same bdev. A claim should exist after
-	 * the first is opened and should remain after successful open of the
-	 * second.
-	 */
-	ut_spdk_blob_opts_init(&opts);
-	spdk_uuid_copy(&opts.external_snapshot_uuid, &bdev->uuid);
-	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
-	blobid2 = g_blobid;
-	CU_ASSERT(bdev->internal.claim_module == NULL);
-
-	/* Open the first clone */
-	spdk_bs_open_blob(bs, blobid1, blob_op_with_handle_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blob != NULL);
-	blob1 = g_blob;
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-	CU_ASSERT(blob1->back_bs_dev->seed_ctx->bdev_desc->write == false);
-
-	/* Open the second clone */
-	/* XXX-mg failing here - need to support multiple claims. */
-	spdk_bs_open_blob(bs, blobid2, blob_op_with_handle_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(g_blob != NULL);
-	blob2 = g_blob;
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-	CU_ASSERT(blob1->back_bs_dev->seed_ctx->bdev_desc->write == false);
-
-	/*
-	 * Close the two blobs. Claim should remain after closing the first and
-	 * should be gone after closing the second.
-	 */
-	spdk_blob_close(blob1, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bdev->internal.claim_module == &seed_if);
-
-	spdk_blob_close(blob2, blob_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == 0);
-	CU_ASSERT(bdev->internal.claim_module == NULL);
-
-	/* XXX-mg add seed_if.module_fini() to be sure no claims remain. */
-
-	/* Clean up */
-	g_blob = NULL;
-	g_blobid = SPDK_BLOBID_INVALID;
-	delete_malloc_disk(bdev, bs_op_complete, NULL);
-	CU_ASSERT(g_bserrno == 0);
-}
-
-
-static void
 suite_bs_setup(void)
 {
 	struct spdk_bs_dev *dev;
@@ -7708,14 +7564,12 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_persist_test);
 	CU_ADD_TEST(suite_bs, blob_decouple_snapshot);
 #endif
-
 	CU_ADD_TEST(suite_bs, blob_extclone_defaults);
 	CU_ADD_TEST(suite_bs, blob_extclone_size);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_4096);
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
-	CU_ADD_TEST(suite_bs, blob_extclone_claim);
 
 	allocate_cores(1);
 	allocate_threads(2);

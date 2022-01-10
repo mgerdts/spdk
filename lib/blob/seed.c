@@ -42,132 +42,26 @@
 
 #include "blobstore.h"
 
-/*
- * The seed vbdev module exists so that it may claim external snapshots.
- */
-static int
-vbdev_seed_init(void) {
-	return 0;
-}
-
-static struct spdk_bdev_module seed_if = {
-	.name = "seed",
-	.module_init = vbdev_seed_init,
-};
-
-SPDK_BDEV_MODULE_REGISTER(seed, &seed_if);
-
-struct seed_claim {
-	const struct spdk_bdev *bdev;
-	const struct spdk_uuid *uuid;
-	uint32_t count;
-	RB_ENTRY(seed_claim) node;
-};
-
-static int
-seed_claim_cmp(struct seed_claim *claim1, struct seed_claim *claim2)
-{
-	return spdk_uuid_compare(claim1->uuid, claim2->uuid);
-}
-
-RB_HEAD(seed_claims_tree, seed_claim) g_seed_claims = RB_INITIALIZER(&head);
-RB_GENERATE_STATIC(seed_claims_tree, seed_claim, node, seed_claim_cmp);
-pthread_mutex_t g_seed_claims_mutex;
-
-static int
-vbdev_seed_claim_bdev(struct spdk_bdev *bdev)
-{
-	struct seed_claim *claim, *existing;
-	struct seed_claim find = {};
-	int ret;
-
-	find.uuid = spdk_bdev_get_uuid(bdev);
-
-	pthread_mutex_lock(&g_seed_claims_mutex);
-
-	claim = RB_FIND(seed_claims_tree, &g_seed_claims, &find);
-	if (claim != NULL) {
-		claim->count++;
-		ret = 0;
-		goto done;
-	}
-
-	ret = spdk_bdev_module_claim_bdev(bdev, NULL, &seed_if);
-	if (ret != 0) {
-		goto done;
-	}
-	claim = calloc(1, sizeof (*claim));
-	if (claim == NULL) {
-		ret = -ENOMEM;
-		goto done;
-	}
-	claim->bdev = bdev;
-	claim->uuid = find.uuid;
-	claim->count = 1;
-
-	existing = RB_INSERT(seed_claims_tree, &g_seed_claims, claim);
-	if (existing != NULL) {
-		SPDK_ERRLOG("collision while inserting claim for bdev %s\n",
-			    spdk_bdev_get_name(bdev));
-		abort();
-	}
-	assert(existing == NULL);
-	ret = 0;
-
-done:
-	pthread_mutex_unlock(&g_seed_claims_mutex);
-	return ret;
-}
-
-static void
-vbdev_seed_release_bdev(struct spdk_bdev *bdev)
-{
-	struct seed_claim *claim;
-	struct seed_claim find = {};
-
-	find.uuid = spdk_bdev_get_uuid(bdev);
-
-	pthread_mutex_lock(&g_seed_claims_mutex);
-
-	claim = RB_FIND(seed_claims_tree, &g_seed_claims, &find);
-	if (claim == NULL) {
-		SPDK_ERRLOG("trying to release bdev %s but not in claim tree\n",
-			    spdk_bdev_get_name(bdev));
-		abort();
-	}
-	if (claim->count == 0) {
-		SPDK_ERRLOG("trying to release bdev %s with count = 0\n",
-			    spdk_bdev_get_name(bdev));
-		abort();
-	}
-
-	claim->count--;
-	if (claim->count == 0) {
-		RB_REMOVE(seed_claims_tree, &g_seed_claims, claim);
-		free(claim);
-		spdk_bdev_module_release_bdev(bdev);
-	}
-
-	pthread_mutex_unlock(&g_seed_claims_mutex);
-}
-
 static void seed_unload_on_thread(void *_ctx)
 {
-	struct seed_ctx *ctx = _ctx;
+	struct spdk_bs_dev *dev = _ctx;
 	uint64_t tid = spdk_thread_get_id(spdk_get_thread());
 
-	if (tid <= ctx->io_channels_count && ctx->io_channels[tid]) {
-		spdk_put_io_channel(ctx->io_channels[tid]);
+	if (tid <= dev->seed_ctx->io_channels_count && dev->seed_ctx->io_channels[tid]) {
+		spdk_put_io_channel(dev->seed_ctx->io_channels[tid]);
 	}
 }
 
 static void seed_unload_on_thread_done(void *_ctx)
 {
-	struct seed_ctx *ctx = _ctx;
+	struct spdk_bs_dev *dev = _ctx;
 
-	free(ctx->io_channels);
-	// XXX-mg free(dev->seed_ctx)?
-	free(ctx);
+	if (dev->seed_ctx->bdev_desc != NULL) {
+		spdk_bdev_close(dev->seed_ctx->bdev_desc);
+	}
+
+	free(dev->seed_ctx->io_channels);
+	free(dev);
 }
 
 static void
@@ -176,15 +70,10 @@ seed_destroy(struct spdk_bs_dev *dev)
 	struct seed_ctx *ctx = dev->seed_ctx;
 
 	if (ctx != NULL) {
-		vbdev_seed_release_bdev(ctx->bdev);
-		ctx->bdev = NULL;
-		spdk_bdev_close(ctx->bdev_desc);
-		ctx->bdev_desc = NULL;
-
-		spdk_for_each_thread(seed_unload_on_thread, dev->seed_ctx,
-				     seed_unload_on_thread_done);
+		spdk_for_each_thread(seed_unload_on_thread, dev, seed_unload_on_thread_done);
+	} else {
+		free(dev);
 	}
-	free(dev);
 }
 
 static void
@@ -377,7 +266,7 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 	struct spdk_bs_dev *back;
 	struct seed_ctx *ctx;
 	struct seed_bs_load_cpl_ctx *seed_load_cpl;
-	int rc;
+	int ret;
 
 	bdev = spdk_bdev_get_by_uuid(seed_uuid);
 	if (bdev == NULL) {
@@ -426,30 +315,22 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 	}
 
 	ctx->bdev = bdev;
-	rc = spdk_bdev_open_ext(bdev->name, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
-	if (rc != 0) {
+	ret = spdk_bdev_open_ext(bdev->name, false, seed_bdev_event_cb, ctx, &ctx->bdev_desc);
+	if (ret != 0) {
 		SPDK_ERRLOG("seed device %s (uuid %s) could not be opened for blob 0x%"
-			    PRIx64 ": error %d\n", bdev->name, seed_uuid, front->id, rc);
+			    PRIx64 ": error %d\n", bdev->name, seed_uuid, front->id, ret);
 		free(ctx->io_channels);
 		free(ctx);
 		free(seed_load_cpl);
-		cb_fn(cb_arg, rc);
+		cb_fn(cb_arg, ret);
 		return;
 	}
 
-	rc = vbdev_seed_claim_bdev(bdev);
-	if (rc != 0) {
-		free(ctx->io_channels);
-		free(ctx);
-		free(seed_load_cpl);
-		cb_fn(cb_arg, -EINVAL);
-		return;
-	}
-
+	// XXX-mg should set bdev->claimed, but need to coordinate among all
+	// instances that have this one open.
 
 	back = calloc(1, sizeof(*back));
 	if (back == NULL) {
-		vbdev_seed_release_bdev(bdev);
 		spdk_bdev_close(ctx->bdev_desc);
 		free(ctx->io_channels);
 		free(ctx);

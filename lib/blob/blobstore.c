@@ -1362,10 +1362,7 @@ static void blob_load_seed_done(void *ctx, int rc)
 	struct blob_load_seed_ctx *seed_load_ctx = ctx;
 	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
 
-	if (rc == 0) {
-		blob->parent_id = SPDK_BLOBID_SEED;
-	}
-
+	blob->parent_id = SPDK_BLOBID_SEED;
 	blob_load_final(seed_load_ctx->ctx, rc);
 	free(seed_load_ctx);
 }
