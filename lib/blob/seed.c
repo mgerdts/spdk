@@ -67,6 +67,7 @@ static void seed_unload_on_thread_done(void *_ctx)
 	}
 
 	free(dev->seed_ctx->io_channels);
+	free(dev->seed_ctx);
 	free(dev);
 }
 
