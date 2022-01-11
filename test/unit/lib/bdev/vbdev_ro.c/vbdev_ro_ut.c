@@ -492,7 +492,7 @@ suite_setup(void)
 	init_accel();
 	spdk_bdev_initialize(save_errno_cb, &cb_errno);
 	poll_threads();
-	assert(cb_errno == 0);
+	CU_ASSERT(cb_errno == 0);
 }
 
 static void

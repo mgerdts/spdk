@@ -47,7 +47,6 @@ struct vbdev_ro_claim {
 
 struct vbdev_ro {
 	struct spdk_bdev	bdev;
-	char			*name;
 	struct vbdev_ro_claim	*claim;
 };
 
@@ -81,7 +80,7 @@ vbdev_ro_destruct(void *ctx)
 	struct vbdev_ro *ro_vbdev = ctx;
 
 	vbdev_ro_release_bdev(ro_vbdev->claim);
-	free(ro_vbdev->name);
+	free(ro_vbdev->bdev.name);
 	free(ro_vbdev);
 	return 0;
 }
