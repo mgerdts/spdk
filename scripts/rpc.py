@@ -466,7 +466,9 @@ if __name__ == "__main__":
                                        nvme_adminq_poll_period_us=args.nvme_adminq_poll_period_us,
                                        nvme_ioq_poll_period_us=args.nvme_ioq_poll_period_us,
                                        io_queue_requests=args.io_queue_requests,
-                                       delay_cmd_submit=args.delay_cmd_submit)
+                                       delay_cmd_submit=args.delay_cmd_submit,
+                                       transport_retry_count=args.transport_retry_count,
+                                       bdev_retry_count=args.bdev_retry_count)
 
     p = subparsers.add_parser('bdev_nvme_set_options', aliases=['set_bdev_nvme_options'],
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -479,7 +481,7 @@ if __name__ == "__main__":
     p.add_argument('-k', '--keep-alive-timeout-ms',
                    help="Keep alive timeout period in millisecond. If 0, disable keep-alive.", type=int)
     p.add_argument('-n', '--retry-count',
-                   help='the number of attempts per I/O when an I/O fails', type=int)
+                   help='the number of attempts per I/O when an I/O fails. (deprecated, please use --transport-retry-count.)', type=int)
     p.add_argument('--arbitration-burst',
                    help='the value is expressed as a power of two', type=int)
     p.add_argument('--low-priority-weight',
@@ -497,6 +499,11 @@ if __name__ == "__main__":
     p.add_argument('-d', '--disable-delay-cmd-submit',
                    help='Disable delaying NVMe command submission, i.e. no batching of multiple commands',
                    action='store_false', dest='delay_cmd_submit', default=True)
+    p.add_argument('-c', '--transport-retry-count',
+                   help='the number of attempts per I/O in the transport layer when an I/O fails.', type=int)
+    p.add_argument('-r', '--bdev-retry-count',
+                   help='the number of attempts per I/O in the bdev layer when an I/O fails. -1 means infinite retries.', type=int)
+
     p.set_defaults(func=bdev_nvme_set_options)
 
     def bdev_nvme_set_hotplug(args):
@@ -527,7 +534,11 @@ if __name__ == "__main__":
                                                          hdgst=args.hdgst,
                                                          ddgst=args.ddgst,
                                                          fabrics_timeout=args.fabrics_timeout,
-                                                         multipath=args.multipath))
+                                                         multipath=args.multipath,
+                                                         num_io_queues=args.num_io_queues,
+                                                         ctrlr_loss_timeout_sec=args.ctrlr_loss_timeout_sec,
+                                                         reconnect_delay_sec=args.reconnect_delay_sec,
+                                                         ctrlr_fail_timeout_sec=args.ctrlr_fail_timeout_sec))
 
     p = subparsers.add_parser('bdev_nvme_attach_controller', aliases=['construct_nvme_bdev'],
                               help='Add bdevs with nvme backend')
@@ -557,7 +568,17 @@ if __name__ == "__main__":
     p.add_argument('-d', '--ddgst',
                    help='Enable TCP data digest.', action='store_true')
     p.add_argument('--fabrics-timeout', type=int, help='Fabrics connect timeout in microseconds')
-    p.add_argument('-x', '--multipath', help='Set multipath behavior (disable, failover)')
+    p.add_argument('-x', '--multipath', help='Set multipath behavior (disable, failover, multipath)')
+    p.add_argument('--num-io-queues', type=int, help='Set the number of IO queues to request during initialization.')
+    p.add_argument('-l', '--ctrlr-loss-timeout-sec',
+                   help="""Time to wait until ctrlr is reconnected before deleting ctrlr.
+                   -1 means infinite reconnect retries. 0 means reconnect is not throttled.""",
+                   type=int)
+    p.add_argument('-o', '--reconnect-delay-sec', help='Time to delay a reconnect trial.', type=int)
+    p.add_argument('-u', '--ctrlr-fail-timeout-sec',
+                   help="""Time to wait until ctrlr is reconnected before failing I/O to ctrlr.
+                   0 means no such timeout.""",
+                   type=int)
     p.set_defaults(func=bdev_nvme_attach_controller)
 
     def bdev_nvme_get_controllers(args):
@@ -2057,7 +2078,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
 
     p = subparsers.add_parser('nvmf_subsystem_listener_set_ana_state', help='Set ANA state of a listener for an NVMe-oF subsystem')
     p.add_argument('nqn', help='NVMe-oF subsystem NQN')
-    p.add_argument('-n', '--ana-state', help='ANA state to set: optimized, non-optimized, or inaccessible', required=True)
+    p.add_argument('-n', '--ana-state', help='ANA state to set: optimized, non_optimized, or inaccessible', required=True)
     p.add_argument('-t', '--trtype', help='NVMe-oF transport type: e.g., rdma', required=True)
     p.add_argument('-a', '--traddr', help='NVMe-oF transport address: e.g., an ip address', required=True)
     p.add_argument('-p', '--tgt-name', help='The name of the parent NVMe-oF target (optional)', type=str)

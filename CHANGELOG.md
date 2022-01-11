@@ -1,6 +1,32 @@
 # Changelog
 
-## v21.10: DMA lib, Async NVMe driver, Container scripts
+## v22.01: (Upcoming Release)
+
+### nvme
+
+API `spdk_nvme_trtype_is_fabrics` was added to return existing transport type
+is fabric or not.
+
+### bdev_nvme
+
+Added `num_io_queues` to `bdev_nvme_attach_controller` RPC to allow specifying amount
+of requested IO queues.
+
+### bdev
+
+The parameter `retry_count` of the RPC `bdev_nvme_set_options` was deprecated and will be
+removed in SPDK 22.04, and the parameter `transport_retry_count` is added and used instead.
+
+An new parameter `bdev_retry_count` is added to the RPC `bdev_nvme_set_options`.
+
+### nvme
+
+New APIs, `spdk_nvme_ctrlr_disconnect`, `spdk_nvme_ctrlr_reconnect_async`, and
+`spdk_nvme_ctrlr_reconnect_poll_async`, have been added to improve error recovery, and
+the existing APIs,`spdk_nvme_ctrlr_reset_async` and `spdk_nvme_ctrlr_reset_poll_async`
+were deprecated.
+
+## v21.10
 
 Structure `spdk_nvmf_target_opts` has been extended with new member `discovery_filter` which allows to specify
 filtering rules applied during discovery log generation. Refer to `enum spdk_nvmf_tgt_discovery_filter` for more info.

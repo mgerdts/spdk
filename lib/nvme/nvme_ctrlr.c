@@ -460,6 +460,12 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 	struct spdk_nvme_io_qpair_opts	opts;
 	int				rc;
 
+	if (spdk_unlikely(ctrlr->state != NVME_CTRLR_STATE_READY)) {
+		/* When controller is resetting or initializing, free_io_qids is deleted or not created yet.
+		 * We can't create IO qpair in that case */
+		return NULL;
+	}
+
 	/*
 	 * Get the default options, then overwrite them with the user-provided options
 	 * up to opts_size.
@@ -611,6 +617,8 @@ spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
 		spdk_nvme_poll_group_remove(qpair->poll_group->group, qpair);
 	}
 
+	nvme_transport_ctrlr_disconnect_qpair(ctrlr, qpair);
+
 	/* Do not retry. */
 	nvme_qpair_set_state(qpair, NVME_QPAIR_DESTROYING);
 
@@ -620,7 +628,7 @@ spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
 	 * with that qpair, since the callbacks will also be foreign to this process.
 	 */
 	if (qpair->active_proc == nvme_ctrlr_get_current_process(ctrlr)) {
-		nvme_qpair_abort_reqs(qpair, 1);
+		nvme_qpair_abort_all_queued_reqs(qpair, 0);
 	}
 
 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
@@ -1575,8 +1583,8 @@ nvme_ctrlr_abort_queued_aborts(struct spdk_nvme_ctrlr *ctrlr)
 	}
 }
 
-static int
-nvme_ctrlr_reset_pre(struct spdk_nvme_ctrlr *ctrlr)
+int
+spdk_nvme_ctrlr_disconnect(struct spdk_nvme_ctrlr *ctrlr)
 {
 	struct spdk_nvme_qpair	*qpair;
 
@@ -1622,10 +1630,34 @@ nvme_ctrlr_reset_pre(struct spdk_nvme_ctrlr *ctrlr)
 
 	spdk_bit_array_free(&ctrlr->free_io_qids);
 
+	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+	return 0;
+}
+
+void
+spdk_nvme_ctrlr_reconnect_async(struct spdk_nvme_ctrlr *ctrlr)
+{
+	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+
 	/* Set the state back to INIT to cause a full hardware reset. */
 	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_INIT, NVME_TIMEOUT_INFINITE);
 
-	/* Return without releasing ctrlr_lock. ctrlr_lock will be released when spdk_nvme_ctrlr_reset_poll_async() returns 0. */
+	/* Return without releasing ctrlr_lock. ctrlr_lock will be released when
+	 * spdk_nvme_ctrlr_reset_poll_async() returns 0.
+	 */
+}
+
+static int
+nvme_ctrlr_reset_pre(struct spdk_nvme_ctrlr *ctrlr)
+{
+	int rc;
+
+	rc = spdk_nvme_ctrlr_disconnect(ctrlr);
+	if (rc != 0) {
+		return rc;
+	}
+
+	spdk_nvme_ctrlr_reconnect_async(ctrlr);
 	return 0;
 }
 
@@ -1633,8 +1665,8 @@ nvme_ctrlr_reset_pre(struct spdk_nvme_ctrlr *ctrlr)
  * This function will be called when the controller is being reinitialized.
  * Note: the ctrlr_lock must be held when calling this function.
  */
-static int
-nvme_ctrlr_reinit_on_reset(struct spdk_nvme_ctrlr *ctrlr)
+int
+spdk_nvme_ctrlr_reconnect_poll_async(struct spdk_nvme_ctrlr *ctrlr)
 {
 	struct spdk_nvme_qpair	*qpair;
 	int rc = 0, rc_tmp = 0;
@@ -1707,7 +1739,7 @@ nvme_ctrlr_reset_poll_async(struct spdk_nvme_ctrlr_reset_ctx *ctrlr_reset_ctx)
 {
 	struct spdk_nvme_ctrlr *ctrlr = ctrlr_reset_ctx->ctrlr;
 
-	return nvme_ctrlr_reinit_on_reset(ctrlr);
+	return spdk_nvme_ctrlr_reconnect_poll_async(ctrlr);
 }
 
 int
@@ -5126,6 +5158,7 @@ spdk_nvme_ctrlr_alloc_qid(struct spdk_nvme_ctrlr *ctrlr)
 {
 	uint32_t qid;
 
+	assert(ctrlr->free_io_qids);
 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
 	qid = spdk_bit_array_find_first_set(ctrlr->free_io_qids, 1);
 	if (qid > ctrlr->opts.num_io_queues) {

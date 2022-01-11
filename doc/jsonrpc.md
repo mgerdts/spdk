@@ -2777,7 +2777,7 @@ action_on_timeout          | Optional | string      | Action to take on command 
 timeout_us                 | Optional | number      | Timeout for each command, in microseconds. If 0, don't track timeouts
 timeout_admin_us           | Optional | number      | Timeout for each admin command, in microseconds. If 0, treat same as io timeouts ('timeout_us')
 keep_alive_timeout_ms      | Optional | number      | Keep alive timeout period in milliseconds, default is 10s
-retry_count                | Optional | number      | The number of attempts per I/O before an I/O fails
+retry_count                | Optional | number      | The number of attempts per I/O before an I/O fails. (Deprecated. Please use transport_retry_count instead.)
 arbitration_burst          | Optional | number      | The value is expressed as a power of two, a value of 111b indicates no limit
 low_priority_weight        | Optional | number      | The maximum number of commands that the controller may launch at one time from a low priority queue
 medium_priority_weight     | Optional | number      | The maximum number of commands that the controller may launch at one time from a medium priority queue
@@ -2786,6 +2786,8 @@ nvme_adminq_poll_period_us | Optional | number      | How often the admin queue 
 nvme_ioq_poll_period_us    | Optional | number      | How often I/O queues are polled for completions, in microseconds. Default: 0 (as fast as possible).
 io_queue_requests          | Optional | number      | The number of requests allocated for each NVMe I/O queue. Default: 512.
 delay_cmd_submit           | Optional | boolean     | Enable delaying NVMe command submission to allow batching of multiple commands. Default: `true`.
+transport_retry_count      | Optional | number      | The number of attempts per I/O in the transport layer before an I/O fails.
+bdev_retry_count           | Optional | number      | The number of attempts per I/O in the bdev layer before an I/O fails. -1 means infinite retries.
 
 #### Example
 
@@ -2795,7 +2797,7 @@ Example request:
 request:
 {
   "params": {
-    "retry_count": 5,
+    "transport_retry_count": 5,
     "arbitration_burst": 3,
     "low_priority_weight": 8,
     "medium_priority_weight":8,
@@ -2892,7 +2894,11 @@ prchk_guard                | Optional | bool        | Enable checking of PI guar
 hdgst                      | Optional | bool        | Enable TCP header digest
 ddgst                      | Optional | bool        | Enable TCP data digest
 fabrics_connect_timeout_us | Optional | bool        | Timeout for fabrics connect (in microseconds)
-multipath                  | Optional | string      | Multipathing behavior: disable, failover. Default is failover.
+multipath                  | Optional | string      | Multipathing behavior: disable, failover, multipath. Default is failover.
+num_io_queues              | Optional | uint32_t    | The number of IO queues to request during initialization. Range: (0, UINT16_MAX + 1], Default is 1024.
+ctrlr_loss_timeout_sec     | Optional | number      | Time to wait until ctrlr is reconnected before deleting ctrlr.  -1 means infinite reconnects. 0 means no reconnect.
+reconnect_delay_sec        | Optional | number      | Time to delay a reconnect trial. 0 means no reconnect.
+ctrlr_fail_timeout_sec     | Optional | number      | Time to wait until ctrlr is reconnected before failing I/O to ctrlr. 0 means no such timeout.
 
 #### Example
 

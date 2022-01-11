@@ -55,6 +55,9 @@ struct nvme_async_probe_ctx {
 	const char **names;
 	uint32_t count;
 	uint32_t prchk_flags;
+	int32_t ctrlr_loss_timeout_sec;
+	uint32_t reconnect_delay_sec;
+	uint32_t ctrlr_fail_timeout_sec;
 	struct spdk_poller *poller;
 	struct spdk_nvme_transport_id trid;
 	struct spdk_nvme_ctrlr_opts opts;
@@ -73,6 +76,7 @@ struct nvme_ns {
 	struct nvme_bdev		*bdev;
 	uint32_t			ana_group_id;
 	enum spdk_nvme_ana_state	ana_state;
+	bool				ana_state_updating;
 	struct nvme_async_probe_ctx	*probe_ctx;
 	TAILQ_ENTRY(nvme_ns)		tailq;
 	RB_ENTRY(nvme_ns)		node;
@@ -81,6 +85,7 @@ struct nvme_ns {
 struct nvme_bdev_io;
 struct nvme_bdev_ctrlr;
 struct nvme_bdev;
+struct nvme_io_path;
 
 struct nvme_path_id {
 	struct spdk_nvme_transport_id		trid;
@@ -100,9 +105,11 @@ struct nvme_ctrlr {
 	struct spdk_nvme_ctrlr			*ctrlr;
 	struct nvme_path_id			*active_path_id;
 	int					ref;
-	bool					resetting;
-	bool					failover_in_progress;
-	bool					destruct;
+
+	uint32_t				resetting : 1;
+	uint32_t				destruct : 1;
+	uint32_t				ana_log_page_updating : 1;
+	uint32_t				reconnect_timedout : 1;
 	/**
 	 * PI check flags. This flags is set to NVMe controllers created only
 	 * through bdev_nvme_attach_controller RPC or .INI config file. Hot added
@@ -118,10 +125,15 @@ struct nvme_ctrlr {
 
 	bdev_nvme_reset_cb			reset_cb_fn;
 	void					*reset_cb_arg;
-	struct spdk_nvme_ctrlr_reset_ctx	*reset_ctx;
 	/* Poller used to check for reset/detach completion */
 	struct spdk_poller			*reset_detach_poller;
 	struct spdk_nvme_detach_ctx		*detach_ctx;
+
+	struct spdk_poller			*reconnect_timer;
+	uint64_t				reconnect_start_tsc;
+	int32_t					ctrlr_loss_timeout_sec;
+	uint32_t				reconnect_delay_sec;
+	uint32_t				ctrlr_fail_timeout_sec;
 
 	/** linked list pointer for device list */
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
@@ -161,6 +173,10 @@ struct nvme_ctrlr_channel {
 	struct nvme_poll_group		*group;
 	TAILQ_HEAD(, spdk_bdev_io)	pending_resets;
 	TAILQ_ENTRY(nvme_ctrlr_channel)	tailq;
+
+	/* The following is used to update io_path cache of nvme_bdev_channels. */
+	TAILQ_HEAD(, nvme_io_path)	io_path_list;
+
 };
 
 #define nvme_ctrlr_channel_get_ctrlr(ctrlr_ch)	\
@@ -170,9 +186,14 @@ struct nvme_io_path {
 	struct nvme_ns			*nvme_ns;
 	struct nvme_ctrlr_channel	*ctrlr_ch;
 	STAILQ_ENTRY(nvme_io_path)	stailq;
+
+	/* The following are used to update io_path cache of the nvme_bdev_channel. */
+	struct nvme_bdev_channel	*nbdev_ch;
+	TAILQ_ENTRY(nvme_io_path)	tailq;
 };
 
 struct nvme_bdev_channel {
+	struct nvme_io_path			*current_io_path;
 	STAILQ_HEAD(, nvme_io_path)		io_path_list;
 	TAILQ_HEAD(retry_io_head, spdk_bdev_io)	retry_io_list;
 	struct spdk_poller			*retry_io_poller;
@@ -191,9 +212,11 @@ struct nvme_poll_group {
 
 struct nvme_ctrlr *nvme_ctrlr_get_by_name(const char *name);
 
-typedef void (*nvme_ctrlr_for_each_fn)(struct nvme_ctrlr *nvme_ctrlr, void *ctx);
+struct nvme_bdev_ctrlr *nvme_bdev_ctrlr_get_by_name(const char *name);
 
-void nvme_ctrlr_for_each(nvme_ctrlr_for_each_fn fn, void *ctx);
+typedef void (*nvme_bdev_ctrlr_for_each_fn)(struct nvme_bdev_ctrlr *nbdev_ctrlr, void *ctx);
+
+void nvme_bdev_ctrlr_for_each(nvme_bdev_ctrlr_for_each_fn fn, void *ctx);
 
 void nvme_bdev_dump_trid_json(const struct spdk_nvme_transport_id *trid,
 			      struct spdk_json_write_ctx *w);
@@ -213,7 +236,8 @@ struct spdk_bdev_nvme_opts {
 	uint64_t timeout_us;
 	uint64_t timeout_admin_us;
 	uint32_t keep_alive_timeout_ms;
-	uint32_t retry_count;
+	/* The number of attempts per I/O in the transport layer before an I/O fails. */
+	uint32_t transport_retry_count;
 	uint32_t arbitration_burst;
 	uint32_t low_priority_weight;
 	uint32_t medium_priority_weight;
@@ -222,6 +246,8 @@ struct spdk_bdev_nvme_opts {
 	uint64_t nvme_ioq_poll_period_us;
 	uint32_t io_queue_requests;
 	bool delay_cmd_submit;
+	/* The number of attempts per I/O in the bdev layer before an I/O fails. */
+	int32_t bdev_retry_count;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);
@@ -237,7 +263,10 @@ int bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		     spdk_bdev_create_nvme_fn cb_fn,
 		     void *cb_ctx,
 		     struct spdk_nvme_ctrlr_opts *opts,
-		     bool multipath);
+		     bool multipath,
+		     int32_t ctrlr_loss_timeout_sec,
+		     uint32_t reconnect_delay_sec,
+		     uint32_t ctrlr_fail_timeout_sec);
 struct spdk_nvme_ctrlr *bdev_nvme_get_ctrlr(struct spdk_bdev *bdev);
 
 /**

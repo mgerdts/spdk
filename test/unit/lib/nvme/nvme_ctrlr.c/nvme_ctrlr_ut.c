@@ -69,7 +69,7 @@ DEFINE_STUB(nvme_ctrlr_cmd_set_host_id, int,
 DEFINE_STUB_V(nvme_ns_set_identify_data, (struct spdk_nvme_ns *ns));
 DEFINE_STUB_V(nvme_ns_set_id_desc_list_data, (struct spdk_nvme_ns *ns));
 DEFINE_STUB_V(nvme_ns_free_iocs_specific_data, (struct spdk_nvme_ns *ns));
-DEFINE_STUB_V(nvme_qpair_abort_reqs, (struct spdk_nvme_qpair *qpair, uint32_t dnr));
+DEFINE_STUB_V(nvme_qpair_abort_all_queued_reqs, (struct spdk_nvme_qpair *qpair, uint32_t dnr));
 DEFINE_STUB(spdk_nvme_poll_group_remove, int, (struct spdk_nvme_poll_group *group,
 		struct spdk_nvme_qpair *qpair), 0);
 DEFINE_STUB_V(nvme_io_msg_ctrlr_update, (struct spdk_nvme_ctrlr *ctrlr));
@@ -1501,6 +1501,7 @@ setup_qpairs(struct spdk_nvme_ctrlr *ctrlr, uint32_t num_io_queues)
 	ctrlr->page_size = 0x1000;
 	ctrlr->opts.num_io_queues = num_io_queues;
 	ctrlr->free_io_qids = spdk_bit_array_create(num_io_queues + 1);
+	ctrlr->state = NVME_CTRLR_STATE_READY;
 	SPDK_CU_ASSERT_FATAL(ctrlr->free_io_qids != NULL);
 
 	spdk_bit_array_clear(ctrlr->free_io_qids, 0);
@@ -1564,6 +1565,13 @@ test_alloc_io_qpair_rr_1(void)
 	/* Only 0 ~ 3 qprio is acceptable */
 	opts.qprio = 4;
 	SPDK_CU_ASSERT_FATAL(spdk_nvme_ctrlr_alloc_io_qpair(&ctrlr, &opts, sizeof(opts)) == NULL);
+	opts.qprio = 0;
+
+	/* IO qpair can only be created when ctrlr is in READY state */
+	ctrlr.state = NVME_CTRLR_STATE_ENABLE;
+	q0 = spdk_nvme_ctrlr_alloc_io_qpair(&ctrlr, &opts, sizeof(opts));
+	SPDK_CU_ASSERT_FATAL(q0 == NULL);
+	ctrlr.state = NVME_CTRLR_STATE_READY;
 
 	cleanup_qpairs(&ctrlr);
 }
