@@ -2541,13 +2541,12 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 	}
 
 	/* Queue the user op to block other incoming operations */
-	/* XXX-mg how is this not a race with the check earlier? */
 	TAILQ_INSERT_TAIL(&ch->need_cluster_alloc, op, link);
 
 	if (blob->parent_id != SPDK_BLOBID_INVALID) {
 		SPDK_DTRACE_PROBE3(blob_cow_read_start, blob, ctx, op);
 		/* Read cluster from backing device */
-		/* XXX-mg this could use "nvmf simple copy" to perform the copy remotely. */
+		/* XXX-mg this could use "nvme simple copy" to perform the copy remotely. */
 		bs_sequence_read_bs_dev(ctx->seq, blob->back_bs_dev, ctx->buf,
 					bs_dev_page_to_lba(blob->back_bs_dev, cluster_start_page),
 					bs_dev_byte_to_lba(blob->back_bs_dev, blob->bs->cluster_sz),
@@ -6079,7 +6078,6 @@ bs_snapshot_newblob_sync_cpl(void *cb_arg, int bserrno)
 	}
 
 	bs_blob_list_remove(origblob);
-	// XXX-mg does this break bdev clones?
 	origblob->parent_id = newblob->id;
 	/* set clone blob as thin provisioned */
 	blob_set_thin_provision(origblob);
@@ -6301,7 +6299,6 @@ bs_clone_origblob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 	struct spdk_clone_snapshot_ctx	*ctx = (struct spdk_clone_snapshot_ctx *)cb_arg;
 	struct spdk_blob_opts		opts;
 	struct spdk_blob_xattr_opts internal_xattrs;
-	// XXX-mg need something like this function for bdev_clone
 	char *xattr_names[] = { BLOB_SNAPSHOT };
 
 	if (bserrno != 0) {
@@ -6463,10 +6460,6 @@ bs_cluster_needs_allocation(struct spdk_blob *blob, uint64_t cluster, bool alloc
 	}
 
 	if (blob->parent_id == SPDK_BLOBID_SEED) {
-		// XXX-mg verify this.  I assume that this is in the write or
-		// inflate path trying to figure out if it needs to do a CoW.
-		// However, if cluster in question is a zero cluster, it would
-		// be swell to not allocate it.
 		return true;
 	}
 
@@ -6842,7 +6835,6 @@ delete_snapshot_sync_snapshot_cpl(void *cb_arg, int bserrno)
 	assert(TAILQ_EMPTY(&snapshot_entry->clones));
 
 	if (ctx->snapshot->parent_id != SPDK_BLOBID_INVALID) {
-		// XXX-mg verify this is all that is needed.
 		assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
 
 		/* This snapshot is at the same time a clone of another snapshot - we need to

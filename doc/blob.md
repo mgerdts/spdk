@@ -434,7 +434,6 @@ The diagram above shows the following behavior for reads:
   @ref blob_pg_copy_on_write.
 
 At this point, Blob 1 could be removed and Snapshot 1 will survive.
-   XXX-mg verify this is true.
 
 If the first 1.5 MiB of the blob were overwritten, two new clusters would be allocated, copied, and written
 across a series of metadata and data operations. After these complete, Blob 1 would look like:
