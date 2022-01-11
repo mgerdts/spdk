@@ -5786,7 +5786,7 @@ bs_create_blob(struct spdk_blob_store *bs,
 			 * buffer perform small IOs.
 			 */
 			SPDK_ERRLOG("seed device %s (%s) block size %" PRIu32
-				    "larger than blobstore io_unit_size %"
+				    " is larger than blobstore io_unit_size %"
 				    PRIu32 "\n", spdk_bdev_get_name(parent),
 				    uuid_str, spdk_bdev_get_block_size(parent),
 				    blob->bs->io_unit_size);
