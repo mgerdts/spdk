@@ -7189,6 +7189,7 @@ bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 	} else {
 		g_bserrno = -EIO;
 	}
+	spdk_bdev_free_io(bdev_io);
 }
 
 static void
@@ -7598,6 +7599,7 @@ int main(int argc, char **argv)
 	free(g_dev_buffer);
 
 	free_threads();
+	free_cores();
 
 	return num_failures;
 }
