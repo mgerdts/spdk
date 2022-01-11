@@ -203,6 +203,15 @@ ro_claims(void)
 	rc = create_ro_disk(bdev_base.name, &opts, &bdev2);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev2 != NULL);
+	/*
+	 * Must poll before deleting the new bdev so that the "bdev_register"
+	 * event is sent before deleting the new bdev. Failure to do so leads to
+	 * use after free.
+	 */
+	cb_errno = 0x600dd06;
+	poll_threads();
+	CU_ASSERT(cb_errno == 0x600dd06);
+
 	bdev1 = spdk_bdev_get_by_name(opts.name);
 	CU_ASSERT(bdev1 == bdev2);
 	/* The base bdev must be claimed by read-only bdev module */
@@ -247,6 +256,8 @@ ro_claims(void)
 	ro_vbdev1 = bdev1->ctxt;
 	CU_ASSERT(ro_vbdev1->claim->count == 1);
 	CU_ASSERT(bdev_base.internal.claim_module == &ro_if);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
 
 	opts.name = "ro_ut1";
 	bdev2 = NULL;
@@ -257,6 +268,8 @@ ro_claims(void)
 	CU_ASSERT(ro_vbdev1->claim == ro_vbdev2->claim);
 	CU_ASSERT(ro_vbdev2->claim->count == 2);
 	CU_ASSERT(bdev_base.internal.claim_module == &ro_if);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
 
 	cb_errno = 0x600dd06;
 	delete_ro_disk(bdev1, save_errno_cb, &cb_errno);
@@ -282,6 +295,8 @@ ro_claims(void)
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev1 != NULL);
 	CU_ASSERT(spdk_uuid_compare(spdk_bdev_get_uuid(bdev1), &uuid) == 0);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
 	cb_errno = 0x600dd06;
 	delete_ro_disk(bdev1, save_errno_cb, &cb_errno);
 	poll_threads();
@@ -292,6 +307,8 @@ ro_claims(void)
 	 */
 	rc = create_ro_disk(bdev_base.name, &opts, NULL);
 	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
 	bdev1 = spdk_bdev_get_by_name(opts.name);
 	CU_ASSERT(bdev1 != NULL);
 	cb_errno = 0x600dd06;
@@ -374,6 +391,8 @@ ro_io(void)
 	rc = create_ro_disk(spdk_bdev_get_name(base_bdev), &opts, &ro_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ro_bdev != NULL);
+	poll_threads();
+	CU_ASSERT(io_errno == 0);
 	ro_desc = NULL;
 	rc = spdk_bdev_open_ext(opts.name, false, bdev_event_cb, NULL, &ro_desc);
 	CU_ASSERT(rc == 0);
