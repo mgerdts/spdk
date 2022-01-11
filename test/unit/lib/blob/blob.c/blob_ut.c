@@ -7312,6 +7312,8 @@ blob_extclone_io_size(uint32_t bs_blksz, uint32_t ext_blksz)
 	spdk_bdev_close(ext_desc);
 
 	/* Clean up */
+	free(buf1);
+	free(buf2);
 	spdk_put_io_channel(ext_ch);
 	spdk_bs_free_io_channel(bs_ch);
 	suite_blob_cleanup();
