@@ -39,6 +39,7 @@ support clones of external snapshots.
 
 - Does lvol_get_xattr_value need to get the external snapshot name?  Since
   switching to an internal xattr this is probably broken.
+- Add external snapshot tests
 
 ## vbdev_ro
 
