@@ -24,8 +24,6 @@ support clones of external snapshots.
 
 ### Misc
 
-- Verify that when an external clone is inflated or decoupled that the XATTR is
-  removed.
 - Verify that storing the UUID in the blobstore is OK.  This seems better than
   a name like "spdk1n1", but maybe another scheme is needed to have names that
   are more consistent than which namespace on which target a particular thing
