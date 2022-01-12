@@ -50,49 +50,6 @@
 
 #pragma GCC diagnostic ignored "-Wunused-function"
 
-#if 1
-#define UT_ASSERT_IS_EXT_CLONE(_blob, _uuid_str) { \
-		const void *val = NULL; \
-		size_t len; \
-		CU_ASSERT(blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == 0); \
-		CU_ASSERT(val != NULL && strcmp(val, _uuid_str) == 0); \
-		CU_ASSERT(_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT); \
-		CU_ASSERT(_blob->parent_id == SPDK_BLOBID_SEED); \
-	}
-#define UT_ASSERT_IS_NOT_EXT_CLONE(_blob) { \
-		const void *val = NULL; \
-		size_t len; \
-		CU_ASSERT(blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == -ENOENT); \
-		CU_ASSERT(val == NULL); \
-		CU_ASSERT((_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) == 0); \
-		CU_ASSERT(_blob->parent_id != SPDK_BLOBID_SEED); \
-	}
-#else
-static void
-UT_ASSERT_IS_EXT_CLONE(struct spdk_blob *_blob, const char *_uuid_str)
-{
-	const void *val = NULL;
-	size_t len;
-
-	CU_ASSERT(blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == 0);
-	CU_ASSERT(val != NULL && strcmp(val, _uuid_str) == 0);
-	CU_ASSERT(_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT);
-	CU_ASSERT(_blob->parent_id == SPDK_BLOBID_SEED);
-}
-
-static void
-UT_ASSERT_IS_NOT_EXT_CLONE(struct spdk_blob *_blob)
-{
-	const void *val = NULL;
-	size_t len;
-
-	CU_ASSERT(blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == 0);
-	CU_ASSERT(val == NULL);
-	CU_ASSERT((_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) == 0);
-	CU_ASSERT(_blob->parent_id != SPDK_BLOBID_SEED);
-}
-#endif
-
 struct spdk_blob_store *g_bs;
 spdk_blob_id g_blobid;
 struct spdk_blob *g_blob, *g_blob2;
@@ -133,6 +90,39 @@ static void ut_blob_close_and_delete(struct spdk_blob_store *bs, struct spdk_blo
 static void suite_bs_cleanup(void);
 static void suite_blob_setup(void);
 static void suite_blob_cleanup(void);
+
+static bool
+is_ext_clone(struct spdk_blob *_blob, const char *_uuid_str)
+{
+	const void *val = NULL;
+	size_t len;
+	bool c1, c2, c3;
+
+	CU_ASSERT(blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == 0);
+	CU_ASSERT((c1 = (val != NULL && strcmp(val, _uuid_str) == 0)));
+	CU_ASSERT((c2 = !!(_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT)));
+	CU_ASSERT((c3 = (_blob->parent_id == SPDK_BLOBID_SEED)));
+
+	return c1 && c2 && c3;
+}
+
+static bool
+is_not_ext_clone(struct spdk_blob *_blob)
+{
+	const void *val = NULL;
+	size_t len;
+	bool c1, c2, c3, c4;
+
+	CU_ASSERT((c1 = (blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == -ENOENT)));
+	CU_ASSERT((c2 = (val == NULL)));
+	CU_ASSERT((c3 = ((_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) == 0)));
+	CU_ASSERT((c4 = (_blob->parent_id != SPDK_BLOBID_SEED)));
+
+	return c1 && c2 && c3 && c4;
+}
+
+#define UT_ASSERT_IS_EXT_CLONE(_blob, _uuid) CU_ASSERT(is_ext_clone(_blob, _uuid))
+#define UT_ASSERT_IS_NOT_EXT_CLONE(_blob) CU_ASSERT(is_not_ext_clone(_blob))
 
 static void
 _get_xattr_value(void *arg, const char *name,
@@ -7225,12 +7215,7 @@ blob_extclone_snapshot(void)
 	struct spdk_blob_opts	opts;
 	struct spdk_blob	*blob, *snap_blob;
 	spdk_blob_id		blobid, snap_blobid;
-	char			ext_uuid_str[SPDK_UUID_STRING_LEN];
-	int			rc;
-
-	rc = spdk_uuid_fmt_lower(ext_uuid_str, sizeof (ext_uuid_str),
-				 &mdisks[0].uuid);
-	CU_ASSERT(rc == 0);
+	const char		*ext_uuid_str = mdisks[0].uuid_str;
 
 	/* Create a bdev */
 	ut_open_malloc_dev(0);
