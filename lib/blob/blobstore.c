@@ -6468,15 +6468,15 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 	struct spdk_blob *_parent;
 	int rc __attribute__((unused));
 
-	if (_blob->parent_id == SPDK_BLOBID_SEED) {
-		assert(ctx->allocate_all);
-		blob_remove_xattr(_blob, BLOB_SEED_BDEV, true);
-		_blob->invalid_flags &= ~SPDK_BLOB_EXTERNAL_SNAPSHOT;
-	}
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
 		bs_blob_list_remove(_blob);
-		blob_remove_xattr(_blob, BLOB_SNAPSHOT, true);
+		if (_blob->parent_id == SPDK_BLOBID_SEED) {
+			blob_remove_xattr(_blob, BLOB_SEED_BDEV, true);
+			_blob->invalid_flags &= ~SPDK_BLOB_EXTERNAL_SNAPSHOT;
+		} else {
+			blob_remove_xattr(_blob, BLOB_SNAPSHOT, true);
+		}
 		_blob->invalid_flags = _blob->invalid_flags & ~SPDK_BLOB_THIN_PROV;
 		_blob->back_bs_dev->destroy(_blob->back_bs_dev);
 		_blob->back_bs_dev = NULL;
