@@ -55,6 +55,7 @@ support clones of external snapshots.
 
 ### Other
 
+- Use ext bdev API in IO path, like in [this change to part.c](https://review.spdk.io/gerrit/c/spdk/spdk/+/11048/1/lib/bdev/part.c).
 - Implement JSON dump `bdev_get_bdevs` support
 - Support resize of base bdev?
 
