@@ -24,8 +24,6 @@ support clones of external snapshots.
 
 ### Misc
 
-- Verify that when a snapshot of an external clone is created that the XATTR
-  moves to the snapshot.  And then reverse it when the snapshot is deleted.
 - Verify that when an external clone is inflated or decoupled that the XATTR is
   removed.
 - Verify that storing the UUID in the blobstore is OK.  This seems better than
