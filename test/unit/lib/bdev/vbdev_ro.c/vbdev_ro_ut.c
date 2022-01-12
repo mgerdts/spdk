@@ -160,6 +160,19 @@ nop_cb(void *cb_arg)
 	return;
 }
 
+static size_t
+ut_claim_count(struct vbdev_ro_claim *claim)
+{
+	size_t		count = 0;
+	struct vbdev_ro	*ro_bdev;
+
+	LIST_FOREACH(ro_bdev, &claim->ro_bdevs, link) {
+		count++;
+	}
+
+	return count;
+}
+
 /*
  * Tests
  */
@@ -254,7 +267,7 @@ ro_claims(void)
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev1 != NULL);
 	ro_vbdev1 = bdev1->ctxt;
-	CU_ASSERT(ro_vbdev1->claim->count == 1);
+	CU_ASSERT(ut_claim_count(ro_vbdev1->claim) == 1);
 	CU_ASSERT(bdev_base.internal.claim_module == &ro_if);
 	poll_threads();
 	CU_ASSERT(cb_errno == 0);
@@ -265,8 +278,7 @@ ro_claims(void)
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev2 != NULL);
 	ro_vbdev2 = bdev2->ctxt;
-	CU_ASSERT(ro_vbdev1->claim == ro_vbdev2->claim);
-	CU_ASSERT(ro_vbdev2->claim->count == 2);
+	CU_ASSERT(ut_claim_count(ro_vbdev2->claim) == 2);
 	CU_ASSERT(bdev_base.internal.claim_module == &ro_if);
 	poll_threads();
 	CU_ASSERT(cb_errno == 0);
@@ -275,7 +287,7 @@ ro_claims(void)
 	delete_ro_disk(bdev1, save_errno_cb, &cb_errno);
 	poll_threads();
 	CU_ASSERT(cb_errno == 0);
-	CU_ASSERT(ro_vbdev2->claim->count == 1);
+	CU_ASSERT(ut_claim_count(ro_vbdev2->claim) == 1);
 	CU_ASSERT(bdev_base.internal.claim_module == &ro_if);
 
 	cb_errno = 0x600dd06;

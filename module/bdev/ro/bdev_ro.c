@@ -38,23 +38,31 @@
 #include "spdk/bdev_module.h"
 #include "bdev_ro.h"
 
+struct vbdev_ro;
+
 struct vbdev_ro_claim {
 	struct spdk_bdev	*base_bdev;
 	struct spdk_bdev_desc	*base_bdev_desc;
-	uint32_t		count;
 	RB_ENTRY(vbdev_ro_claim) node;
+	LIST_HEAD(, vbdev_ro)	ro_bdevs;
 };
 
 struct vbdev_ro {
 	struct spdk_bdev	bdev;
 	struct vbdev_ro_claim	*claim;
+	LIST_ENTRY(vbdev_ro)	link;
 };
 
 struct vbdev_ro_channel {
 	struct spdk_io_channel	*base_ch;
 };
 
-static void vbdev_ro_release_bdev(struct vbdev_ro_claim *claim);
+static void vbdev_ro_release_bdev(struct vbdev_ro *ro_bdev);
+static int vbdev_ro_claim_cmp(struct vbdev_ro_claim *claim1, struct vbdev_ro_claim *claim2);
+
+RB_HEAD(vbdev_ro_claims_tree, vbdev_ro_claim) g_bdev_ro_claims = RB_INITIALIZER(&head);
+RB_GENERATE_STATIC(vbdev_ro_claims_tree, vbdev_ro_claim, node, vbdev_ro_claim_cmp);
+pthread_mutex_t g_bdev_ro_claims_mutex;
 
 /*
  * Read-only device module functions
@@ -79,7 +87,7 @@ vbdev_ro_destruct(void *ctx)
 {
 	struct vbdev_ro *ro_vbdev = ctx;
 
-	vbdev_ro_release_bdev(ro_vbdev->claim);
+	vbdev_ro_release_bdev(ro_vbdev);
 	free(ro_vbdev->bdev.name);
 	free(ro_vbdev);
 	return 0;
@@ -188,14 +196,32 @@ static const struct spdk_bdev_fn_table vbdev_ro_fn_table = {
 	.get_memory_domains	= vbdev_ro_get_memory_domains,
 };
 
+static struct vbdev_ro_claim *
+vbdev_ro_get_claim_by_base_bdev(struct spdk_bdev *base_bdev)
+{
+	struct vbdev_ro_claim find = {};
+	/* XXX-mg work out locking or require a specific thread. */
+
+	find.base_bdev = base_bdev;
+	return RB_FIND(vbdev_ro_claims_tree, &g_bdev_ro_claims, &find);
+}
+
 static void
 vbdev_ro_base_bdev_event_cb(enum spdk_bdev_event_type type,
-			    struct spdk_bdev *ro_bdev, void *event_ctx)
+			    struct spdk_bdev *base_bdev, void *event_ctx)
 {
+	struct vbdev_ro_claim	*claim;
+	struct vbdev_ro		*ro_bdev, *tmp;
+
         switch (type) {
         case SPDK_BDEV_EVENT_REMOVE:
-		// XXX-mg
-                SPDK_NOTICELOG("SPDK_BDEV_EVENT_REMOVE not implemented\n");
+		claim = vbdev_ro_get_claim_by_base_bdev(base_bdev);
+		if (claim == NULL) {
+			return;
+		}
+		LIST_FOREACH_SAFE(ro_bdev, &claim->ro_bdevs, link, tmp) {
+			spdk_bdev_unregister(&ro_bdev->bdev, NULL, NULL);
+		}
                 break;
         default:
                 SPDK_NOTICELOG("Unsupported bdev event: type %d\n", type);
@@ -228,6 +254,7 @@ vbdev_ro_channel_destroy_cb(void *io_device, void *ctx_buf)
 /*
  * Claim tracking
  */
+
 static int
 vbdev_ro_claim_cmp(struct vbdev_ro_claim *claim1, struct vbdev_ro_claim *claim2)
 {
@@ -235,31 +262,24 @@ vbdev_ro_claim_cmp(struct vbdev_ro_claim *claim1, struct vbdev_ro_claim *claim2)
 	       claim1->base_bdev < claim2->base_bdev ? -1 : 1;
 }
 
-RB_HEAD(vbdev_ro_claims_tree, vbdev_ro_claim) g_bdev_ro_claims = RB_INITIALIZER(&head);
-RB_GENERATE_STATIC(vbdev_ro_claims_tree, vbdev_ro_claim, node, vbdev_ro_claim_cmp);
-pthread_mutex_t g_bdev_ro_claims_mutex;
-
 static int
-vbdev_ro_claim_bdev(struct spdk_bdev *base_bdev, struct vbdev_ro_claim **claimp)
+vbdev_ro_claim_bdev(struct spdk_bdev *base_bdev, struct vbdev_ro *ro_bdev)
 {
 	struct vbdev_ro_claim *claim = NULL;
 	struct vbdev_ro_claim *existing;
-	struct vbdev_ro_claim find = {};
 	int ret;
 	char claimname[32];
-
-	find.base_bdev = base_bdev;
 
 	snprintf(claimname, sizeof(claimname), "ro_claim_%s",
 		 spdk_bdev_get_name(base_bdev));
 
 	pthread_mutex_lock(&g_bdev_ro_claims_mutex);
 
-	claim = RB_FIND(vbdev_ro_claims_tree, &g_bdev_ro_claims, &find);
+	claim = vbdev_ro_get_claim_by_base_bdev(base_bdev);
 	if (claim != NULL) {
-		claim->count++;
+		LIST_INSERT_HEAD(&claim->ro_bdevs, ro_bdev, link);
 		pthread_mutex_unlock(&g_bdev_ro_claims_mutex);
-		*claimp = claim;
+		ro_bdev->claim = claim;
 		return 0;
 	}
 
@@ -284,7 +304,8 @@ vbdev_ro_claim_bdev(struct spdk_bdev *base_bdev, struct vbdev_ro_claim **claimp)
 		return ret;
 	}
 	claim->base_bdev = base_bdev;
-	claim->count = 1;
+	LIST_INIT(&claim->ro_bdevs);
+	LIST_INSERT_HEAD(&claim->ro_bdevs, ro_bdev, link);
 
 	existing = RB_INSERT(vbdev_ro_claims_tree, &g_bdev_ro_claims, claim);
 	if (existing != NULL) {
@@ -300,29 +321,34 @@ vbdev_ro_claim_bdev(struct spdk_bdev *base_bdev, struct vbdev_ro_claim **claimp)
 
 	pthread_mutex_unlock(&g_bdev_ro_claims_mutex);
 
-	*claimp = claim;
+	ro_bdev->claim = claim;
 	return 0;
 }
 
 static void
-vbdev_ro_device_unregister_cb(void *claim)
+vbdev_ro_device_unregister_cb(void *_claim)
 {
+	struct vbdev_ro_claim *claim = _claim;
+
+	assert(LIST_EMPTY(&claim->ro_bdevs));
 	free(claim);
 }
 
 static void
-vbdev_ro_release_bdev(struct vbdev_ro_claim *claim)
+vbdev_ro_release_bdev(struct vbdev_ro *ro_bdev)
 {
+	struct vbdev_ro_claim *claim = ro_bdev->claim;
+
 	pthread_mutex_lock(&g_bdev_ro_claims_mutex);
 
-	if (claim->count == 0) {
-		SPDK_ERRLOG("bdev %s claim count is 0\n",
+	if (LIST_EMPTY(&claim->ro_bdevs)) {
+		SPDK_ERRLOG("bdev %s has a claim with an empty list\n",
 			    spdk_bdev_get_name(claim->base_bdev));
 		abort();
 	}
 
-	claim->count--;
-	if (claim->count == 0) {
+	LIST_REMOVE(ro_bdev, link);
+	if (LIST_EMPTY(&claim->ro_bdevs)) {
 		RB_REMOVE(vbdev_ro_claims_tree, &g_bdev_ro_claims, claim);
 		spdk_bdev_module_release_bdev(claim->base_bdev);
 		spdk_bdev_close(claim->base_bdev_desc);
@@ -341,7 +367,6 @@ create_ro_disk(const char *bdev_name, const struct vbdev_ro_opts *opts,
 {
 	struct spdk_bdev	*base_bdev = NULL;
 	struct vbdev_ro		*ro_bdev = NULL;
-	struct vbdev_ro_claim	*claim = NULL;
 	int			rc;
 
 	base_bdev = spdk_bdev_get_by_name(bdev_name);
@@ -353,18 +378,17 @@ create_ro_disk(const char *bdev_name, const struct vbdev_ro_opts *opts,
 		return -EINVAL;
 	}
 
-	rc = vbdev_ro_claim_bdev(base_bdev, &claim);
-	if (rc != 0) {
-		return rc;
-	}
-
 	ro_bdev = calloc(1, sizeof(*ro_bdev));
 	if (ro_bdev == NULL) {
 		rc = -ENOMEM;
 		goto errout;
 	}
 
-	ro_bdev->claim = claim;
+	rc = vbdev_ro_claim_bdev(base_bdev, ro_bdev);
+	if (rc != 0) {
+		goto errout;
+	}
+
 
 	ro_bdev->bdev.ctxt = ro_bdev;
 	ro_bdev->bdev.name = strdup(opts->name);
@@ -423,9 +447,7 @@ create_ro_disk(const char *bdev_name, const struct vbdev_ro_opts *opts,
 
 errout:
 	assert(rc != 0);
-	if (claim != NULL) {
-		vbdev_ro_release_bdev(claim);
-	}
+	vbdev_ro_release_bdev(ro_bdev);
 	if (ro_bdev != NULL) {
 		free(ro_bdev->bdev.name);
 		free(ro_bdev);
