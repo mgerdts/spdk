@@ -6834,7 +6834,10 @@ delete_snapshot_sync_snapshot_cpl(void *cb_arg, int bserrno)
 	snapshot_entry->clone_count--;
 	assert(TAILQ_EMPTY(&snapshot_entry->clones));
 
-	if (ctx->snapshot->parent_id != SPDK_BLOBID_INVALID) {
+	if (ctx->snapshot->parent_id == SPDK_BLOBID_SEED) {
+		SPDK_ERRLOG("XXX-mg fixme - handle external snapshot");
+		free(clone_entry);
+	} else if (ctx->snapshot->parent_id != SPDK_BLOBID_INVALID) {
 		assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
 
 		/* This snapshot is at the same time a clone of another snapshot - we need to
@@ -6981,9 +6984,11 @@ delete_snapshot_sync_snapshot_xattr_cpl(void *cb_arg, int bserrno)
 		return;
 	}
 
+#if 0
 	// XXX-mg verify this is all that is needed.
 	assert(ctx->snapshot->parent_id != SPDK_BLOBID_SEED);
 	assert(ctx->clone->parent_id != SPDK_BLOBID_SEED);
+#endif
 
 	/* Copy snapshot map to clone map (only unallocated clusters in clone) */
 	for (i = 0; i < ctx->snapshot->active.num_clusters && i < ctx->clone->active.num_clusters; i++) {
