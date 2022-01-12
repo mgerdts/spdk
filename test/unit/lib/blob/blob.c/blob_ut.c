@@ -7322,6 +7322,53 @@ blob_extclone_snapshot(void)
 	poll_threads();
 }
 
+static void
+blob_extclone_inflate(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	const char		*ext_uuid_str = mdisks[0].uuid_str;
+	struct spdk_io_channel *channel;
+
+	/* Create a bdev */
+	ut_open_malloc_dev(0);
+
+	/* Create a blob clone of the bdev and open it. */
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[0].uuid);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
+
+	/* Inflate the blob and verify that it is no longer an extern clone. */
+	channel = spdk_bs_alloc_io_channel(bs);
+	CU_ASSERT(channel != NULL);
+	spdk_bs_inflate_blob(bs, channel, blobid, blob_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+
+	UT_ASSERT_IS_NOT_EXT_CLONE(blob);
+
+	/*
+	 * Clean up
+	 */
+	spdk_bs_free_io_channel(channel);
+	ut_blob_close_and_delete(bs, blob);
+	ut_close_malloc_dev(0);
+	poll_threads();
+}
 
 /* XXX-mg Test that size matches the requested size even when it doesn't match
  * the parent size (larger and smaller).  When larger, ensure that writes land
@@ -7692,6 +7739,7 @@ int main(int argc, char **argv)
 			suite_bs_setup, suite_bs_cleanup);
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
+
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -7762,6 +7810,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_extclone_defaults);
 	CU_ADD_TEST(suite_bs, blob_extclone_size);
 	CU_ADD_TEST(suite_bs, blob_extclone_snapshot);
+	CU_ADD_TEST(suite_bs, blob_extclone_inflate);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_4096);
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);

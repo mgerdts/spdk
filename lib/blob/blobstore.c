@@ -6468,6 +6468,11 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 	struct spdk_blob *_parent;
 	int rc __attribute__((unused));
 
+	if (_blob->parent_id == SPDK_BLOBID_SEED) {
+		assert(ctx->allocate_all);
+		blob_remove_xattr(_blob, BLOB_SEED_BDEV, true);
+		_blob->invalid_flags &= ~SPDK_BLOB_EXTERNAL_SNAPSHOT;
+	}
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
 		bs_blob_list_remove(_blob);
@@ -6583,6 +6588,14 @@ bs_inflate_blob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 
 	ctx->original.blob = _blob;
 	ctx->original.md_ro = _blob->md_ro;
+
+	if (_blob->parent_id == SPDK_BLOBID_SEED) {
+		/*
+		 * There is nosimple way to detect thin provisioning or zeroes
+		 * in an external snapshot
+		 */
+		ctx->allocate_all = true;
+	}
 
 	if (_blob->locked_operation_in_progress) {
 		SPDK_DEBUGLOG(blob, "Cannot inflate blob - another operation in progress\n");
