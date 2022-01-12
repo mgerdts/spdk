@@ -4893,7 +4893,7 @@ blob_relations(void)
 	spdk_blob_id ids[10] = {};
 
 	dev = init_dev();
-	spdk_bs_opts_init(&bs_opts, sizeof(opts));
+	spdk_bs_opts_init(&bs_opts, sizeof(bs_opts));
 	snprintf(bs_opts.bstype.bstype, sizeof(bs_opts.bstype.bstype), "TESTTYPE");
 
 	spdk_bs_init(dev, &bs_opts, bs_op_with_handle_complete, NULL);
@@ -5592,7 +5592,7 @@ blob_relations3(void)
 	spdk_blob_id blobid, snapshotid0, snapshotid1, snapshotid2;
 
 	dev = init_dev();
-	spdk_bs_opts_init(&bs_opts, sizeof(opts));
+	spdk_bs_opts_init(&bs_opts, sizeof(bs_opts));
 	snprintf(bs_opts.bstype.bstype, sizeof(bs_opts.bstype.bstype), "TESTTYPE");
 
 	spdk_bs_init(dev, &bs_opts, bs_op_with_handle_complete, NULL);
