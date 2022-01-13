@@ -57,7 +57,7 @@
  * Options used during the creation of a read-only vbdev.
  */
 struct vbdev_ro_opts {
-	/** Name of the vbdev being created */
+	/** Name of the vbdev being created. If NULL, a name will be generated. */
 	const char		*name;
 
 	/** The UUID of the new vbdev. If NULL, a UUID will be generated. */
@@ -67,8 +67,12 @@ struct vbdev_ro_opts {
 /**
  * Create read-only vbdev
  *
- * \param bdev_name The name of the bdev that will back the ro vbdev.
- * \param opts Options that describe how the ro vbdev should be created.
+ * \param base_name The name of the bdev that will back the ro vbdev. Must be
+ * NULL if base_uuid is non-NULL.
+ * \param base_uuid The UUID of the bdev that will back the ro vbdev. Must be
+ * NULL if base_name is non-NULL.
+ * \param opts Options that describe how the ro vbdev should be created. May be
+ * NULL.
  * \param bdevp If not NULL, *bdevp will be updated pointer to the new bdev.
  *
  * \return 0 on success.
@@ -76,17 +80,33 @@ struct vbdev_ro_opts {
  * \return -ENOENT if a bdev with bdev_name is not found.
  * \return -ENOMEM if memory allocation fails.
  */
-int create_ro_disk(const char *bdev_name, const struct vbdev_ro_opts *opts,
-		   struct spdk_bdev **bdevp);
+int create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
+		   const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp);
+
+int vbdev_ro_create_from_bdev(struct spdk_bdev *base_bdev,
+			      const struct vbdev_ro_opts *opts,
+			      struct spdk_bdev **bdevp);
+/* XXX-mg add others, replacing create_ro_disk */
 
 /**
  * Delete read-only vbdev
  *
  * \param bdev Pointer to ro vbdev to delete.
- * \param cb_fn Function to call after deletion.
- * \param cb_arg Argument to pass to cb_fn.
+ * \param cb_fn Function to call after deletion. May be NULL.
+ * \param cb_arg Argument to pass to cb_fn. May be NULL.
  */
 void delete_ro_disk(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn,
 		    void *cb_arg);
+
+
+/**
+ * Get the base bdev of a ro bdev
+ *
+ * \param bdev Pointer to an ro bdev.
+ *
+ * \return A pointer to the base bdev on success.
+ * \return NULL On error.
+ */
+struct spdk_bdev *bdev_ro_get_base_bdev(struct spdk_bdev *bdev);
 
 #endif
