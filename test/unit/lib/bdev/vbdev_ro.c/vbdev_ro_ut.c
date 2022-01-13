@@ -130,11 +130,25 @@ static struct spdk_bdev_fn_table base_fn_table = {
  * Callbacks used by tests
  */
 
+
+struct ut_event_cb {
+	enum spdk_bdev_event_type type;
+	struct spdk_bdev *bdev;
+};
+
 static void
 bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
 {
-	CU_ASSERT(false);
-	return;
+	struct ut_event_cb *ret = event_ctx;
+
+	if (event_ctx == NULL) {
+		/* Not expected to be called. */
+		CU_ASSERT(false);
+		return;
+	}
+
+	ret->type = type;
+	ret->bdev = bdev;
 }
 
 static void
@@ -497,6 +511,67 @@ ro_io(void)
 }
 
 static void
+ro_remove_base(void)
+{
+	struct spdk_bdev		*base_bdev;
+	struct spdk_bdev_desc		*ro_desc;
+	struct vbdev_ro_opts		opts = {};
+	struct spdk_bdev		*ro_bdev;
+	const struct ut_event_cb	initial_event = { -1, NULL };
+	struct ut_event_cb		ro_event;
+	int				rc, cb_errno, ro_del_errno;
+
+	/* Create the base bdev */
+	rc = create_malloc_disk(&base_bdev, NULL, NULL, 2048, 512);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+
+	/* Create a read-only bdev on the base bdev. */
+	opts.name = "ro_ut0";
+	opts.uuid = NULL;
+	ro_bdev = NULL;
+	rc = create_ro_disk(base_bdev->name, &opts, &ro_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ro_bdev != NULL);
+	/* Allow bdev_register to be delivered. */
+	poll_threads();
+
+	/* Open the read-only bdev. */
+	ro_event = initial_event;
+	rc = spdk_bdev_open_ext(opts.name, true, bdev_event_cb, &ro_event, &ro_desc);
+	cb_errno = 0x600dd06;
+	poll_threads();
+	CU_ASSERT(cb_errno == 0x600dd06);
+	CU_ASSERT(ro_event.type == initial_event.type);
+	CU_ASSERT(ro_event.bdev == initial_event.bdev);
+
+	/* Delete the base (malloc) bdev and verify that the ro bdev got an event. */
+	ro_del_errno = 0xbadf00d;
+	delete_malloc_disk(base_bdev, save_errno_cb, &ro_del_errno);
+	poll_threads();
+	CU_ASSERT(ro_event.type == SPDK_BDEV_EVENT_REMOVE);
+	CU_ASSERT(ro_event.bdev == ro_bdev);
+	/* save_errno_cb should not be called until the ro disk is deleted */
+	CU_ASSERT(ro_del_errno == 0xbadf00d);
+
+	/*
+	 * Clean up.
+	 *
+	 * We already received a SPDK_BDEV_EVENT_REMOVE event which implies that
+	 * the vbdev_ro module is already handling the deletion asynchronously.
+	 * We must not call delete_ro_disk().
+	 *
+	 * Once the last reference to bdev_ro goes away with the closing of
+	 * ro_desc, the callback passed to delete_malloc_disk() will be called,
+	 * which will update ro_del_errno.
+	 */
+	spdk_bdev_close(ro_desc);
+	poll_threads();
+	/* Now the base bdev should be cleaned up. */
+	CU_ASSERT(ro_del_errno == 0);
+}
+
+static void
 suite_setup(void)
 {
 	int cb_errno = 0x600dd06;
@@ -530,6 +605,7 @@ main(int argc, char **argv)
 
 	CU_ADD_TEST(suite, ro_claims);
 	CU_ADD_TEST(suite, ro_io);
+	CU_ADD_TEST(suite, ro_remove_base);
 
 	allocate_cores(1);
 	allocate_threads(1);
