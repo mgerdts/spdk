@@ -1359,12 +1359,11 @@ static void blob_update_clear_method(struct spdk_blob *blob);
 
 static void blob_load_seed_done(void *ctx, int rc)
 {
-	struct blob_load_seed_ctx *seed_load_ctx = ctx;
-	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
+	struct spdk_blob_load_ctx	*blob_load_ctx = ctx;;
+	struct spdk_blob		*blob = blob_load_ctx->blob;
 
 	blob->parent_id = SPDK_BLOBID_SEED;
-	blob_load_final(seed_load_ctx->ctx, rc);
-	free(seed_load_ctx);
+	blob_load_final(ctx, rc);
 }
 
 static void
@@ -1377,7 +1376,6 @@ blob_load_backing_dev(void *cb_arg)
 	int				rc;
 
 	if (spdk_blob_is_external_clone(blob)) {
-		struct blob_load_seed_ctx	*seed_ctx;
 		const char			*uuid;
 
 		uuid = spdk_blob_get_external_parent(blob);
@@ -1388,16 +1386,9 @@ blob_load_backing_dev(void *cb_arg)
 		}
 
 		SPDK_INFOLOG(blob, "Creating seed bs\n");
-		seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
-		if (!seed_ctx) {
-			blob_load_final(ctx, -ENOMEM);
-			return;
-		}
-
-		seed_ctx->ctx = ctx;
 
 		/* Use an existing bdev for unallocated blocks */
-		bs_create_seed_dev(blob, uuid, blob_load_seed_done, seed_ctx);
+		bs_create_seed_dev(blob, uuid, blob_load_seed_done, ctx);
 		return;
 	}
 

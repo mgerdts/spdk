@@ -445,11 +445,6 @@ struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
 typedef void(*blob_load_seed_cpl)(void *ctx, int rc);
 
-struct blob_load_seed_ctx {
-	struct spdk_blob_load_ctx	*ctx;
-	struct spdk_uuid		uuid;
-};
-
 struct seed_ctx {
 	struct spdk_bdev		*bdev;
 	struct spdk_bdev_desc		*bdev_desc;
