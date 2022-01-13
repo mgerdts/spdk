@@ -39,11 +39,6 @@ support clones of external snapshots.
 
 ## vbdev_ro
 
-### Surprise removal of base bdev
-
-- The removal notice should be propagated to those that have the bdev open.
-- The read-only bdev should be deleted.
-
 ### RPC
 
 - Implement RPC calls
@@ -51,7 +46,15 @@ support clones of external snapshots.
 
 ### Other
 
-- Use ext bdev API in IO path, like in [this change to part.c](https://review.spdk.io/gerrit/c/spdk/spdk/+/11048/1/lib/bdev/part.c).
+- Review the use of locking and threads. It is quite unlikely to be correct.
+  - Mutex is not always held while traversing RB tree.
+  - If mutexes are used, maybe a global one for the tree, another per claim.
+  - Nothing is ensuring that `spdk_vdev_close(base_bdev)` is called on right
+    thread.
+  - Maybe best to record the thread that allocated a claim and bounce all
+    modifications to the claim to that thread.
+- Use ext bdev API in IO path, like in [this change to
+  part.c](https://review.spdk.io/gerrit/c/spdk/spdk/+/11048/1/lib/bdev/part.c).
 - Implement JSON dump `bdev_get_bdevs` support
 - Support resize of base bdev?
 
