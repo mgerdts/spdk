@@ -12,11 +12,6 @@ support clones of external snapshots.
 
 ### Unavailability of external snapshot
 
-- Allow blob to be opened in a degraded mode when the external snapshot is
-  missing. Reads from and writes to blobstore-resident clusters can be serviced
-  without problems.  IO (read, CoW) that requires access to the external
-  snapshot should return `EIO` or similar.  Maybe it should go through retries
-  with delays before returning an error.
 - Handle surprise removal of external snapshot, transitioning the blob to
   degraded mode.
 - Handle surprise add of external snapshot, transitioning from degraded to
