@@ -1357,14 +1357,99 @@ blob_load_snapshot_cpl(void *cb_arg, struct spdk_blob *snapshot, int bserrno)
 
 static void blob_update_clear_method(struct spdk_blob *blob);
 
-static void blob_load_seed_done(void *ctx, int rc)
+/*
+ * XXX-mg extend this to be called every time there is a change in back_bs_dev.
+ * It needs to handle:
+ * 1. The initial back_bs_dev during blob open (success)
+ * 2. The initial back_bs_dev during blob open (fail)
+ * 3. Switch to a new back_bs_dev (install new, call destroy on old) while
+ *    frozen
+ */
+static void
+blob_esnap_load_done(struct spdk_blob_load_ctx *ctx, struct spdk_bs_dev *dev,
+		     int bserrno)
 {
-	struct blob_load_seed_ctx *seed_load_ctx = ctx;
-	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
+	struct spdk_blob		*blob = ctx->blob;
 
-	blob->parent_id = SPDK_BLOBID_SEED;
-	blob_load_final(seed_load_ctx->ctx, rc);
-	free(seed_load_ctx);
+	assert(blob->back_bs_dev == NULL);
+
+	if (bserrno == 0) {
+		assert(dev != NULL);
+		blob->back_bs_dev = dev;
+		blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
+	} else {
+		// XXX-mg anything here?  Probably same as error paths mentioned
+		// in the next few functions.
+		abort();
+	}
+	blob_load_final(ctx, bserrno);
+}
+
+struct blob_update_bs_dev_ctx {
+	struct spdk_blob	*blob;
+	struct spdk_bs_dev	*new_bs_dev;
+};
+
+static void
+blob_update_bs_dev_unfreeze_cpl(void *_ctx, int bserrno)
+{
+	/* XXX-mg figure out how to handle an unfreeze a failure. */
+	assert(bserrno == 0);
+
+	free(_ctx);
+}
+
+static void
+blob_update_bs_dev_freeze_cpl(void *_ctx, int bserrno)
+{
+	struct blob_update_bs_dev_ctx	*ctx = _ctx;
+	struct spdk_bs_dev		*new_dev = ctx->new_bs_dev;
+	struct spdk_bs_dev		*old_dev = ctx->blob->back_bs_dev;
+
+	/* XXX-mg figure out how to handle a freeze a failure. */
+	assert(bserrno == 0);
+
+	SPDK_NOTICELOG("Blob 0x%" PRIx64 " replacing external snapshot %s with %s\n",
+		       ctx->blob->id,
+		       spdk_bdev_get_name(old_dev->get_base_bdev(old_dev)),
+		       spdk_bdev_get_name(new_dev->get_base_bdev(new_dev)));
+
+	ctx->blob->back_bs_dev = ctx->new_bs_dev;
+	old_dev->destroy(old_dev);
+
+	blob_unfreeze_io(ctx->blob, blob_update_bs_dev_unfreeze_cpl, ctx);
+}
+
+static void
+blob_update_bs_dev(struct spdk_blob *blob, struct spdk_bs_dev *dev, int rc)
+{
+	struct spdk_bs_dev		*old_dev = blob->back_bs_dev;
+	struct blob_update_bs_dev_ctx	*ctx;
+
+	assert(old_dev != NULL);
+	assert(blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT);
+
+	/*
+	 * XXX-mg add support for a hot replace gone wrong.  For instance, if
+	 * the ro dev was removed followed by ENOMEM while creating the wait
+	 * dev.
+	 */
+	assert(rc == 0);
+	assert(dev != NULL);
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		/*
+		 * XXX-mg how do we put the blob into a state that this is
+		 * visible and ideally recoverable without a restart?
+		 */
+		abort();
+	}
+
+	ctx->blob = blob;
+	ctx->new_bs_dev = dev;
+
+	blob_freeze_io(ctx->blob, blob_update_bs_dev_freeze_cpl, ctx);
 }
 
 static void
@@ -1377,27 +1462,30 @@ blob_load_backing_dev(void *cb_arg)
 	int				rc;
 
 	if (spdk_blob_is_external_clone(blob)) {
-		struct blob_load_seed_ctx	*seed_ctx;
-		const char			*uuid;
+		const char		*uuid_str;
+		struct spdk_uuid	uuid;
 
-		uuid = spdk_blob_get_external_parent(blob);
-		if (uuid == NULL) {
+		uuid_str = spdk_blob_get_external_parent(blob);
+		if (uuid_str == NULL) {
 			SPDK_NOTICELOG("blob 0x%" PRIx64 " is an external clone without a parent\n",
 				       blob->id);
 			blob_load_final(ctx, -EINVAL);
-		}
-
-		SPDK_INFOLOG(blob, "Creating seed bs\n");
-		seed_ctx = calloc(1, sizeof(struct blob_load_seed_ctx));
-		if (!seed_ctx) {
-			blob_load_final(ctx, -ENOMEM);
 			return;
 		}
 
-		seed_ctx->ctx = ctx;
+		rc = spdk_uuid_parse(&uuid, uuid_str);
+		if (rc != 0) {
+			SPDK_NOTICELOG("blob 0x%" PRIx64 " parent uuid '%s' invalid\n",
+				       blob->id, uuid_str);
+			blob_load_final(ctx, -EINVAL);
+			return;
+		}
+
+		SPDK_INFOLOG(blob, "Creating external snapshot device\n");
 
 		/* Use an existing bdev for unallocated blocks */
-		bs_create_seed_dev(blob, uuid, blob_load_seed_done, seed_ctx);
+		blob_create_esnap_dev(blob, &uuid, blob_esnap_load_done, ctx,
+				    blob_update_bs_dev);
 		return;
 	}
 
@@ -3202,7 +3290,8 @@ bs_blob_list_add(struct spdk_blob *blob)
 	assert(blob != NULL);
 
 	snapshot_id = blob->parent_id;
-	if (snapshot_id == SPDK_BLOBID_INVALID || snapshot_id == SPDK_BLOBID_SEED) {
+	if (snapshot_id == SPDK_BLOBID_INVALID ||
+	    snapshot_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
 		return 0;
 	}
 
@@ -5754,10 +5843,10 @@ bs_create_blob(struct spdk_blob_store *bs,
 
 	if (!spdk_uuid_is_null(&opts_local.external_snapshot_uuid)) {
 		char uuid_str[SPDK_UUID_STRING_LEN];
+		struct spdk_uuid *uuid = &opts_local.external_snapshot_uuid;
 		struct spdk_bdev *parent;
 
-		rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str),
-					 &opts_local.external_snapshot_uuid);
+		rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str), uuid);
 		if (rc != 0) {
 			SPDK_ERRLOG("Invalid external snapshot UUID\n");
 			blob_free(blob);
@@ -5766,7 +5855,7 @@ bs_create_blob(struct spdk_blob_store *bs,
 			cb_fn(cb_arg, 0, rc);
 		}
 
-		parent = spdk_bdev_get_by_uuid(uuid_str);
+		parent = spdk_bdev_get_by_uuid(uuid);
 		if (parent == NULL) {
 			SPDK_ERRLOG("Cannot find external snapshot bdev %s\n",
 				    uuid_str);
@@ -5784,10 +5873,11 @@ bs_create_blob(struct spdk_blob_store *bs,
 			 * would force the blobstore to use a block sized bounce
 			 * buffer perform small IOs.
 			 */
-			SPDK_ERRLOG("seed device %s (%s) block size %" PRIu32
-				    " is larger than blobstore io_unit_size %"
-				    PRIu32 "\n", spdk_bdev_get_name(parent),
-				    uuid_str, spdk_bdev_get_block_size(parent),
+			SPDK_ERRLOG("External snapsshot device %s (%s) block "
+				    "size %" PRIu32 " is larger than blobstore "
+				    "io_unit_size %" PRIu32 "\n",
+				    spdk_bdev_get_name(parent), uuid_str,
+				    spdk_bdev_get_block_size(parent),
 				    blob->bs->io_unit_size);
 			blob_free(blob);
 			spdk_bit_array_clear(bs->used_blobids, page_idx);
@@ -5797,7 +5887,8 @@ bs_create_blob(struct spdk_blob_store *bs,
 		}
 		blob_set_thin_provision(blob);
 
-		rc = blob_set_xattr(blob, BLOB_SEED_BDEV, uuid_str, sizeof (uuid_str), true);
+		rc = blob_set_xattr(blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, uuid_str,
+				    sizeof (uuid_str), true);
 		if (rc != 0) {
 			blob_free(blob);
 			spdk_bit_array_clear(bs->used_blobids, page_idx);
@@ -6017,7 +6108,7 @@ bs_snapshot_copy_xattr(struct spdk_blob *fromblob, struct spdk_blob *toblob,
 	bserrno = blob_get_xattr_value(fromblob, name, &val, &len, true);
 	if (bserrno != 0) {
 		SPDK_ERRLOG("blob 0x%" PRIx64 " missing %s xattr"
-			    BLOB_SEED_BDEV " XATTR\n", fromblob->id, name);
+			    BLOB_EXTERNAL_SNAPSHOT_BDEV " XATTR\n", fromblob->id, name);
 		return bserrno;
 	}
 
@@ -6040,7 +6131,8 @@ bs_snapshot_origblob_sync_cpl(void *cb_arg, int bserrno)
 	if (bserrno != 0) {
 		bs_snapshot_swap_cluster_maps(newblob, origblob);
 		if (newblob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) {
-			bs_snapshot_copy_xattr(newblob, origblob, BLOB_SEED_BDEV);
+			bs_snapshot_copy_xattr(newblob, origblob,
+					       BLOB_EXTERNAL_SNAPSHOT_BDEV);
 			origblob->invalid_flags |= SPDK_BLOB_EXTERNAL_SNAPSHOT;
 		}
 		bs_clone_snapshot_origblob_cleanup(ctx, bserrno);
@@ -6109,11 +6201,13 @@ bs_snapshot_newblob_sync_cpl(void *cb_arg, int bserrno)
 	/* Remove the xattr that references an external snapshot */
 	if (origblob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) {
 		origblob->invalid_flags &= ~SPDK_BLOB_EXTERNAL_SNAPSHOT;
-		bserrno = blob_remove_xattr(origblob, BLOB_SEED_BDEV, true);
+		bserrno = blob_remove_xattr(origblob,
+					    BLOB_EXTERNAL_SNAPSHOT_BDEV, true);
 		if (bserrno != 0) {
 			if (bserrno == -ENOENT) {
 				SPDK_NOTICELOG("blob 0x%" PRIx64 " has no "
-					       BLOB_SEED_BDEV " xattr to remove\n",
+					       BLOB_EXTERNAL_SNAPSHOT_BDEV
+					       " xattr to remove\n",
 					       origblob->id);
 			} else {
 				/* return cluster map back to original */
@@ -6159,8 +6253,9 @@ bs_snapshot_freeze_cpl(void *cb_arg, int rc)
 	/* inherit parent from original blob if set */
 	newblob->parent_id = origblob->parent_id;
 	switch (origblob->parent_id) {
-	case SPDK_BLOBID_SEED:
-		bserrno = bs_snapshot_copy_xattr(origblob, newblob, BLOB_SEED_BDEV);
+	case SPDK_BLOBID_EXTERNAL_SNAPSHOT:
+		bserrno = bs_snapshot_copy_xattr(origblob, newblob,
+						 BLOB_EXTERNAL_SNAPSHOT_BDEV);
 		if (bserrno != 0) {
 			bs_clone_snapshot_newblob_cleanup(ctx, bserrno);
 			return;
@@ -6471,8 +6566,8 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
 		bs_blob_list_remove(_blob);
-		if (_blob->parent_id == SPDK_BLOBID_SEED) {
-			blob_remove_xattr(_blob, BLOB_SEED_BDEV, true);
+		if (_blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
+			blob_remove_xattr(_blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, true);
 			_blob->invalid_flags &= ~SPDK_BLOB_EXTERNAL_SNAPSHOT;
 		} else {
 			blob_remove_xattr(_blob, BLOB_SNAPSHOT, true);
@@ -6522,7 +6617,7 @@ bs_cluster_needs_allocation(struct spdk_blob *blob, uint64_t cluster, bool alloc
 		return allocate_all;
 	}
 
-	if (blob->parent_id == SPDK_BLOBID_SEED) {
+	if (blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
 		return true;
 	}
 
@@ -6589,7 +6684,7 @@ bs_inflate_blob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 	ctx->original.blob = _blob;
 	ctx->original.md_ro = _blob->md_ro;
 
-	if (_blob->parent_id == SPDK_BLOBID_SEED) {
+	if (_blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
 		/*
 		 * There is nosimple way to detect thin provisioning or zeroes
 		 * in an external snapshot
@@ -6907,7 +7002,7 @@ delete_snapshot_sync_snapshot_cpl(void *cb_arg, int bserrno)
 
 	switch (ctx->snapshot->parent_id) {
 	case SPDK_BLOBID_INVALID:
-	case SPDK_BLOBID_SEED:
+	case SPDK_BLOBID_EXTERNAL_SNAPSHOT:
 		/* No parent snapshot - just remove clone entry */
 		free(clone_entry);
 		break;
@@ -6989,8 +7084,8 @@ delete_snapshot_update_extent_pages_cpl(struct delete_snapshot_ctx *ctx)
 	ctx->clone->back_bs_dev->destroy(ctx->clone->back_bs_dev);
 
 	/* Set/remove snapshot xattr and switch parent ID and backing bs_dev on clone... */
-	if (ctx->snapshot->parent_id == SPDK_BLOBID_SEED) {
-		bserrno = bs_snapshot_copy_xattr(ctx->snapshot, ctx->clone, BLOB_SEED_BDEV);
+	if (ctx->snapshot->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
+		bserrno = bs_snapshot_copy_xattr(ctx->snapshot, ctx->clone, BLOB_EXTERNAL_SNAPSHOT_BDEV);
 		if (bserrno != 0) {
 			ctx->bserrno = bserrno;
 
@@ -7004,7 +7099,7 @@ delete_snapshot_update_extent_pages_cpl(struct delete_snapshot_ctx *ctx)
 			spdk_blob_sync_md(ctx->snapshot, delete_snapshot_cleanup_clone, ctx);
 			return;
 		}
-		ctx->clone->parent_id = SPDK_BLOBID_SEED;
+		ctx->clone->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
 		ctx->clone->back_bs_dev = ctx->snapshot->back_bs_dev;
 		/* Do not delete the external snapshot along with this snapshot */
 		ctx->snapshot->back_bs_dev = NULL;
@@ -8232,7 +8327,8 @@ spdk_blob_get_external_parent(struct spdk_blob *blob)
 	if (!spdk_blob_is_external_clone(blob)) {
 		return NULL;
 	}
-	rc = blob_get_xattr_value(blob, BLOB_SEED_BDEV, &value, &value_len, true);
+	rc = blob_get_xattr_value(blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, &value,
+				  &value_len, true);
 	if (rc != 0) {
 		return NULL;
 	}

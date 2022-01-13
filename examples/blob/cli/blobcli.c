@@ -1029,7 +1029,8 @@ bsdump_print_xattr(FILE *fp, const char *bstype, const char *name, const void *v
 			fprintf(fp, "?");
 		}
 	} else if (strncmp(bstype, "LVOLSTORE", SPDK_BLOBSTORE_TYPE_LENGTH) == 0) {
-		if (strcmp(name, "name") == 0 || strcmp(name, BLOB_SEED_BDEV) == 0) {
+		if (strcmp(name, "name") == 0 ||
+		    strcmp(name, BLOB_EXTERNAL_SNAPSHOT_BDEV) == 0) {
 			fprintf(fp, "%s", (char *)value);
 		} else if (strcmp(name, "uuid") == 0) {
 			struct spdk_uuid uuid;
