@@ -1362,7 +1362,25 @@ static void blob_load_seed_done(void *ctx, int rc)
 	struct blob_load_seed_ctx *seed_load_ctx = ctx;
 	struct spdk_blob *blob = seed_load_ctx->ctx->blob;
 
-	blob->parent_id = SPDK_BLOBID_SEED;
+	switch (rc) {
+	case 0:
+		blob->parent_id = SPDK_BLOBID_SEED;
+		break;
+	case -ENODEV:
+		SPDK_NOTICELOG("External snapshot not available for blob 0x%"
+			       PRIx64 ": only previously written clusters "
+			       "will be accessible until device with uuid %s "
+			       "appears\n", blob->id,
+			       spdk_blob_get_external_parent(blob));
+
+		/* XXX-mg should this have a different parent? */
+		blob->parent_id = SPDK_BLOBID_SEED;
+		blob->back_bs_dev = bs_create_eio_dev(blob);
+		rc = 0;
+
+		break;
+	}
+
 	blob_load_final(seed_load_ctx->ctx, rc);
 	free(seed_load_ctx);
 }

@@ -282,12 +282,10 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		/*
 		 * Someone removed the seed device or there is an initialization
 		 * order problem.
-		 * XXX-mg we now have an unremovable child because the blob will
-		 * not open.
 		 */
 		SPDK_ERRLOG("seed device %s is not found for blob 0x%" PRIx64 "\n",
 			    seed_uuid, front->id);
-		cb_fn(cb_arg, -ENOENT);
+		cb_fn(cb_arg, -ENODEV);
 		return;
 	}
 

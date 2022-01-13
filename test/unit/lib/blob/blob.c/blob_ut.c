@@ -42,6 +42,7 @@
 #include "blob/blobstore.c"
 #include "blob/request.c"
 #include "blob/seed.c"
+#include "blob/eio.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
 #include "thread/thread.c"
@@ -7370,6 +7371,212 @@ blob_extclone_inflate(void)
 	poll_threads();
 }
 
+static void
+dev_do_not_destroy(struct spdk_bs_dev *dev)
+{
+}
+
+static void
+bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+	      void *event_ctx)
+{
+	return;
+}
+
+static void
+bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+{
+	if (success) {
+		g_bserrno = 0;
+	} else {
+		g_bserrno = -EIO;
+	}
+	spdk_bdev_free_io(bdev_io);
+}
+
+static void
+blob_extclone_eio(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_bs_dev	*dev = bs->dev;
+	struct spdk_bs_dev	*eiodev = bs_create_eio_dev(NULL);
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	const char		*ext_uuid_str = mdisks[0].uuid_str;
+	char			*zeroes_buf, *write_buf, *read_buf;
+	const size_t		blocks_per_cluster = bs->cluster_sz / bs->io_unit_size;
+	struct spdk_io_channel	*ext_ch, *bs_ch;
+	struct spdk_bdev_desc	*ext_desc = NULL;
+	int			rc;
+	size_t			write_lba, i;
+	char			*read_block;
+
+	zeroes_buf = calloc(1, bs->io_unit_size);
+	SPDK_CU_ASSERT_FATAL(zeroes_buf != NULL);
+	write_buf = calloc(1, bs->io_unit_size);
+	SPDK_CU_ASSERT_FATAL(write_buf != NULL);
+	read_buf = calloc(1, bs->cluster_sz);
+	SPDK_CU_ASSERT_FATAL(read_buf != NULL);
+
+	/*
+	 * Create a bdev and write some stuff in the middle of the area that
+	 * will be the second cluster.
+	 */
+	ut_open_malloc_dev(0);
+	rc = spdk_bdev_open_ext(mdisks[0].name, true, bdev_event_cb, NULL,
+				&ext_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ext_desc != NULL);
+	ext_ch = spdk_bdev_get_io_channel(ext_desc);
+	SPDK_CU_ASSERT_FATAL(ext_ch != NULL);
+	memset(write_buf, 42, bs->io_unit_size);
+	write_lba = blocks_per_cluster * 3 / 2;
+	rc = spdk_bdev_write_blocks(ext_desc, ext_ch, write_buf, write_lba, 1,
+				    bdev_io_complete_cb, NULL);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	spdk_put_io_channel(ext_ch);
+	spdk_bdev_close(ext_desc);
+	ext_ch = NULL;
+	ext_desc = NULL;
+	poll_threads();
+
+	/* Create a blob clone of the bdev and open it. */
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[0].uuid);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	/* It is an external clone, not backed by eio dev. */
+	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
+	CU_ASSERT(blob->back_bs_dev->read != eiodev->read);
+
+	/*
+	 * Write the same content as was written to the middle of the second
+	 * cluster to the beginning of cluster 0.
+	 */
+	bs_ch = spdk_bs_alloc_io_channel(bs);
+	SPDK_CU_ASSERT_FATAL(bs_ch != NULL);
+	spdk_blob_io_write(blob, bs_ch, write_buf, 0, 1, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+
+	/*
+	 * Read the first cluster.  The first block should match write buf, the
+	 * rest should be zeroes.
+	 */
+	memset(read_buf, 1, bs->cluster_sz);
+	spdk_blob_io_read(blob, bs_ch, read_buf, 0, blocks_per_cluster,
+			  bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	for (i = 0; i < blocks_per_cluster; i++) {
+		read_block = &read_buf[i * bs->io_unit_size];
+		if (i == 0) {
+			CU_ASSERT(memcmp(read_block, write_buf, bs->io_unit_size) == 0);
+		} else {
+			CU_ASSERT(memcmp(read_block, zeroes_buf, bs->io_unit_size) == 0);
+		}
+	}
+	/* Do the same for the second cluster. */
+	memset(read_buf, 1, bs->cluster_sz);
+	spdk_blob_io_read(blob, bs_ch, read_buf, blocks_per_cluster, blocks_per_cluster,
+			  bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	for (i = 0; i < blocks_per_cluster; i++) {
+		read_block = &read_buf[i * bs->io_unit_size];
+		if (i == write_lba - blocks_per_cluster) {
+			CU_ASSERT(memcmp(read_block, write_buf, bs->io_unit_size) == 0);
+		} else {
+			CU_ASSERT(memcmp(read_block, zeroes_buf, bs->io_unit_size) == 0);
+		}
+	}
+
+	/*
+	 * Perform a graceful teardown of the blobstore, preserving the device
+	 * it is on so that it may be loaded again.
+	 */
+	spdk_bs_free_io_channel(bs_ch);
+	bs_ch = NULL;
+	dev = bs->dev;
+	dev->destroy = dev_do_not_destroy;
+	spdk_blob_close(blob, blob_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	spdk_bs_unload(bs, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	g_bs = NULL;
+	/* Delete the malloc dev as well. */
+	ut_close_malloc_dev(0);
+
+	/*
+	 * Load the blobstore. Verify that the blob can be opened and is backed
+	 * by the eio device.
+	 */
+	spdk_bs_load(dev, NULL, bs_op_with_handle_complete, NULL);
+	poll_threads();
+	dev->destroy = dev_destroy;
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
+	bs = g_bs;
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	/* It is an external clone, but is backed by eio dev. */
+	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
+	CU_ASSERT(blob->back_bs_dev->read == eiodev->read);
+
+	/* Verify that the first cluster can be read, as before. */
+	bs_ch = spdk_bs_alloc_io_channel(bs);
+	SPDK_CU_ASSERT_FATAL(bs_ch != NULL);
+	memset(read_buf, 1, bs->cluster_sz);
+	spdk_blob_io_read(blob, bs_ch, read_buf, 0, blocks_per_cluster,
+			  bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	for (i = 0; i < blocks_per_cluster; i++) {
+		read_block = &read_buf[i * bs->io_unit_size];
+		if (i == 0) {
+			CU_ASSERT(memcmp(read_block, write_buf, bs->io_unit_size) == 0);
+		} else {
+			CU_ASSERT(memcmp(read_block, zeroes_buf, bs->io_unit_size) == 0);
+		}
+	}
+	/* Now, trying to read from the second cluster should fail with EIO */
+	spdk_blob_io_read(blob, bs_ch, read_buf, blocks_per_cluster, blocks_per_cluster,
+			  bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == -EIO);
+
+	/*
+	 * Clean up
+	 */
+	free(zeroes_buf);
+	free(read_buf);
+	free(write_buf);
+	spdk_bs_free_io_channel(bs_ch);
+	eiodev->destroy(eiodev);
+	ut_blob_close_and_delete(bs, blob);
+	ut_close_malloc_dev(0);
+	poll_threads();
+}
+
 /* XXX-mg Test that size matches the requested size even when it doesn't match
  * the parent size (larger and smaller).  When larger, ensure that writes land
  * in the right place.
@@ -7412,24 +7619,6 @@ blob_extclone_verify_blob(struct spdk_blob *blob, struct spdk_io_channel *bs_ch,
 
 	free(buf);
 	return true;
-}
-
-static void
-bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
-	      void *event_ctx)
-{
-	return;
-}
-
-static void
-bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
-{
-	if (success) {
-		g_bserrno = 0;
-	} else {
-		g_bserrno = -EIO;
-	}
-	spdk_bdev_free_io(bdev_io);
 }
 
 static void
@@ -7740,6 +7929,7 @@ int main(int argc, char **argv)
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
 
+#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -7815,6 +8005,8 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
+#endif
+	CU_ADD_TEST(suite_bs, blob_extclone_eio);
 
 	allocate_cores(1);
 	allocate_threads(2);
