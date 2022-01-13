@@ -7929,7 +7929,6 @@ int main(int argc, char **argv)
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
 
-#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -8005,7 +8004,6 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
-#endif
 	CU_ADD_TEST(suite_bs, blob_extclone_eio);
 
 	allocate_cores(1);
