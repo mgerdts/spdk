@@ -7474,7 +7474,7 @@ blob_extclone_io_size(uint32_t bs_blksz, uint32_t ext_blksz)
 	buf2 = calloc(1, spdk_max(bs_blksz, ext_blksz));
 	SPDK_CU_ASSERT_FATAL(buf2 != NULL);
 
-	/* Create external device and intialize it with lower-case letters */
+	/* Create external device and intialize it. */
 	rc = create_malloc_disk(&bdev, NULL, NULL, ext_num_blocks, ext_blksz);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev != NULL);
