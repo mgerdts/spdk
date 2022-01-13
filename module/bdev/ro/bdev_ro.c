@@ -43,6 +43,7 @@ struct vbdev_ro;
 struct vbdev_ro_claim {
 	struct spdk_bdev	*base_bdev;
 	struct spdk_bdev_desc	*base_bdev_desc;
+	struct spdk_thread	*thread;
 	RB_ENTRY(vbdev_ro_claim) node;
 	LIST_HEAD(, vbdev_ro)	ro_bdevs;
 };
@@ -196,29 +197,15 @@ static const struct spdk_bdev_fn_table vbdev_ro_fn_table = {
 	.get_memory_domains	= vbdev_ro_get_memory_domains,
 };
 
-static struct vbdev_ro_claim *
-vbdev_ro_get_claim_by_base_bdev(struct spdk_bdev *base_bdev)
-{
-	struct vbdev_ro_claim find = {};
-	/* XXX-mg work out locking or require a specific thread. */
-
-	find.base_bdev = base_bdev;
-	return RB_FIND(vbdev_ro_claims_tree, &g_bdev_ro_claims, &find);
-}
-
 static void
 vbdev_ro_base_bdev_event_cb(enum spdk_bdev_event_type type,
 			    struct spdk_bdev *base_bdev, void *event_ctx)
 {
-	struct vbdev_ro_claim	*claim;
+	struct vbdev_ro_claim	*claim = event_ctx;
 	struct vbdev_ro		*ro_bdev, *tmp;
 
         switch (type) {
         case SPDK_BDEV_EVENT_REMOVE:
-		claim = vbdev_ro_get_claim_by_base_bdev(base_bdev);
-		if (claim == NULL) {
-			return;
-		}
 		LIST_FOREACH_SAFE(ro_bdev, &claim->ro_bdevs, link, tmp) {
 			spdk_bdev_unregister(&ro_bdev->bdev, NULL, NULL);
 		}
@@ -262,6 +249,15 @@ vbdev_ro_claim_cmp(struct vbdev_ro_claim *claim1, struct vbdev_ro_claim *claim2)
 	       claim1->base_bdev < claim2->base_bdev ? -1 : 1;
 }
 
+static struct vbdev_ro_claim *
+vbdev_ro_get_claim_by_base_bdev(struct spdk_bdev *base_bdev)
+{
+	struct vbdev_ro_claim find = {};
+
+	find.base_bdev = base_bdev;
+	return RB_FIND(vbdev_ro_claims_tree, &g_bdev_ro_claims, &find);
+}
+
 static int
 vbdev_ro_claim_bdev(struct spdk_bdev *base_bdev, struct vbdev_ro *ro_bdev)
 {
@@ -295,6 +291,7 @@ vbdev_ro_claim_bdev(struct spdk_bdev *base_bdev, struct vbdev_ro *ro_bdev)
 		pthread_mutex_unlock(&g_bdev_ro_claims_mutex);
 		return -ENOMEM;
 	}
+	claim->thread = spdk_get_thread();
 	ret = spdk_bdev_open_ext(base_bdev->name, false, vbdev_ro_base_bdev_event_cb,
 				 claim, &claim->base_bdev_desc);
 	if (ret != 0) {
@@ -334,6 +331,18 @@ vbdev_ro_device_unregister_cb(void *_claim)
 	free(claim);
 }
 
+int spdk_thread_send_msg(const struct spdk_thread *thread, spdk_msg_fn fn, void *ctx);
+static void
+vbdev_ro_release_claim(void *ctx) {
+	struct vbdev_ro_claim	*claim = ctx;
+
+	assert(claim->thread == spdk_get_thread());
+
+	spdk_bdev_module_release_bdev(claim->base_bdev);
+	spdk_bdev_close(claim->base_bdev_desc);
+	spdk_io_device_unregister(claim, vbdev_ro_device_unregister_cb);
+}
+
 static void
 vbdev_ro_release_bdev(struct vbdev_ro *ro_bdev)
 {
@@ -348,14 +357,20 @@ vbdev_ro_release_bdev(struct vbdev_ro *ro_bdev)
 	}
 
 	LIST_REMOVE(ro_bdev, link);
-	if (LIST_EMPTY(&claim->ro_bdevs)) {
-		RB_REMOVE(vbdev_ro_claims_tree, &g_bdev_ro_claims, claim);
-		spdk_bdev_module_release_bdev(claim->base_bdev);
-		spdk_bdev_close(claim->base_bdev_desc);
-		spdk_io_device_unregister(claim, vbdev_ro_device_unregister_cb);
+	if (!LIST_EMPTY(&claim->ro_bdevs)) {
+		pthread_mutex_unlock(&g_bdev_ro_claims_mutex);
+		return;
 	}
 
+	/* Remove the claim from the tree and release it on the right thread. */
+	RB_REMOVE(vbdev_ro_claims_tree, &g_bdev_ro_claims, claim);
 	pthread_mutex_unlock(&g_bdev_ro_claims_mutex);
+
+	if (claim->thread == spdk_get_thread()) {
+		vbdev_ro_release_claim(claim);
+	} else {
+		spdk_thread_send_msg(claim->thread, vbdev_ro_release_claim, claim);
+	}
 }
 
 /*

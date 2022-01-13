@@ -514,61 +514,124 @@ static void
 ro_remove_base(void)
 {
 	struct spdk_bdev		*base_bdev;
-	struct spdk_bdev_desc		*ro_desc;
-	struct vbdev_ro_opts		opts = {};
-	struct spdk_bdev		*ro_bdev;
-	const struct ut_event_cb	initial_event = { -1, NULL };
-	struct ut_event_cb		ro_event;
-	int				rc, cb_errno, ro_del_errno;
+	struct vbdev_ro_opts		opts = { 0 };
+	const struct ut_event_cb	initial_event = { .type = -1, .bdev = NULL };
+	char				*base_name = "base";
+	int				rc, cb_errno, base_errno;
+	uint64_t			i;
+	struct {
+		char			*name;
+		struct spdk_bdev	*bdev;
+		struct spdk_bdev_desc	*desc;
+		struct ut_event_cb	event;
+	} ro[2] = { { "ro0" }, { "ro1" } };
 
 	/* Create the base bdev */
-	rc = create_malloc_disk(&base_bdev, NULL, NULL, 2048, 512);
+	rc = create_malloc_disk(&base_bdev, base_name, NULL, 2048, 512);
 	CU_ASSERT(rc == 0);
 	poll_threads();
 
 	/* Create a read-only bdev on the base bdev. */
-	opts.name = "ro_ut0";
+	opts.name = ro[0].name;
 	opts.uuid = NULL;
-	ro_bdev = NULL;
-	rc = create_ro_disk(base_bdev->name, &opts, &ro_bdev);
+	ro[0].bdev = NULL;
+	rc = create_ro_disk(base_name, &opts, &ro[0].bdev);
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(ro_bdev != NULL);
+	CU_ASSERT(ro[0].bdev != NULL);
 	/* Allow bdev_register to be delivered. */
 	poll_threads();
 
 	/* Open the read-only bdev. */
-	ro_event = initial_event;
-	rc = spdk_bdev_open_ext(opts.name, true, bdev_event_cb, &ro_event, &ro_desc);
+	ro[0].event = initial_event;
+	rc = spdk_bdev_open_ext(opts.name, true, bdev_event_cb, &ro[0].event, &ro[0].desc);
 	cb_errno = 0x600dd06;
 	poll_threads();
 	CU_ASSERT(cb_errno == 0x600dd06);
-	CU_ASSERT(ro_event.type == initial_event.type);
-	CU_ASSERT(ro_event.bdev == initial_event.bdev);
+	CU_ASSERT(ro[0].event.type == initial_event.type);
+	CU_ASSERT(ro[0].event.bdev == initial_event.bdev);
 
 	/* Delete the base (malloc) bdev and verify that the ro bdev got an event. */
-	ro_del_errno = 0xbadf00d;
-	delete_malloc_disk(base_bdev, save_errno_cb, &ro_del_errno);
+	base_errno = 0xbadf00d;
+	delete_malloc_disk(base_bdev, save_errno_cb, &base_errno);
 	poll_threads();
-	CU_ASSERT(ro_event.type == SPDK_BDEV_EVENT_REMOVE);
-	CU_ASSERT(ro_event.bdev == ro_bdev);
-	/* save_errno_cb should not be called until the ro disk is deleted */
-	CU_ASSERT(ro_del_errno == 0xbadf00d);
+	CU_ASSERT(base_errno == 0xbadf00d);
+	CU_ASSERT(ro[0].event.type == SPDK_BDEV_EVENT_REMOVE);
+	CU_ASSERT(ro[0].event.bdev == ro[0].bdev);
 
 	/*
-	 * Clean up.
+	 * Delete the read-only bdev.
 	 *
 	 * We already received a SPDK_BDEV_EVENT_REMOVE event which implies that
 	 * the vbdev_ro module is already handling the deletion asynchronously.
 	 * We must not call delete_ro_disk().
 	 *
 	 * Once the last reference to bdev_ro goes away with the closing of
-	 * ro_desc, the callback passed to delete_malloc_disk() will be called,
-	 * which will update ro_del_errno.
+	 * ro[0].desc, the callback passed to delete_malloc_disk() will be called,
+	 * which will update base_errnum;
 	 */
-	spdk_bdev_close(ro_desc);
+	CU_ASSERT(spdk_bdev_get_by_name(base_name) == base_bdev);
+	CU_ASSERT(spdk_bdev_get_by_name(ro[0].name) == ro[0].bdev);
+	spdk_bdev_close(ro[0].desc);
 	poll_threads();
-	/* Now the base bdev should be cleaned up. */
-	CU_ASSERT(ro_del_errno == 0);
+	/* By now the base bdev should have be cleaned up. */
+	CU_ASSERT(base_errno == 0);
+	CU_ASSERT(spdk_bdev_get_by_name(base_name) == NULL);
+	CU_ASSERT(spdk_bdev_get_by_name(ro[0].name) == NULL);
+
+	/*
+	 * Repeat what was done above with two ro bdevs using the same base
+	 * bdev. Each ro bdev is opened and closed on a bdev-specific thread.
+	 */
+
+	/* Create the base bdev */
+	set_thread(0);
+	rc = create_malloc_disk(&base_bdev, base_name, NULL, 2048, 512);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+
+	/* Create and open the ro bdevs */
+	for (i = 0; i < SPDK_COUNTOF(ro); i++) {
+		set_thread(i);
+
+		opts.name = ro[i].name;
+		opts.uuid = NULL;
+		ro[i].bdev = NULL;
+		rc = create_ro_disk(base_name, &opts, &ro[i].bdev);
+		CU_ASSERT(rc == 0);
+		CU_ASSERT(ro[i].bdev != NULL);
+
+		ro[i].event = initial_event;
+		rc = spdk_bdev_open_ext(opts.name, true, bdev_event_cb,
+					&ro[i].event, &ro[i].desc);
+		poll_threads();
+		CU_ASSERT(ro[i].event.type == initial_event.type);
+		CU_ASSERT(ro[i].event.bdev == initial_event.bdev);
+	}
+
+	/* Delete the base bdev and verify that each ro bdev got an event. */
+	set_thread(0);
+	base_errno = 0xbadf00d;
+	delete_malloc_disk(base_bdev, save_errno_cb, &base_errno);
+	poll_threads();
+	CU_ASSERT(base_errno == 0xbadf00d);
+	for (i = 0; i < SPDK_COUNTOF(ro); i++) {
+		CU_ASSERT(ro[i].event.type == SPDK_BDEV_EVENT_REMOVE);
+		CU_ASSERT(ro[i].event.bdev == ro[i].bdev);
+	}
+
+	/* Close the ro descriptors on the proper threads */
+	for (i = 0; i < SPDK_COUNTOF(ro); i++) {
+		CU_ASSERT(spdk_bdev_get_by_name(ro[i].name) == ro[i].bdev);
+		set_thread(i);
+		spdk_bdev_close(ro[i].desc);
+		poll_threads();
+		CU_ASSERT(spdk_bdev_get_by_name(ro[0].name) == NULL);
+	}
+	set_thread(0);
+
+	/* By now the base bdev should have be cleaned up. */
+	CU_ASSERT(base_errno == 0);
+	CU_ASSERT(spdk_bdev_get_by_name(base_name) == NULL);
 }
 
 static void
@@ -577,6 +640,7 @@ suite_setup(void)
 	int cb_errno = 0x600dd06;
 
 	init_accel();
+	set_thread(0);
 	spdk_bdev_initialize(save_errno_cb, &cb_errno);
 	poll_threads();
 	CU_ASSERT(cb_errno == 0);
@@ -586,6 +650,7 @@ static void
 suite_teardown(void)
 {
 	spdk_bdev_finish(nop_cb, NULL);
+	set_thread(0);
 	fini_accel();
 	poll_threads();
 }
@@ -608,7 +673,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, ro_remove_base);
 
 	allocate_cores(1);
-	allocate_threads(1);
+	allocate_threads(2);
 	set_thread(0);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
