@@ -206,9 +206,11 @@ vbdev_ro_base_bdev_event_cb(enum spdk_bdev_event_type type,
 
         switch (type) {
         case SPDK_BDEV_EVENT_REMOVE:
+		pthread_mutex_lock(&g_bdev_ro_claims_mutex);
 		LIST_FOREACH_SAFE(ro_bdev, &claim->ro_bdevs, link, tmp) {
 			spdk_bdev_unregister(&ro_bdev->bdev, NULL, NULL);
 		}
+		pthread_mutex_unlock(&g_bdev_ro_claims_mutex);
                 break;
         default:
                 SPDK_NOTICELOG("Unsupported bdev event: type %d\n", type);
