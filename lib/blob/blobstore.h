@@ -441,6 +441,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super 
 #pragma pack(pop)
 
 struct spdk_bs_dev *bs_create_zeroes_dev(struct spdk_blob *blob);
+struct spdk_bs_dev *bs_create_eio_dev(struct spdk_blob *blob);
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
 typedef void(*blob_load_seed_cpl)(void *ctx, int rc);
