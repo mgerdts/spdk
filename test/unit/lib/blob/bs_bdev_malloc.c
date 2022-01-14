@@ -114,7 +114,7 @@ ut_open_malloc_dev(size_t devidx)
 	SPDK_CU_ASSERT_FATAL(devidx <= SPDK_COUNTOF(mdisks));
 
 	disk = &mdisks[devidx];
-	SPDK_CU_ASSERT_FATAL(disk->bdev == NULL);
+	CU_ASSERT(disk->bdev == NULL);
 	SPDK_CU_ASSERT_FATAL(spdk_uuid_parse(&disk->uuid, disk->uuid_str) == 0);
 
 	rc = create_malloc_disk(&disk->bdev, disk->name, &disk->uuid,
