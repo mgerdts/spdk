@@ -1385,6 +1385,55 @@ static void blob_load_seed_done(void *ctx, int rc)
 }
 
 static void
+blob_base_hotremove_done(void *_dev, int bserrno)
+{
+	struct spdk_bs_dev	*seed_dev = _dev;
+
+	if (seed_dev != NULL) {
+		seed_dev->destroy(seed_dev);
+	}
+	if (bserrno != 0) {
+		SPDK_ERRLOG("Failed to unfreeze blob. Error %d\n", bserrno);
+	}
+}
+
+static void
+blob_base_hotremove_frozen(void *_blob, int bserrno)
+{
+	struct spdk_blob	*blob = _blob;
+	struct spdk_bs_dev	*seed_dev = blob->back_bs_dev;
+	struct spdk_bs_dev	*eio_dev;
+
+	if (bserrno != 0) {
+		SPDK_ERRLOG("Failed to freeze blob 0x%" PRIx64 ". Error %d\n",
+			    blob->id, bserrno);
+		return;
+	}
+
+	eio_dev = bs_create_eio_dev(blob);
+	if (eio_dev == NULL) {
+		SPDK_ERRLOG("Failed to create eio device for blob 0x%"
+			    PRIx64 "\n", blob->id);
+		blob_unfreeze_io(blob, blob_base_hotremove_done, NULL);
+		return;
+	}
+
+	SPDK_NOTICELOG("External snapshot is being hot removed from blob 0x%"
+		       PRIx64 ": only previously written clusters will be "
+		       "accessible until device with uuid %s returns\n",
+		       blob->id, spdk_blob_get_external_parent(blob));
+	blob->back_bs_dev = eio_dev;
+
+	blob_unfreeze_io(blob, blob_base_hotremove_done, seed_dev);
+}
+
+static void
+blob_base_hotremove(struct spdk_blob *blob)
+{
+	blob_freeze_io(blob, blob_base_hotremove_frozen, blob);
+}
+
+static void
 blob_load_backing_dev(void *cb_arg)
 {
 	struct spdk_blob_load_ctx	*ctx = cb_arg;
@@ -1406,7 +1455,8 @@ blob_load_backing_dev(void *cb_arg)
 		SPDK_INFOLOG(blob, "Creating seed bs\n");
 
 		/* Use an existing bdev for unallocated blocks */
-		bs_create_seed_dev(blob, uuid, blob_load_seed_done, ctx);
+		bs_create_seed_dev(blob, uuid, blob_base_hotremove,
+				   blob_load_seed_done, ctx);
 		return;
 	}
 

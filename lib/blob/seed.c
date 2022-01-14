@@ -206,9 +206,7 @@ seed_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 
 	switch (type) {
 	case SPDK_BDEV_EVENT_REMOVE:
-		// XXX-mg what about channel?
-		spdk_bdev_close(ctx->bdev_desc);
-		ctx->bdev_desc = NULL;
+		ctx->hotremove(ctx->blob);
 		break;
 	default:
 		SPDK_NOTICELOG("Unsupported event %d\n", type);
@@ -267,6 +265,7 @@ static void load_seed_on_thread_done(void *arg1)
 
 void
 bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
+		   blob_hotremove_cb hotremove_fn,
 		   blob_load_seed_cpl cb_fn, void *cb_arg)
 {
 	struct spdk_bdev *bdev, *ro_bdev;
@@ -355,6 +354,8 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		cb_fn(cb_arg, ret);
 		return;
 	}
+	ctx->hotremove = hotremove_fn;
+	ctx->blob = front;
 
 	back = calloc(1, sizeof(*back));
 	if (back == NULL) {

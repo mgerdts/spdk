@@ -144,6 +144,14 @@ typedef void (*spdk_blob_op_with_handle_complete)(void *cb_arg, struct spdk_blob
 typedef void (*spdk_bs_dev_cpl)(struct spdk_io_channel *channel,
 				void *cb_arg, int bserrno);
 
+/**
+ * Blobstore back device hot removal callback. Called with the back device
+ * receives an SPDK_BDEV_EVENT_REMOVE event.
+ *
+ * \param blob The blob that has lost its back device.
+ */
+typedef void (*spdk_bs_back_hot_remove)(struct spdk_blob *blob);
+
 struct spdk_bs_dev_cb_args {
 	spdk_bs_dev_cpl		cb_fn;
 	struct spdk_io_channel	*channel;

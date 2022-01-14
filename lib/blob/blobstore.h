@@ -445,15 +445,19 @@ struct spdk_bs_dev *bs_create_eio_dev(struct spdk_blob *blob);
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
 typedef void(*blob_load_seed_cpl)(void *ctx, int rc);
+typedef void(*blob_hotremove_cb)(struct spdk_blob *blob);
 
 struct seed_ctx {
 	struct spdk_bdev		*bdev;
 	struct spdk_bdev_desc		*bdev_desc;
 	struct spdk_io_channel		**io_channels;
 	uint64_t			io_channels_count;
+	blob_hotremove_cb		hotremove;
+	struct spdk_blob		*blob;
 };
 
 void bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
+			blob_hotremove_cb hotremove_fn,
 			blob_load_seed_cpl cb_fn, void *cb_arg);
 
 /* Unit Conversions
