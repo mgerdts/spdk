@@ -12,10 +12,10 @@ support clones of external snapshots.
 
 ### Unavailability of external snapshot
 
-- Handle surprise removal of external snapshot, transitioning the blob to
-  degraded mode.
+- Transition missing and removed external snapshot from eio bs dev to wait bdev.
 - Handle surprise add of external snapshot, transitioning from degraded to
   healthy.
+- Make external snapshot health visible via an RPC call.
 
 ### Misc
 
@@ -40,6 +40,14 @@ support clones of external snapshots.
   part.c](https://review.spdk.io/gerrit/c/spdk/spdk/+/11048/1/lib/bdev/part.c).
 - Implement JSON dump `bdev_get_bdevs` support
 - Support resize of base bdev?
+
+
+## vbev_wait
+
+- Write unit tests
+- Update documentation
+- Sort out behavior when the desired bdev already exists or comes into
+  existence just as the wait bdev is created.
 
 ## Blob CLI
 
