@@ -1,8 +1,7 @@
 #
 #  BSD LICENSE
 #
-#  Copyright (c) Intel Corporation.
-#  All rights reserved.
+#  Copyright (c) 2022 NVIDIA CORPORATION. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -31,31 +30,15 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y += delay error gpt lvol malloc null nvme passthru raid ro split wait zone_block
+SO_VER := 1
+SO_MINOR := 0
 
-DIRS-$(CONFIG_CRYPTO) += crypto
+C_SRCS = bdev_wait.c
+LIBNAME = bdev_wait
 
-DIRS-$(CONFIG_OCF) += ocf
+SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
-DIRS-$(CONFIG_REDUCE) += compress
-
-DIRS-$(CONFIG_URING) += uring
-
-ifeq ($(OS),Linux)
-DIRS-y += aio ftl
-DIRS-$(CONFIG_ISCSI_INITIATOR) += iscsi
-DIRS-$(CONFIG_VIRTIO) += virtio
-DIRS-$(CONFIG_PMDK) += pmem
-endif
-
-DIRS-$(CONFIG_RBD) += rbd
-
-.PHONY: all clean $(DIRS-y)
-
-all: $(DIRS-y)
-clean: $(DIRS-y)
-
-include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk
