@@ -30,8 +30,8 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef SPDK_BDEV_RO_H
-#define SPDK_BDEV_RO_H
+#ifndef SPDK_BDEV_WAIT_H
+#define SPDK_BDEV_WAIT_H
 
 #include "spdk/stdinc.h"
 

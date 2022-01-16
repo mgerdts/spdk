@@ -200,7 +200,7 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 	struct spdk_bdev	*bdev = NULL;
 	int			rc;
 
-	wait_bdev = calloc(1, sizeof(wait_bdev));
+	wait_bdev = calloc(1, sizeof(*wait_bdev));
 	if (wait_bdev == NULL) {
 		return -ENOMEM;
 	}
