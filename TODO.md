@@ -48,6 +48,7 @@ support clones of external snapshots.
 - Update documentation
 - Sort out behavior when the desired bdev already exists or comes into
   existence just as the wait bdev is created.
+- Consider collecting stats on number of io_submit calls.
 
 ## Blob CLI
 
