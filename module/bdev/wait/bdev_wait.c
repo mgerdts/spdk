@@ -144,7 +144,15 @@ bdev_wait_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_i
 static struct spdk_io_channel *
 bdev_wait_get_io_channel(void *ctx)
 {
+#if 0
 	return spdk_get_io_channel(&g_bdev_waits);
+#else
+	/*
+	 * This bdev does not support IO. The bdev layer won't try if it doesn't
+	 * have a valid IO channel.
+	 */
+	return NULL;
+#endif
 }
 
 static bool
@@ -190,6 +198,11 @@ bdev_wait_unique_name(const char *uuid)
 
 /*
  * Wait device public interface implementation
+ */
+
+/*
+ * There is a small race here. A caller can cover the race by registering the
+ * wait, then performing its own lookup for the bdev that it is awaiting.
  */
 int
 create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uuid,
@@ -252,6 +265,10 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 	bdev->module = &wait_if;
 	bdev->fn_table = &bdev_wait_fn_table;
 
+	pthread_mutex_lock(&g_bdev_wait_mutex);
+	RB_INSERT(bdev_wait_tree, &g_bdev_waits, wait_bdev);
+	pthread_mutex_unlock(&g_bdev_wait_mutex);
+
 	rc = spdk_bdev_register(bdev);
 	if (rc != 0) {
 		free(bdev->name);
@@ -277,4 +294,4 @@ delete_wait_disk(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn,
 	spdk_bdev_unregister(bdev, cb_fn, cb_arg);
 }
 
-SPDK_LOG_REGISTER_COMPONENT(bdev_wait)
+SPDK_BDEV_MODULE_REGISTER(bdev_wait, &wait_if)
