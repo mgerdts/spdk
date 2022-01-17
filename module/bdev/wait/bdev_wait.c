@@ -83,11 +83,6 @@ RB_HEAD(bdev_wait_target_tree, bdev_wait_target) g_bdev_wait_targets = RB_INITIA
 RB_GENERATE_STATIC(bdev_wait_target_tree, bdev_wait_target, node, bdev_wait_target_cmp);
 pthread_mutex_t g_bdev_wait_mutex;
 
-/*
- * Even though this module doesn't really support performing any IO, the read
- * and write path at the bdev layer doesn't know that. Thus, we need to mock up
- * enough support for channels that the get_io_channel callback can work.
- */
 static int
 bdev_wait_create_cb(void *io_device, void *ctx_buf)
 {
@@ -102,21 +97,15 @@ bdev_wait_destroy_cb(void *io_device, void *ctx_buf)
 static int
 bdev_wait_init(void)
 {
-	/*
-	 * There is no need for space after a struct io_device for context for
-	 * this module. A non-zero size is given so that
-	 * spdk_io_channel_get_ctx() doesn't lead to confusion during debug
-	 * sessions by returning a pointer to something else.
-	 */
-	spdk_io_device_register(&g_bdev_wait_targets, bdev_wait_create_cb,
-				bdev_wait_destroy_cb, 1, "bdev_wait");
+	spdk_io_device_register(&wait_if, bdev_wait_create_cb,
+				bdev_wait_destroy_cb, 0, "bdev_wait");
 	return 0;
 }
 
 static void
 bdev_wait_fini(void)
 {
-	spdk_io_device_unregister(&g_bdev_wait_targets, NULL);
+	spdk_io_device_unregister(&wait_if, NULL);
 }
 
 static void
@@ -156,15 +145,11 @@ bdev_wait_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_i
 static struct spdk_io_channel *
 bdev_wait_get_io_channel(void *ctx)
 {
-#if 0
-	return spdk_get_io_channel(&g_bdev_wait_targets);
-#else
 	/*
 	 * This bdev does not support IO. The bdev layer won't try if it doesn't
 	 * have a valid IO channel.
 	 */
 	return NULL;
-#endif
 }
 
 static bool
@@ -236,7 +221,6 @@ bdev_wait_remove(struct bdev_wait *wait_bdev)
 	}
 
 	pthread_mutex_unlock(&g_bdev_wait_mutex);
-
 }
 
 static int

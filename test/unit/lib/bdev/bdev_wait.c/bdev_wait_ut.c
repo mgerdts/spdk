@@ -406,6 +406,36 @@ wait_hotadd(void)
 	poll_threads();
 }
 
+/*
+ * Wait bdevs do not support IO. To prevent any attempt at performing IO, they
+ * return a NULL channel.
+ */
+static void
+wait_channel(void)
+{
+	struct spdk_bdev	*wait_bdev;
+	struct spdk_bdev_desc	*wait_desc;
+	struct spdk_io_channel	*wait_ch;
+	const char		*wait_uuid = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	int			rc;
+
+	rc = create_wait_disk(NULL, NULL, wait_uuid,
+			      wait_available_cb, NULL, &wait_bdev);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(wait_bdev != NULL);
+
+	rc = spdk_bdev_open_ext(spdk_bdev_get_name(wait_bdev), false,
+				bdev_event_cb, NULL, &wait_desc);
+	CU_ASSERT(rc == 0);
+	wait_ch = spdk_bdev_get_io_channel(wait_desc);
+	CU_ASSERT(wait_ch == 0);
+
+	spdk_bdev_close(wait_desc);
+	delete_wait_disk(wait_bdev, NULL, NULL);
+	poll_threads();
+}
+
 int
 main(int argc, char **argv)
 {
@@ -420,6 +450,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, wait_create);
 	CU_ADD_TEST(suite, wait_create_open_delete);
 	CU_ADD_TEST(suite, wait_hotadd);
+	CU_ADD_TEST(suite, wait_channel);
 
 	allocate_cores(1);
 	allocate_threads(2);
