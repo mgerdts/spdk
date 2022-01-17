@@ -38,20 +38,6 @@
 #include "spdk/bdev_module.h"
 #include "bdev_wait.h"
 
-struct bdev_wait {
-	/* This bdev */
-	struct spdk_bdev	bdev;
-
-	/* The bdev that is being waited upon. */
-	struct spdk_uuid	uuid;
-
-	/* Called when the bdev appears. */
-	wait_disk_available_cb	available_cb;
-	void			*available_ctx;
-
-	RB_ENTRY(bdev_wait)	node;
-};
-
 static int bdev_wait_init(void);
 static void bdev_wait_fini(void);
 static void bdev_wait_examine_disk(struct spdk_bdev *bdev);
@@ -63,17 +49,38 @@ static struct spdk_bdev_module wait_if = {
 	.examine_disk	= bdev_wait_examine_disk,
 };
 
-/*
- * Keep track of all wait bdevs in an RB tree.
- */
+struct bdev_wait;
+
+/* Node in an RB tree of bdevs being waited upon. */
+struct bdev_wait_target {
+	struct spdk_uuid		uuid;
+	RB_ENTRY(bdev_wait_target)	node;
+	LIST_HEAD(, bdev_wait)		wait_bdevs;
+};
+
+/* Each tree node has a list of bdevs that are awaiting the target UUID. */
+struct bdev_wait {
+	/* This bdev */
+	struct spdk_bdev	bdev;
+
+	/* The bdev that is being waited upon. */
+	struct bdev_wait_target	*target;
+
+	/* Called when the bdev appears. */
+	wait_disk_available_cb	available_cb;
+	void			*available_ctx;
+
+	LIST_ENTRY(bdev_wait)	link;
+};
+
 static int
-bdev_wait_cmp(struct bdev_wait *w1, struct bdev_wait *w2)
+bdev_wait_target_cmp(struct bdev_wait_target *w1, struct bdev_wait_target *w2)
 {
 	return spdk_uuid_compare(&w1->uuid, &w2->uuid);
 }
 
-RB_HEAD(bdev_wait_tree, bdev_wait) g_bdev_waits = RB_INITIALIZER(&head);
-RB_GENERATE_STATIC(bdev_wait_tree, bdev_wait, node, bdev_wait_cmp);
+RB_HEAD(bdev_wait_target_tree, bdev_wait_target) g_bdev_wait_targets = RB_INITIALIZER(&head);
+RB_GENERATE_STATIC(bdev_wait_target_tree, bdev_wait_target, node, bdev_wait_target_cmp);
 pthread_mutex_t g_bdev_wait_mutex;
 
 /*
@@ -101,7 +108,7 @@ bdev_wait_init(void)
 	 * spdk_io_channel_get_ctx() doesn't lead to confusion during debug
 	 * sessions by returning a pointer to something else.
 	 */
-	spdk_io_device_register(&g_bdev_waits, bdev_wait_create_cb,
+	spdk_io_device_register(&g_bdev_wait_targets, bdev_wait_create_cb,
 				bdev_wait_destroy_cb, 1, "bdev_wait");
 	return 0;
 }
@@ -109,29 +116,34 @@ bdev_wait_init(void)
 static void
 bdev_wait_fini(void)
 {
-	spdk_io_device_unregister(&g_bdev_waits, NULL);
+	spdk_io_device_unregister(&g_bdev_wait_targets, NULL);
 }
 
 static void
 bdev_wait_examine_disk(struct spdk_bdev *bdev)
 {
-	struct bdev_wait	*wait_bdev;
-	struct bdev_wait	find = { 0 };
+	struct bdev_wait	*wait_bdev, *tmp;
+	struct bdev_wait_target	*target;
+	struct bdev_wait_target	find = { 0 };
 
 	find.uuid = bdev->uuid;
 
 	pthread_mutex_lock(&g_bdev_wait_mutex);
-	wait_bdev = RB_FIND(bdev_wait_tree, &g_bdev_waits, &find);
-	pthread_mutex_unlock(&g_bdev_wait_mutex);
+	target = RB_FIND(bdev_wait_target_tree, &g_bdev_wait_targets, &find);
 
-	if (wait_bdev != NULL) {
-		/*
-		 * For this callback to safely use bdev, it needs to open it
-		 * before returning.
-		 */
+	if (target == NULL) {
+		pthread_mutex_unlock(&g_bdev_wait_mutex);
+		spdk_bdev_module_examine_done(&wait_if);
+		return;
+	}
+
+	/* XXX-mg not thrilled about the hold time for a global mutex.  Switch
+	 * to a per target mutex? */
+	LIST_FOREACH_SAFE(wait_bdev, &target->wait_bdevs, link, tmp) {
 		wait_bdev->available_cb(wait_bdev->available_ctx, bdev);
 	}
 
+	pthread_mutex_unlock(&g_bdev_wait_mutex);
 	spdk_bdev_module_examine_done(&wait_if);
 }
 
@@ -145,7 +157,7 @@ static struct spdk_io_channel *
 bdev_wait_get_io_channel(void *ctx)
 {
 #if 0
-	return spdk_get_io_channel(&g_bdev_waits);
+	return spdk_get_io_channel(&g_bdev_wait_targets);
 #else
 	/*
 	 * This bdev does not support IO. The bdev layer won't try if it doesn't
@@ -161,14 +173,78 @@ bdev_wait_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 	return false;
 }
 
+/*
+ * Add wait_bdev to targets tree. This should be done before wait_bdev is
+ * registered.
+ */
+static int
+bdev_wait_add(struct bdev_wait *wait_bdev, struct spdk_uuid *target_uuid)
+{
+	struct bdev_wait_target *target, *existing;
+	struct bdev_wait_target find;
+
+	find.uuid = *target_uuid;
+
+	pthread_mutex_lock(&g_bdev_wait_mutex);
+
+	target = RB_FIND(bdev_wait_target_tree, &g_bdev_wait_targets, &find);
+	if (target == NULL) {
+		target = calloc(1, sizeof(*target));
+		if (target == NULL) {
+			pthread_mutex_unlock(&g_bdev_wait_mutex);
+			return -ENOMEM;
+		}
+
+		target->uuid = *target_uuid;
+		LIST_INIT(&target->wait_bdevs);
+		existing = RB_INSERT(bdev_wait_target_tree,
+				     &g_bdev_wait_targets, target);
+		if (existing != NULL) {
+			SPDK_ERRLOG("Collision while inserting wait for %s\n",
+				    wait_bdev->bdev.name);
+			abort();
+		}
+	}
+
+	wait_bdev->target = target;
+	LIST_INSERT_HEAD(&target->wait_bdevs, wait_bdev, link);
+
+	pthread_mutex_unlock(&g_bdev_wait_mutex);
+
+	return 0;
+}
+
+/*
+ * Remove wait_bdev from targets tree, removing and freeing tree node if needed.
+ * Caller should free wait_bdev if it is no longer needed.
+ *
+ * This should happen when the wait bdev is no longer registered - likely only
+ * during the bdev's destruct callback.
+ */
+static void
+bdev_wait_remove(struct bdev_wait *wait_bdev)
+{
+	struct bdev_wait_target *target = wait_bdev->target;
+
+	pthread_mutex_lock(&g_bdev_wait_mutex);
+
+	LIST_REMOVE(wait_bdev, link);
+
+	if (LIST_EMPTY(&target->wait_bdevs)) {
+		RB_REMOVE(bdev_wait_target_tree, &g_bdev_wait_targets, target);
+		free(target);
+	}
+
+	pthread_mutex_unlock(&g_bdev_wait_mutex);
+
+}
+
 static int
 bdev_wait_destruct(void *ctx)
 {
 	struct bdev_wait *wait_bdev = ctx;
 
-	pthread_mutex_lock(&g_bdev_wait_mutex);
-	RB_REMOVE(bdev_wait_tree, &g_bdev_waits, wait_bdev);
-	pthread_mutex_unlock(&g_bdev_wait_mutex);
+	bdev_wait_remove(wait_bdev);
 
 	free(wait_bdev->bdev.name);
 	free(wait_bdev);
@@ -211,7 +287,18 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 {
 	struct bdev_wait	*wait_bdev = NULL;
 	struct spdk_bdev	*bdev = NULL;
+	struct spdk_uuid	target_uuid;
 	int			rc;
+
+	if (base_uuid == NULL) {
+		SPDK_ERRLOG("Missing UUID\n");
+		return -EINVAL;
+	}
+
+	if (available_cb == NULL) {
+		SPDK_ERRLOG("Missing callback\n");
+		return -EINVAL;
+	}
 
 	wait_bdev = calloc(1, sizeof(*wait_bdev));
 	if (wait_bdev == NULL) {
@@ -220,12 +307,6 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 	wait_bdev->available_cb = available_cb;
 	wait_bdev->available_ctx = available_ctx;
 	bdev = &wait_bdev->bdev;
-
-	if (base_uuid == NULL) {
-		SPDK_ERRLOG("Missing UUID\n");
-		free(wait_bdev);
-		return -EINVAL;
-	}
 
 	if (new_uuid == NULL) {
 		spdk_uuid_generate(&bdev->uuid);
@@ -237,7 +318,7 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 		}
 	}
 
-	rc = spdk_uuid_parse(&wait_bdev->uuid, base_uuid);
+	rc = spdk_uuid_parse(&target_uuid, base_uuid);
 	if (rc != 0) {
 		SPDK_ERRLOG("Invalid uuid '%s'\n", base_uuid);
 		free(wait_bdev);
@@ -265,12 +346,16 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 	bdev->module = &wait_if;
 	bdev->fn_table = &bdev_wait_fn_table;
 
-	pthread_mutex_lock(&g_bdev_wait_mutex);
-	RB_INSERT(bdev_wait_tree, &g_bdev_waits, wait_bdev);
-	pthread_mutex_unlock(&g_bdev_wait_mutex);
+	rc = bdev_wait_add(wait_bdev, &target_uuid);
+	if (rc != 0) {
+		free(bdev->name);
+		free(wait_bdev);
+		return (rc);
+	}
 
 	rc = spdk_bdev_register(bdev);
 	if (rc != 0) {
+		bdev_wait_remove(wait_bdev);
 		free(bdev->name);
 		free(wait_bdev);
 		return (rc);

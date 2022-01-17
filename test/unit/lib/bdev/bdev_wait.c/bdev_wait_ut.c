@@ -119,12 +119,96 @@ wait_available_cb(void *_ctx, struct spdk_bdev *bdev)
 {
 	struct wait_available_cb_ctx *ctx = _ctx;
 
-	ctx->bdev = bdev;
+	if (ctx != NULL) {
+		ctx->bdev = bdev;
+	}
 }
 
 /*
  * Tests
  */
+
+static void
+wait_create(void)
+{
+	struct spdk_bdev	*wait_bdev = NULL;
+	const char		*new_name = "wait0";
+	const char		*new_uuid = "bfad2ec9-8367-4f6d-89e6-4980b6f51875";
+	const char		*wait_uuid = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	int			rc, cberrno;
+
+	/* Create a wait bdev with all parameters specified and test lookups. */
+	rc = create_wait_disk(new_name, new_uuid, wait_uuid,
+			      wait_available_cb, NULL, &wait_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(wait_bdev != NULL);
+	poll_threads();
+	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	cberrno = 1;
+	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+
+	/* Again, missing name */
+	rc = create_wait_disk(NULL, new_uuid, wait_uuid,
+			      wait_available_cb, NULL, &wait_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(wait_bdev != NULL);
+	poll_threads();
+	CU_ASSERT(spdk_bdev_get_by_name(spdk_bdev_get_name(wait_bdev)) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	cberrno = 1;
+	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+
+	/* Again, missing new_name and new_uuid*/
+	rc = create_wait_disk(NULL, NULL, wait_uuid,
+			      wait_available_cb, NULL, &wait_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(wait_bdev != NULL);
+	poll_threads();
+	CU_ASSERT(spdk_bdev_get_by_name(spdk_bdev_get_name(wait_bdev)) == wait_bdev);
+	cberrno = 1;
+	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+
+	/* With name, but NULL return address. */
+	rc = create_wait_disk(new_name, NULL, wait_uuid,
+			      wait_available_cb, NULL, NULL);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	wait_bdev = spdk_bdev_get_by_name(new_name);
+	CU_ASSERT(wait_bdev != NULL);
+	cberrno = 1;
+	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+
+	/* Should fail with missing wait_uuid */
+	rc = create_wait_disk(new_name, NULL, NULL,
+			      wait_available_cb, NULL, NULL);
+	CU_ASSERT(rc == -EINVAL);
+
+	/* Should fail with missing callback */
+	rc = create_wait_disk(new_name, NULL, wait_uuid,
+			      NULL, NULL, NULL);
+	CU_ASSERT(rc == -EINVAL);
+
+	/* Should fail on new_name collision */
+	rc = create_wait_disk(new_name, NULL, wait_uuid,
+			      wait_available_cb, NULL, &wait_bdev);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	rc = create_wait_disk(new_name, NULL, wait_uuid,
+			      wait_available_cb, NULL, NULL);
+	CU_ASSERT(rc == -EEXIST);
+	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+}
 
 static void
 wait_create_open_delete(void)
@@ -228,7 +312,6 @@ wait_hotadd(void)
 	int	rc;
 	const struct ut_event_ctx	event_ctx_init = { 0 };
 	struct spdk_bdev		ut_bdevs[3] = { 0 };
-	struct spdk_bdev		*ut_bdev;
 	struct {
 		struct spdk_bdev		*bdev;
 		struct ut_event_ctx		event_ctx;
@@ -268,13 +351,12 @@ wait_hotadd(void)
 	 * Create a bdev that has a UUID that doesn't match any of the waiters.
 	 * The waiters should not be notified.
 	 */
-	ut_bdev = &ut_bdevs[2];
-	ut_bdev->name = "nomatch";
-	ut_bdev->fn_table = &base_fn_table;
-	ut_bdev->module = &bdev_ut_if;
-	rc = spdk_uuid_parse(&ut_bdev->uuid, "197b80aa-afe0-47c5-be0d-5a24bec553ce");
+	ut_bdevs[2].name = "nomatch";
+	ut_bdevs[2].fn_table = &base_fn_table;
+	ut_bdevs[2].module = &bdev_ut_if;
+	rc = spdk_uuid_parse(&ut_bdevs[2].uuid, "197b80aa-afe0-47c5-be0d-5a24bec553ce");
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(spdk_bdev_register(ut_bdev) == 0);
+	CU_ASSERT(spdk_bdev_register(&ut_bdevs[2]) == 0);
 	CU_ASSERT(waiter[0].wait_cb_ctx.bdev == NULL);
 	CU_ASSERT(waiter[1].wait_cb_ctx.bdev == NULL);
 	CU_ASSERT(waiter[2].wait_cb_ctx.bdev == NULL);
@@ -284,14 +366,13 @@ wait_hotadd(void)
 	 * first wait bdev should be notified via the available_cb, the others
 	 * should not.
 	 */
-	ut_bdev = &ut_bdevs[0];
-	ut_bdev->name = "match0";
-	ut_bdev->fn_table = &base_fn_table;
-	ut_bdev->module = &bdev_ut_if;
-	rc = spdk_uuid_parse(&ut_bdev->uuid, waiter[0].wait_for_uuid);
+	ut_bdevs[0].name = "match0";
+	ut_bdevs[0].fn_table = &base_fn_table;
+	ut_bdevs[0].module = &bdev_ut_if;
+	rc = spdk_uuid_parse(&ut_bdevs[0].uuid, waiter[0].wait_for_uuid);
 	poll_threads();
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(spdk_bdev_register(ut_bdev) == 0);
+	CU_ASSERT(spdk_bdev_register(&ut_bdevs[0]) == 0);
 	CU_ASSERT(waiter[0].wait_cb_ctx.bdev == &ut_bdevs[0]);
 	CU_ASSERT(waiter[1].wait_cb_ctx.bdev == NULL);
 	CU_ASSERT(waiter[2].wait_cb_ctx.bdev == NULL);
@@ -301,17 +382,16 @@ wait_hotadd(void)
 	 * The second and third waiters waiter should be updated.
 	 */
 	CU_ASSERT(strcmp(waiter[1].wait_for_uuid, waiter[2].wait_for_uuid) == 0);
-	ut_bdev = &ut_bdevs[1];
-	ut_bdev->name = "match1";
-	ut_bdev->fn_table = &base_fn_table;
-	ut_bdev->module = &bdev_ut_if;
-	rc = spdk_uuid_parse(&ut_bdev->uuid, waiter[1].wait_for_uuid);
+	ut_bdevs[1].name = "match1";
+	ut_bdevs[1].fn_table = &base_fn_table;
+	ut_bdevs[1].module = &bdev_ut_if;
+	rc = spdk_uuid_parse(&ut_bdevs[1].uuid, waiter[1].wait_for_uuid);
 	poll_threads();
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(spdk_bdev_register(ut_bdev) == 0);
+	CU_ASSERT(spdk_bdev_register(&ut_bdevs[1]) == 0);
 	CU_ASSERT(waiter[0].wait_cb_ctx.bdev == &ut_bdevs[0]);
 	CU_ASSERT(waiter[1].wait_cb_ctx.bdev == &ut_bdevs[1]);
-	CU_ASSERT(waiter[2].wait_cb_ctx.bdev == &ut_bdevs[2]);
+	CU_ASSERT(waiter[2].wait_cb_ctx.bdev == &ut_bdevs[1]);
 
 	/*
 	 * Clean up
@@ -337,6 +417,7 @@ main(int argc, char **argv)
 
 	suite = CU_add_suite("vbdev_ro", NULL, NULL);
 
+	CU_ADD_TEST(suite, wait_create);
 	CU_ADD_TEST(suite, wait_create_open_delete);
 	CU_ADD_TEST(suite, wait_hotadd);
 
