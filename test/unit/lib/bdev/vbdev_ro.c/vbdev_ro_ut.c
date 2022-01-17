@@ -384,7 +384,7 @@ ro_io(void)
 	uint64_t		i;
 
 	/*
-	 * Create base device and intialize it with per-block values
+	 * Create base device and initialize it with per-block values
 	 */
 	rc = create_malloc_disk(&base_bdev, NULL, NULL, base_num_blocks, base_blksz);
 	CU_ASSERT(rc == 0);
@@ -438,7 +438,7 @@ ro_io(void)
 
 	/*
 	 * Writes should fail. There are at least two places where this is
-	 * checked: first, bev_write_blocks_with_md() checks the write flag in
+	 * checked: first, bdev_write_blocks_with_md() checks the write flag in
 	 * the descriptor; and second, vbdev_ro_submit_request() returns an error
 	 * for everything other than read requests.  We check both.
 	 *
@@ -457,7 +457,7 @@ ro_io(void)
 	/*
 	 * When we make it past bdev_write_blocks_with_md(),
 	 * vbdev_ro_submit_request() detects the problem.  By this time,
-	 * bdev_write_blocks_with_md() has alread returned success (0), so we
+	 * bdev_write_blocks_with_md() has already returned success (0), so we
 	 * find the error via the callback called by vbdev_ro_submit_request().
 	 */
 	ro_desc->write = true;
