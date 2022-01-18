@@ -7393,6 +7393,7 @@ bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 	spdk_bdev_free_io(bdev_io);
 }
 
+#if 0
 static void
 blob_extclone_eio(void)
 {
@@ -7682,6 +7683,7 @@ blob_extclone_hotadd(void)
 	ut_close_malloc_dev(0);
 	poll_threads();
 }
+#endif
 
 /* XXX-mg Test that size matches the requested size even when it doesn't match
  * the parent size (larger and smaller).  When larger, ensure that writes land
@@ -7725,24 +7727,6 @@ blob_extclone_verify_blob(struct spdk_blob *blob, struct spdk_io_channel *bs_ch,
 
 	free(buf);
 	return true;
-}
-
-static void
-bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
-	      void *event_ctx)
-{
-	return;
-}
-
-static void
-bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
-{
-	if (success) {
-		g_bserrno = 0;
-	} else {
-		g_bserrno = -EIO;
-	}
-	spdk_bdev_free_io(bdev_io);
 }
 
 static void
@@ -8053,7 +8037,6 @@ int main(int argc, char **argv)
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
 
-#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -8129,10 +8112,11 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
+#if 0
 	CU_ADD_TEST(suite_bs, blob_extclone_eio);
 	CU_ADD_TEST(suite_bs, blob_extclone_hotremove);
-#endif
 	CU_ADD_TEST(suite_bs, blob_extclone_hotadd);
+#endif
 
 	allocate_cores(1);
 	allocate_threads(2);
@@ -8145,10 +8129,8 @@ int main(int argc, char **argv)
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
-#if 0
 	g_use_extent_table = false;
 	CU_basic_run_tests();
-#endif
 	num_failures = CU_get_number_of_failures();
 	g_use_extent_table = true;
 	CU_basic_run_tests();
