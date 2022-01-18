@@ -322,7 +322,7 @@ struct spdk_bdev *spdk_bdev_get_by_name(const char *bdev_name);
  * \return Block device associated with the name or NULL if no block device with
  * bdev_uuid is currently registered.
  */
-struct spdk_bdev *spdk_bdev_get_by_uuid(const char *bdev_uuid);
+struct spdk_bdev *spdk_bdev_get_by_uuid(const struct spdk_uuid *dev_uuid);
 
 /**
  * Get the first registered block device.
@@ -361,7 +361,7 @@ struct spdk_bdev *spdk_bdev_first_leaf(void);
 struct spdk_bdev *spdk_bdev_next_leaf(struct spdk_bdev *prev);
 
 /**
- * Open a block device for I/O operations.
+ * Open a block device with specified name for I/O operations.
  *
  * \param bdev_name Block device name to open.
  * \param write true is read/write access requested, false if read-only
@@ -376,6 +376,24 @@ struct spdk_bdev *spdk_bdev_next_leaf(struct spdk_bdev *prev);
  */
 int spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
 		       void *event_ctx, struct spdk_bdev_desc **desc);
+
+/**
+ * Open a block device with specified uuid for I/O operations.
+ *
+ * \param bdev_name Block device name to open.
+ * \param write true is read/write access requested, false if read-only
+ * \param event_cb notification callback to be called when the bdev triggers
+ * asynchronous event such as bdev removal. This will always be called on the
+ * same thread that spdk_bdev_open_ext() was called on. In case of removal event
+ * the descriptor will have to be manually closed to make the bdev unregister
+ * proceed.
+ * \param event_ctx param for event_cb.
+ * \param desc output parameter for the descriptor when operation is successful
+ * \return 0 if operation is successful, suitable errno value otherwise
+ */
+int spdk_bdev_open_by_uuid(const struct spdk_uuid *bdev_uuid, bool write,
+			  spdk_bdev_event_cb_t event_cb, void *event_ctx,
+			  struct spdk_bdev_desc **desc);
 
 /**
  * Close a previously opened block device.

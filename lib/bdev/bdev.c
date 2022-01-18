@@ -99,6 +99,16 @@ bdev_name_cmp(struct spdk_bdev_name *name1, struct spdk_bdev_name *name2)
 
 RB_GENERATE_STATIC(bdev_name_tree, spdk_bdev_name, node, bdev_name_cmp);
 
+RB_HEAD(bdev_uuid_tree, spdk_bdev);
+
+static int
+bdev_uuid_cmp(struct spdk_bdev *bdev1, struct spdk_bdev *bdev2)
+{
+	return spdk_uuid_compare(&bdev1->uuid, &bdev2->uuid);
+}
+
+RB_GENERATE_STATIC(bdev_uuid_tree, spdk_bdev, internal.by_uuid, bdev_uuid_cmp);
+
 struct spdk_bdev_mgr {
 	struct spdk_mempool *bdev_io_pool;
 
@@ -111,6 +121,7 @@ struct spdk_bdev_mgr {
 
 	struct spdk_bdev_list bdevs;
 	struct bdev_name_tree bdev_names;
+	struct bdev_uuid_tree bdev_uuids;
 
 	bool init_complete;
 	bool module_init_complete;
@@ -126,6 +137,7 @@ static struct spdk_bdev_mgr g_bdev_mgr = {
 	.bdev_modules = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.bdev_modules),
 	.bdevs = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.bdevs),
 	.bdev_names = RB_INITIALIZER(g_bdev_mgr.bdev_names),
+	.bdev_uuids = RB_INITIALIZER(g_bdev_mgr.bdev_uuids),
 	.init_complete = false,
 	.module_init_complete = false,
 	.mutex = PTHREAD_MUTEX_INITIALIZER,
@@ -498,24 +510,25 @@ spdk_bdev_get_by_name(const char *bdev_name)
 	return bdev;
 }
 
+static struct spdk_bdev *
+bdev_get_by_uuid(const struct spdk_uuid *uuid)
+{
+	struct spdk_bdev find;
+
+	find.uuid = *uuid;
+	return RB_FIND(bdev_uuid_tree, &g_bdev_mgr.bdev_uuids, &find);
+}
+
 struct spdk_bdev *
-spdk_bdev_get_by_uuid(const char *bdev_uuid)
+spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid)
 {
 	struct spdk_bdev *bdev;
-	struct spdk_uuid uuid;
 
-	if (spdk_uuid_parse(&uuid, bdev_uuid) != 0) {
-		return NULL;
-	}
+	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	bdev = bdev_get_by_uuid(uuid);
+	pthread_mutex_unlock(&g_bdev_mgr.mutex);
 
-	/* XXX-mg change to RB tree */
-	for (bdev = spdk_bdev_first(); bdev != NULL; bdev = spdk_bdev_next(bdev)) {
-		if (spdk_uuid_compare(&uuid, &bdev->uuid) == 0) {
-			return bdev;
-		}
-	}
-
-	return NULL;
+	return bdev;
 }
 
 struct spdk_bdev_wait_for_examine_ctx {
@@ -3351,6 +3364,29 @@ bdev_name_del(struct spdk_bdev_name *bdev_name)
 	free(bdev_name->name);
 }
 
+static int
+bdev_uuid_add(struct spdk_bdev *bdev)
+{
+	struct spdk_bdev *tmp;
+
+	tmp = RB_INSERT(bdev_uuid_tree, &g_bdev_mgr.bdev_uuids, bdev);
+	if (tmp != NULL) {
+		char uuid_str[SPDK_UUID_STRING_LEN];
+
+		spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), &tmp->uuid);
+		SPDK_ERRLOG("Bdev uuid %s already exists as bdev %s, cannot add bdev %s\n",
+			    uuid_str, tmp->name, bdev->name);
+		return -EEXIST;
+	}
+	return 0;
+}
+
+static void
+bdev_uuid_del(struct spdk_bdev *bdev)
+{
+	RB_REMOVE(bdev_uuid_tree, &g_bdev_mgr.bdev_uuids, bdev);
+}
+
 int
 spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias)
 {
@@ -5745,11 +5781,17 @@ bdev_register(struct spdk_bdev *bdev)
 		return -EINVAL;
 	}
 
+	ret = bdev_uuid_add(bdev);
+	if (ret != 0) {
+		return ret;
+	}
+
 	/* Users often register their own I/O devices using the bdev name. In
 	 * order to avoid conflicts, prepend bdev_. */
 	bdev_name = spdk_sprintf_alloc("bdev_%s", bdev->name);
 	if (!bdev_name) {
 		SPDK_ERRLOG("Unable to allocate memory for internal bdev name.\n");
+		bdev_uuid_del(bdev);
 		return -ENOMEM;
 	}
 
@@ -5762,6 +5804,7 @@ bdev_register(struct spdk_bdev *bdev)
 	ret = bdev_name_add(&bdev->internal.bdev_name, bdev, bdev->name);
 	if (ret != 0) {
 		free(bdev_name);
+		bdev_uuid_del(bdev);
 		return ret;
 	}
 
@@ -5925,6 +5968,7 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
 		TAILQ_REMOVE(&g_bdev_mgr.bdevs, bdev, internal.link);
 		SPDK_DEBUGLOG(bdev, "Removing bdev %s from list done\n", bdev->name);
 		bdev_name_del(&bdev->internal.bdev_name);
+		bdev_uuid_del(bdev);
 		spdk_notify_send("bdev_unregister", spdk_bdev_get_name(bdev));
 	}
 
@@ -6039,9 +6083,10 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 	return 0;
 }
 
-int
-spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
-		   void *event_ctx, struct spdk_bdev_desc **_desc)
+static int
+bdev_open_by(const char *bdev_name, const struct spdk_uuid *bdev_uuid,
+	      bool write, spdk_bdev_event_cb_t event_cb, void *event_ctx,
+	      struct spdk_bdev_desc **_desc)
 {
 	struct spdk_bdev_desc *desc;
 	struct spdk_bdev *bdev;
@@ -6053,14 +6098,33 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 		return -EINVAL;
 	}
 
+	if ((bdev_name == NULL && bdev_uuid == NULL) ||
+	    (bdev_name != NULL && bdev_uuid != NULL)) {
+		SPDK_ERRLOG("One of bdev_name or bdev_uuid must be non-NULL\n");
+		return -EINVAL;
+	}
+
 	pthread_mutex_lock(&g_bdev_mgr.mutex);
 
-	bdev = bdev_get_by_name(bdev_name);
+	if (bdev_name != NULL) {
+		bdev = bdev_get_by_name(bdev_name);
+		if (bdev == NULL) {
+			SPDK_NOTICELOG("Currently unable to find bdev with name: %s\n",
+				       bdev_name);
+			pthread_mutex_unlock(&g_bdev_mgr.mutex);
+			return -ENODEV;
+		}
+	} else {
+		bdev = bdev_get_by_uuid(bdev_uuid);
+		if (bdev == NULL) {
+			char uuid_str[SPDK_UUID_STRING_LEN];
 
-	if (bdev == NULL) {
-		SPDK_NOTICELOG("Currently unable to find bdev with name: %s\n", bdev_name);
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
-		return -ENODEV;
+			spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), bdev_uuid);
+			SPDK_NOTICELOG("Currently unable to find bdev with uuid: %s\n",
+				       uuid_str);
+			pthread_mutex_unlock(&g_bdev_mgr.mutex);
+			return -ENODEV;
+		}
 	}
 
 	desc = calloc(1, sizeof(*desc));
@@ -6104,6 +6168,21 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	pthread_mutex_unlock(&g_bdev_mgr.mutex);
 
 	return rc;
+}
+
+int
+spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
+		   void *event_ctx, struct spdk_bdev_desc **_desc)
+{
+	return bdev_open_by(bdev_name, NULL, write, event_cb, event_ctx, _desc);
+}
+
+int
+spdk_bdev_open_by_uuid(const struct spdk_uuid *uuid, bool write,
+		       spdk_bdev_event_cb_t event_cb,
+		       void *event_ctx, struct spdk_bdev_desc **_desc)
+{
+	return bdev_open_by(NULL, uuid, write, event_cb, event_ctx, _desc);
 }
 
 void
