@@ -44,20 +44,20 @@
 
 #include "blobstore.h"
 
-static void seed_unload_on_thread(void *_ctx)
+static void esnap_unload_on_thread(void *_ctx)
 {
 	struct spdk_bs_dev *dev = _ctx;
 	uint64_t tid = spdk_thread_get_id(spdk_get_thread());
 
-	if (tid <= dev->seed_ctx->io_channels_count && dev->seed_ctx->io_channels[tid]) {
-		spdk_put_io_channel(dev->seed_ctx->io_channels[tid]);
+	if (tid <= dev->esnap_ctx->io_channels_count && dev->esnap_ctx->io_channels[tid]) {
+		spdk_put_io_channel(dev->esnap_ctx->io_channels[tid]);
 	}
 }
 
-static void seed_unload_on_thread_done(void *_ctx)
+static void esnap_unload_on_thread_done(void *_ctx)
 {
 	struct spdk_bs_dev *dev = _ctx;
-	struct spdk_bdev_desc *ro_desc = dev->seed_ctx->bdev_desc;
+	struct spdk_bdev_desc *ro_desc = dev->esnap_ctx->bdev_desc;
 
 	if (ro_desc != NULL) {
 		struct spdk_bdev *ro_bdev = spdk_bdev_desc_get_bdev(ro_desc);
@@ -66,25 +66,25 @@ static void seed_unload_on_thread_done(void *_ctx)
 		delete_ro_disk(ro_bdev, NULL, NULL);
 	}
 
-	free(dev->seed_ctx->io_channels);
-	free(dev->seed_ctx);
+	free(dev->esnap_ctx->io_channels);
+	free(dev->esnap_ctx);
 	free(dev);
 }
 
 static void
-seed_destroy(struct spdk_bs_dev *dev)
+esnap_destroy(struct spdk_bs_dev *dev)
 {
-	struct seed_ctx *ctx = dev->seed_ctx;
+	struct esnap_ctx *ctx = dev->esnap_ctx;
 
 	if (ctx != NULL) {
-		spdk_for_each_thread(seed_unload_on_thread, dev, seed_unload_on_thread_done);
+		spdk_for_each_thread(esnap_unload_on_thread, dev, esnap_unload_on_thread_done);
 	} else {
 		free(dev);
 	}
 }
 
 static void
-seed_complete(struct spdk_bdev_io *bdev_io, bool success, void *args)
+esnap_complete(struct spdk_bdev_io *bdev_io, bool success, void *args)
 {
 	struct spdk_bs_dev_cb_args *cb_args = args;
 
@@ -93,10 +93,10 @@ seed_complete(struct spdk_bdev_io *bdev_io, bool success, void *args)
 }
 
 static void
-seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
+esnap_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
 	  uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct seed_ctx *ctx = dev->seed_ctx;
+	struct esnap_ctx *ctx = dev->esnap_ctx;
 	uint64_t tid;
 	struct spdk_io_channel *ch;
 
@@ -107,11 +107,11 @@ seed_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payloa
 		return;
 	}
 
-	spdk_bdev_read_blocks(ctx->bdev_desc, ch, payload, lba, lba_count, seed_complete, cb_args);
+	spdk_bdev_read_blocks(ctx->bdev_desc, ch, payload, lba, lba_count, esnap_complete, cb_args);
 }
 
 static void
-seed_write(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
+esnap_write(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
 	   uint64_t lba, uint32_t lba_count,
 	   struct spdk_bs_dev_cb_args *cb_args)
 {
@@ -120,11 +120,11 @@ seed_write(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *paylo
 }
 
 static void
-seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+esnap_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	   struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
 	   struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct seed_ctx *ctx = dev->seed_ctx;
+	struct esnap_ctx *ctx = dev->esnap_ctx;
 	uint64_t tid;
 	struct spdk_io_channel *ch;
 
@@ -135,16 +135,16 @@ seed_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		return;
 	}
 
-	spdk_bdev_readv_blocks(ctx->bdev_desc, ch, iov, iovcnt, lba, lba_count, seed_complete, cb_args);
+	spdk_bdev_readv_blocks(ctx->bdev_desc, ch, iov, iovcnt, lba, lba_count, esnap_complete, cb_args);
 }
 
 static void
-seed_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+esnap_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	       struct iovec *iov, int iovcnt,
 	       uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
 	       struct spdk_blob_ext_io_opts *ext_io_opts)
 {
-	struct seed_ctx *ctx = dev->seed_ctx;
+	struct esnap_ctx *ctx = dev->esnap_ctx;
 	uint64_t tid;
 	struct spdk_io_channel *ch;
 
@@ -156,11 +156,11 @@ seed_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	}
 
 	spdk_bdev_readv_blocks_ext(ctx->bdev_desc, ch, iov, iovcnt, lba, lba_count,
-				   seed_complete, cb_args, (struct spdk_bdev_ext_io_opts *)ext_io_opts);
+				   esnap_complete, cb_args, (struct spdk_bdev_ext_io_opts *)ext_io_opts);
 }
 
 static void
-seed_writev(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+esnap_writev(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	    struct iovec *iov, int iovcnt,
 	    uint64_t lba, uint32_t lba_count,
 	    struct spdk_bs_dev_cb_args *cb_args)
@@ -170,7 +170,7 @@ seed_writev(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 }
 
 static void
-seed_writev_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+esnap_writev_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		struct iovec *iov, int iovcnt,
 		uint64_t lba, uint32_t lba_count,
 		struct spdk_bs_dev_cb_args *cb_args,
@@ -181,7 +181,7 @@ seed_writev_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 }
 
 static void
-seed_write_zeroes(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+esnap_write_zeroes(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		  uint64_t lba, uint64_t lba_count,
 		  struct spdk_bs_dev_cb_args *cb_args)
 {
@@ -190,7 +190,7 @@ seed_write_zeroes(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 }
 
 static void
-seed_unmap(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+esnap_unmap(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	   uint64_t lba, uint64_t lba_count,
 	   struct spdk_bs_dev_cb_args *cb_args)
 {
@@ -199,10 +199,10 @@ seed_unmap(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 }
 
 static void
-seed_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 		   void *event_ctx)
 {
-	struct seed_ctx *ctx = event_ctx;
+	struct esnap_ctx *ctx = event_ctx;
 
 	switch (type) {
 	case SPDK_BDEV_EVENT_REMOVE:
@@ -216,16 +216,16 @@ seed_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 	}
 }
 
-struct seed_bs_load_cpl_ctx {
-	blob_load_seed_cpl cb_fn;
+struct esnap_bs_load_cpl_ctx {
+	blob_load_esnap_cpl cb_fn;
 	void *cb_arg;
-	struct seed_ctx *ctx;
+	struct esnap_ctx *ctx;
 	int rc;
 };
 
-static void load_seed_on_thread(void *arg1)
+static void load_esnap_on_thread(void *arg1)
 {
-	struct seed_bs_load_cpl_ctx *ctx = arg1;
+	struct esnap_bs_load_cpl_ctx *ctx = arg1;
 	uint64_t tid;
 
 	if (ctx->rc) {
@@ -233,7 +233,7 @@ static void load_seed_on_thread(void *arg1)
 	}
 
 	tid = spdk_thread_get_id(spdk_get_thread());
-	SPDK_INFOLOG(blob, "Creating io channel for seed bdev %s on thread %"PRIu64"\n",
+	SPDK_INFOLOG(blob, "Creating io channel for external snapshot bdev %s on thread %"PRIu64"\n",
 		       spdk_bdev_get_name(ctx->ctx->bdev), tid);
 
 	if (tid > ctx->ctx->io_channels_count) {
@@ -251,14 +251,14 @@ static void load_seed_on_thread(void *arg1)
 
 	ctx->ctx->io_channels[tid] = spdk_bdev_get_io_channel(ctx->ctx->bdev_desc);
 	if (!ctx->ctx->io_channels[tid]) {
-		SPDK_ERRLOG("Failed to create seed bdev io_channel\n");
+		SPDK_ERRLOG("Failed to create external snapshot bdev io_channel\n");
 		ctx->rc = -ENOMEM;
 	}
 }
 
-static void load_seed_on_thread_done(void *arg1)
+static void load_esnap_on_thread_done(void *arg1)
 {
-	struct seed_bs_load_cpl_ctx *ctx = arg1;
+	struct esnap_bs_load_cpl_ctx *ctx = arg1;
 
 	assert(ctx->cb_fn);
 	ctx->cb_fn(ctx->cb_arg, ctx->rc);
@@ -266,35 +266,35 @@ static void load_seed_on_thread_done(void *arg1)
 }
 
 void
-bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
-		   blob_load_seed_cpl cb_fn, void *cb_arg)
+bs_create_esnap_dev(struct spdk_blob *front, const char *esnap_uuid,
+		   blob_load_esnap_cpl cb_fn, void *cb_arg)
 {
 	struct spdk_bdev *bdev, *ro_bdev;
 	struct spdk_bs_dev *back;
-	struct seed_ctx *ctx;
-	struct seed_bs_load_cpl_ctx *seed_load_cpl;
+	struct esnap_ctx *ctx;
+	struct esnap_bs_load_cpl_ctx *esnap_load_cpl;
 	struct vbdev_ro_opts opts = { 0 };
 	char *ro_name;
 	int ret;
 
-	bdev = spdk_bdev_get_by_uuid(seed_uuid);
+	bdev = spdk_bdev_get_by_uuid(esnap_uuid);
 	if (bdev == NULL) {
 		/*
-		 * Someone removed the seed device or there is an initialization
+		 * Someone removed the esnap device or there is an initialization
 		 * order problem.
 		 * XXX-mg we now have an unremovable child because the blob will
 		 * not open.
 		 */
-		SPDK_ERRLOG("seed device %s is not found for blob 0x%" PRIx64 "\n",
-			    seed_uuid, front->id);
+		SPDK_ERRLOG("External snapshot device %s is not found for blob 0x%" PRIx64 "\n",
+			    esnap_uuid, front->id);
 		cb_fn(cb_arg, -ENOENT);
 		return;
 	}
 
 	if (spdk_bdev_get_block_size(bdev) > front->bs->io_unit_size) {
-		SPDK_ERRLOG("seed device %s (%s) block size %" PRIu32
+		SPDK_ERRLOG("External snapshot device %s (%s) block size %" PRIu32
 			    " larger than blobstore io_unit_size %" PRIu32 "\n",
-			    spdk_bdev_get_name(bdev), seed_uuid,
+			    spdk_bdev_get_name(bdev), esnap_uuid,
 			    spdk_bdev_get_block_size(bdev), front->bs->io_unit_size);
 		cb_fn(cb_arg, -EINVAL);
 		return;
@@ -328,8 +328,8 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		return;
 	}
 
-	seed_load_cpl = calloc(1, sizeof(*seed_load_cpl));
-	if (!seed_load_cpl) {
+	esnap_load_cpl = calloc(1, sizeof(*esnap_load_cpl));
+	if (!esnap_load_cpl) {
 		free(ctx);
 		cb_fn(cb_arg, -ENOMEM);
 		return;
@@ -340,20 +340,20 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 	ctx->io_channels = calloc(ctx->io_channels_count, sizeof(*ctx->io_channels));
 	if (!ctx->io_channels) {
 		free(ctx);
-		free(seed_load_cpl);
+		free(esnap_load_cpl);
 		cb_fn(cb_arg, -ENOMEM);
 		return;
 	}
 
 	ctx->bdev = ro_bdev;
-	ret = spdk_bdev_open_ext(ro_bdev->name, false, seed_bdev_event_cb, ctx,
+	ret = spdk_bdev_open_ext(ro_bdev->name, false, esnap_bdev_event_cb, ctx,
 				 &ctx->bdev_desc);
 	if (ret != 0) {
 		SPDK_ERRLOG("Unable to open read-only bdev %s\n", ro_bdev->name);
 		delete_ro_disk(ro_bdev, NULL, NULL);
 		free(ctx->io_channels);
 		free(ctx);
-		free(seed_load_cpl);
+		free(esnap_load_cpl);
 		cb_fn(cb_arg, ret);
 		return;
 	}
@@ -364,31 +364,31 @@ bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
 		delete_ro_disk(ro_bdev, NULL, NULL);
 		free(ctx->io_channels);
 		free(ctx);
-		free(seed_load_cpl);
+		free(esnap_load_cpl);
 		cb_fn(cb_arg, -ENOMEM);
 		return;
 	}
 
 	back->create_channel = NULL;
 	back->destroy_channel = NULL;
-	back->destroy = seed_destroy;
-	back->read = seed_read;
-	back->write = seed_write;
-	back->readv = seed_readv;
-	back->readv_ext = seed_readv_ext;
-	back->writev = seed_writev;
-	back->writev_ext = seed_writev_ext;
-	back->write_zeroes = seed_write_zeroes;
-	back->unmap = seed_unmap;
+	back->destroy = esnap_destroy;
+	back->read = esnap_read;
+	back->write = esnap_write;
+	back->readv = esnap_readv;
+	back->readv_ext = esnap_readv_ext;
+	back->writev = esnap_writev;
+	back->writev_ext = esnap_writev_ext;
+	back->write_zeroes = esnap_write_zeroes;
+	back->unmap = esnap_unmap;
 	back->blockcnt = spdk_bdev_get_num_blocks(ro_bdev);
 	back->blocklen = spdk_bdev_get_block_size(ro_bdev);
-	back->seed_ctx = ctx;
+	back->esnap_ctx = ctx;
 
 	front->back_bs_dev = back;
 
-	seed_load_cpl->cb_fn = cb_fn;
-	seed_load_cpl->cb_arg = cb_arg;
-	seed_load_cpl->ctx = ctx;
+	esnap_load_cpl->cb_fn = cb_fn;
+	esnap_load_cpl->cb_arg = cb_arg;
+	esnap_load_cpl->ctx = ctx;
 
-	spdk_for_each_thread(load_seed_on_thread, seed_load_cpl, load_seed_on_thread_done);
+	spdk_for_each_thread(load_esnap_on_thread, esnap_load_cpl, load_esnap_on_thread_done);
 }

@@ -998,9 +998,11 @@ lvol_get_xattr_value(void *xattr_ctx, const char *name,
 	} else if (!strcmp("uuid", name)) {
 		*value = lvol->uuid_str;
 		*value_len = sizeof(lvol->uuid_str);
-	} else if (!strcmp(BLOB_SEED_BDEV, name)) {
+#if 0
+	} else if (!strcmp(BLOB_EXTERNAL_SNAPSHOT_BDEV, name)) {
 		*value = lvol->seed_bdev;
 		*value_len = sizeof(lvol->seed_bdev);
+#endif
 	}
 }
 

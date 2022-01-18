@@ -41,7 +41,7 @@
 #include "common/lib/ut_multithread.c"
 
 #define SPDK_BLOBSTORE_H
-#define BLOB_SEED_BDEV "SEED"
+#define BLOB_EXTERNAL_SNAPSHOT_BDEV "EXTSNAP"
 
 #include "lvol/lvol.c"
 

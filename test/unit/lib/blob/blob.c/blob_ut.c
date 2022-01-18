@@ -41,7 +41,7 @@
 #include "../bs_dev_common.c"
 #include "blob/blobstore.c"
 #include "blob/request.c"
-#include "blob/seed.c"
+#include "blob/esnap.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
 #include "thread/thread.c"
@@ -98,10 +98,10 @@ is_ext_clone(struct spdk_blob *_blob, const char *_uuid_str)
 	size_t len;
 	bool c1, c2, c3;
 
-	CU_ASSERT(blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == 0);
+	CU_ASSERT(blob_get_xattr_value(_blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, &val, &len, true) == 0);
 	CU_ASSERT((c1 = (val != NULL && strcmp(val, _uuid_str) == 0)));
 	CU_ASSERT((c2 = !!(_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT)));
-	CU_ASSERT((c3 = (_blob->parent_id == SPDK_BLOBID_SEED)));
+	CU_ASSERT((c3 = (_blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT)));
 
 	return c1 && c2 && c3;
 }
@@ -113,10 +113,10 @@ is_not_ext_clone(struct spdk_blob *_blob)
 	size_t len;
 	bool c1, c2, c3, c4;
 
-	CU_ASSERT((c1 = (blob_get_xattr_value(_blob, BLOB_SEED_BDEV, &val, &len, true) == -ENOENT)));
+	CU_ASSERT((c1 = (blob_get_xattr_value(_blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, &val, &len, true) == -ENOENT)));
 	CU_ASSERT((c2 = (val == NULL)));
 	CU_ASSERT((c3 = ((_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) == 0)));
-	CU_ASSERT((c4 = (_blob->parent_id != SPDK_BLOBID_SEED)));
+	CU_ASSERT((c4 = (_blob->parent_id != SPDK_BLOBID_EXTERNAL_SNAPSHOT)));
 
 	return c1 && c2 && c3 && c4;
 }
@@ -7074,7 +7074,7 @@ blob_extclone_defaults(void)
 	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
 	blob = g_blob;
 
-	CU_ASSERT(blob->parent_id == SPDK_BLOBID_SEED);
+	CU_ASSERT(blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT);
 	CU_ASSERT(spdk_blob_is_external_clone(blob));
 	CU_ASSERT(spdk_blob_is_thin_provisioned(blob));
 	CU_ASSERT(bs->num_free_clusters == free_clusters);
@@ -7204,9 +7204,9 @@ blob_extclone_snapshot(void)
 	 * In each case, the blob pointed to by the ro vbdev is considered the
 	 * "external clone".  The external clone must have:
 	 *
-	 *   - XATTR_INTERNAL for BLOB_SEED_BDEV (UUID as string)
+	 *   - XATTR_INTERNAL for BLOB_EXTERNAL_SNAPSHOT_BDEV (UUID as string)
 	 *   - blob->invalid_flags must contain SPDK_BLOB_EXTERNAL_SNAPSHOT
-	 *   - blob->parent_id must be SPDK_BLOBID_SEED.
+	 *   - blob->parent_id must be SPDK_BLOBID_EXTERNAL_SNAPSHOT.
 	 *
 	 * No other blob that descends from the external clone may have any of
 	 * those set.

@@ -39,7 +39,7 @@ CFLAGS += -I$(SPDK_ROOT_DIR)/module
 SO_VER := 6
 SO_MINOR := 0
 
-C_SRCS = blobstore.c request.c seed.c zeroes.c blob_bs_dev.c
+C_SRCS = blobstore.c request.c esnap.c zeroes.c blob_bs_dev.c
 LIBNAME = blob
 
 SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_blob.map)

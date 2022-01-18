@@ -243,7 +243,7 @@ enum spdk_blob_op_type {
 #define BLOB_SNAPSHOT "SNAP"
 #define SNAPSHOT_IN_PROGRESS "SNAPTMP"
 #define SNAPSHOT_PENDING_REMOVAL "SNAPRM"
-#define BLOB_SEED_BDEV "SEED"
+#define BLOB_EXTERNAL_SNAPSHOT_BDEV "EXTSNAP"
 
 struct spdk_blob_bs_dev {
 	struct spdk_bs_dev bs_dev;
@@ -443,17 +443,17 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super 
 struct spdk_bs_dev *bs_create_zeroes_dev(struct spdk_blob *blob);
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
-typedef void(*blob_load_seed_cpl)(void *ctx, int rc);
+typedef void(*blob_load_esnap_cpl)(void *ctx, int rc);
 
-struct seed_ctx {
+struct esnap_ctx {
 	struct spdk_bdev		*bdev;
 	struct spdk_bdev_desc		*bdev_desc;
 	struct spdk_io_channel		**io_channels;
 	uint64_t			io_channels_count;
 };
 
-void bs_create_seed_dev(struct spdk_blob *front, const char *seed_uuid,
-			blob_load_seed_cpl cb_fn, void *cb_arg);
+void bs_create_esnap_dev(struct spdk_blob *front, const char *esnap_uuid,
+			 blob_load_esnap_cpl cb_fn, void *cb_arg);
 
 /* Unit Conversions
  *

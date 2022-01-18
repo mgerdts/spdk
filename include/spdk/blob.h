@@ -68,8 +68,8 @@ extern "C" {
 #endif
 
 typedef uint64_t spdk_blob_id;
-#define SPDK_BLOBID_INVALID	(uint64_t)-1
-#define SPDK_BLOBID_SEED	(uint64_t)-2
+#define SPDK_BLOBID_INVALID		(uint64_t)-1
+#define SPDK_BLOBID_EXTERNAL_SNAPSHOT	(uint64_t)-2
 #define SPDK_BLOBSTORE_TYPE_LENGTH 16
 
 enum blob_clear_method {
@@ -150,7 +150,7 @@ struct spdk_bs_dev_cb_args {
 	void			*cb_arg;
 };
 
-struct seed_ctx;
+struct esnap_ctx;
 
 /**
  * Structure with optional IO request parameters
@@ -223,8 +223,8 @@ struct spdk_bs_dev {
 	uint64_t	blockcnt;
 	uint32_t	blocklen; /* In bytes */
 
-	/* the seed bdev descriptor for some sparse lvols */
-	struct seed_ctx *seed_ctx;
+	/* the esnap bdev descriptor for some sparse lvols */
+	struct esnap_ctx *esnap_ctx;
 };
 
 struct spdk_bs_type {
