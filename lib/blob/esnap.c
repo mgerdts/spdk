@@ -266,59 +266,45 @@ static void load_esnap_on_thread_done(void *arg1)
 }
 
 void
-bs_create_esnap_dev(struct spdk_blob *front, const char *esnap_uuid,
+bs_create_esnap_dev(struct spdk_blob *front, const struct spdk_uuid *esnap_uuid,
 		   blob_load_esnap_cpl cb_fn, void *cb_arg)
 {
 	struct spdk_bdev *bdev, *ro_bdev;
 	struct spdk_bs_dev *back;
 	struct esnap_ctx *ctx;
 	struct esnap_bs_load_cpl_ctx *esnap_load_cpl;
-	struct vbdev_ro_opts opts = { 0 };
-	char *ro_name;
 	int ret;
 
-	bdev = spdk_bdev_get_by_uuid(esnap_uuid);
+	/*
+	 * Avoid races by creating the ro bdev and finding the base from the
+	 * newly created ro bdev while it has a claim on the base bdev.
+	 */
+	ret = create_ro_disk(NULL, esnap_uuid, NULL, &ro_bdev);
+	if (ret != 0) {
+		SPDK_ERRLOG("Unable to create external snapshot\n");
+		cb_fn(cb_arg, ret);
+		return;
+	}
+	bdev = bdev_ro_get_base_bdev(ro_bdev);
 	if (bdev == NULL) {
-		/*
-		 * Someone removed the esnap device or there is an initialization
-		 * order problem.
-		 * XXX-mg we now have an unremovable child because the blob will
-		 * not open.
-		 */
-		SPDK_ERRLOG("External snapshot device %s is not found for blob 0x%" PRIx64 "\n",
-			    esnap_uuid, front->id);
-		cb_fn(cb_arg, -ENOENT);
+		SPDK_ERRLOG("Unable to get base bdev from nearly created ro bdev %s\n",
+			    spdk_bdev_get_name(ro_bdev));
+		delete_ro_disk(ro_bdev, NULL, NULL);
+		cb_fn(cb_arg, -ENXIO);
 		return;
 	}
 
 	if (spdk_bdev_get_block_size(bdev) > front->bs->io_unit_size) {
-		SPDK_ERRLOG("External snapshot device %s (%s) block size %" PRIu32
+		SPDK_ERRLOG("External snapshot device %s block size %" PRIu32
 			    " larger than blobstore io_unit_size %" PRIu32 "\n",
-			    spdk_bdev_get_name(bdev), esnap_uuid,
+			    spdk_bdev_get_name(bdev),
 			    spdk_bdev_get_block_size(bdev), front->bs->io_unit_size);
 		cb_fn(cb_arg, -EINVAL);
 		return;
 	}
 
-	ro_name = spdk_sprintf_alloc("blob_base_0x%016" PRIx64, front->id);
-	if (ro_name == NULL) {
-		SPDK_ERRLOG("Unable to allocate memory for ro blob name\n");
-		cb_fn(cb_arg, -ENOMEM);
-		return;
-	}
-
-	opts.name = ro_name;
-	ret = create_ro_disk(bdev->name, &opts, &ro_bdev);
-	if (ret != 0) {
-		SPDK_ERRLOG("Unable to create external snapshot %s from %s\n",
-			    opts.name, bdev->name);
-		free(ro_name);
-		cb_fn(cb_arg, ret);
-		return;
-	}
 	SPDK_NOTICELOG("Created read-only device %s with base bdev %s\n",
-		       opts.name, bdev->name);
-	free(ro_name);
+		       ro_bdev->name, bdev->name);
 	/* Prevent accidental use of the wrong bdev below. */
 	bdev = NULL;
 

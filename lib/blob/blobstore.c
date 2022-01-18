@@ -1376,19 +1376,29 @@ blob_load_backing_dev(void *cb_arg)
 	int				rc;
 
 	if (spdk_blob_is_external_clone(blob)) {
-		const char			*uuid;
+		const char		*uuid_str;
+		struct spdk_uuid	uuid;
 
-		uuid = spdk_blob_get_external_parent(blob);
-		if (uuid == NULL) {
+		uuid_str = spdk_blob_get_external_parent(blob);
+		if (uuid_str == NULL) {
 			SPDK_NOTICELOG("blob 0x%" PRIx64 " is an external clone without a parent\n",
 				       blob->id);
 			blob_load_final(ctx, -EINVAL);
+			return;
+		}
+
+		rc = spdk_uuid_parse(&uuid, uuid_str);
+		if (rc != 0) {
+			SPDK_NOTICELOG("blob 0x%" PRIx64 " parent uuid '%s' invalid\n",
+				       blob->id, uuid_str);
+			blob_load_final(ctx, -EINVAL);
+			return;
 		}
 
 		SPDK_INFOLOG(blob, "Creating external snapshot device\n");
 
 		/* Use an existing bdev for unallocated blocks */
-		bs_create_esnap_dev(blob, uuid, blob_load_esnap_done, ctx);
+		bs_create_esnap_dev(blob, &uuid, blob_load_esnap_done, ctx);
 		return;
 	}
 
@@ -5746,10 +5756,10 @@ bs_create_blob(struct spdk_blob_store *bs,
 
 	if (!spdk_uuid_is_null(&opts_local.external_snapshot_uuid)) {
 		char uuid_str[SPDK_UUID_STRING_LEN];
+		struct spdk_uuid *uuid = &opts_local.external_snapshot_uuid;
 		struct spdk_bdev *parent;
 
-		rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str),
-					 &opts_local.external_snapshot_uuid);
+		rc = spdk_uuid_fmt_lower(uuid_str, sizeof (uuid_str), uuid);
 		if (rc != 0) {
 			SPDK_ERRLOG("Invalid external snapshot UUID\n");
 			blob_free(blob);
@@ -5758,7 +5768,7 @@ bs_create_blob(struct spdk_blob_store *bs,
 			cb_fn(cb_arg, 0, rc);
 		}
 
-		parent = spdk_bdev_get_by_uuid(uuid_str);
+		parent = spdk_bdev_get_by_uuid(uuid);
 		if (parent == NULL) {
 			SPDK_ERRLOG("Cannot find external snapshot bdev %s\n",
 				    uuid_str);

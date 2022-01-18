@@ -452,7 +452,7 @@ struct esnap_ctx {
 	uint64_t			io_channels_count;
 };
 
-void bs_create_esnap_dev(struct spdk_blob *front, const char *esnap_uuid,
+void bs_create_esnap_dev(struct spdk_blob *front, const struct spdk_uuid *esnap_uuid,
 			 blob_load_esnap_cpl cb_fn, void *cb_arg);
 
 /* Unit Conversions
