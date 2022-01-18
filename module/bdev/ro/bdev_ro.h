@@ -93,4 +93,15 @@ int create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
 void delete_ro_disk(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn,
 		    void *cb_arg);
 
+
+/**
+ * Get the base bdev of a ro bdev
+ *
+ * \param bdev Pointer to an ro bdev.
+ *
+ * \return A pointer to the base bdev on success.
+ * \return NULL On error.
+ */
+struct spdk_bdev *bdev_ro_get_base_bdev(struct spdk_bdev *bdev);
+
 #endif

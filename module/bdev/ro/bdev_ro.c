@@ -513,4 +513,16 @@ delete_ro_disk(struct spdk_bdev *ro_bdev, spdk_bdev_unregister_cb cb_fn,
 	spdk_bdev_unregister(ro_bdev, cb_fn, cb_arg);
 }
 
-SPDK_LOG_REGISTER_COMPONENT(vbdev_ro)
+struct spdk_bdev *
+bdev_ro_get_base_bdev(struct spdk_bdev *bdev)
+{
+	struct vbdev_ro *ro_bdev = bdev->ctxt;
+
+	if (bdev == NULL || bdev->module != &ro_if || ro_bdev->claim == NULL) {
+		return NULL;
+	}
+
+	return ro_bdev->claim->base_bdev;
+}
+
+SPDK_BDEV_MODULE_REGISTER(bdev_ro, &ro_if)
