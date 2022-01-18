@@ -192,6 +192,112 @@ ut_claim_count(struct vbdev_ro_claim *claim)
  */
 
 static void
+ro_create_opts(void)
+{
+	struct spdk_bdev	bdev_base = {};
+	struct spdk_bdev	*ro_bdev;
+	struct vbdev_ro_opts	opts = {};
+	struct spdk_uuid	uuid;
+	int			rc, cb_errno;
+
+	/* Create the base bdev */
+	bdev_base.name = "base";
+	bdev_base.fn_table = &base_fn_table;
+	bdev_base.module = &bdev_ut_if;
+	rc = spdk_bdev_register(&bdev_base);
+	CU_ASSERT(rc == 0);
+
+	/*
+	 * Create with name specified, no options.
+	 */
+	ro_bdev = NULL;
+	rc = create_ro_disk(bdev_base.name, NULL, NULL, &ro_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ro_bdev != NULL);
+	poll_threads();
+	cb_errno = 0x600dd06;
+	delete_ro_disk(ro_bdev, save_errno_cb, &cb_errno);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
+
+	/*
+	 * Create with uuid specified, no options.
+	 */
+	ro_bdev = NULL;
+	rc = create_ro_disk(NULL, &bdev_base.uuid, NULL, &ro_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ro_bdev != NULL);
+	poll_threads();
+	cb_errno = 0x600dd06;
+	delete_ro_disk(ro_bdev, save_errno_cb, &cb_errno);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
+
+	/*
+	 * Create with name and uuid: should fail.
+	 */
+	ro_bdev = NULL;
+	rc = create_ro_disk(bdev_base.name, &bdev_base.uuid, NULL, &ro_bdev);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(ro_bdev == NULL);
+
+	/*
+	 * Create without name nor uuid: should fail.
+	 */
+	ro_bdev = NULL;
+	rc = create_ro_disk(NULL, NULL, NULL, &ro_bdev);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(ro_bdev == NULL);
+
+	/*
+	 * Create with specified name and uuid.
+	 */
+	spdk_uuid_generate(&uuid);
+	opts.uuid = &uuid;
+	opts.name = "ro0";
+	ro_bdev = NULL;
+	rc = create_ro_disk(bdev_base.name, NULL, &opts, &ro_bdev);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(strcmp(spdk_bdev_get_name(ro_bdev), opts.name) == 0);
+	CU_ASSERT(spdk_uuid_compare(&uuid, spdk_bdev_get_uuid(ro_bdev)) == 0);
+	poll_threads();
+	cb_errno = 0x600dd06;
+	delete_ro_disk(ro_bdev, save_errno_cb, &cb_errno);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
+
+	/*
+	 * bdevp argument is optional.
+	 */
+	rc = create_ro_disk(bdev_base.name, NULL, &opts, NULL);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
+	poll_threads();
+	ro_bdev = spdk_bdev_get_by_name(opts.name);
+	CU_ASSERT(ro_bdev != NULL);
+	cb_errno = 0x600dd06;
+	delete_ro_disk(ro_bdev, save_errno_cb, &cb_errno);
+	poll_threads();
+	CU_ASSERT(cb_errno == 0);
+
+	/*
+	 * bdevp is required if opts is null or *opts is zeroed.
+	 */
+	rc = create_ro_disk(bdev_base.name, NULL, NULL, NULL);
+	CU_ASSERT(rc == -EINVAL);
+	memset(&opts, 0, sizeof(opts));
+	rc = create_ro_disk(bdev_base.name, NULL, &opts, NULL);
+	CU_ASSERT(rc == -EINVAL);
+
+	/*
+	 * Clean up
+	 */
+	spdk_bdev_unregister(&bdev_base, NULL, NULL);
+	poll_threads();
+}
+
+static void
 ro_claims(void)
 {
 	struct spdk_bdev	bdev_base = {};
@@ -199,7 +305,6 @@ ro_claims(void)
 	struct vbdev_ro_opts	opts = {};
 	struct spdk_bdev	*bdev1, *bdev2;
 	struct vbdev_ro		*ro_vbdev1, *ro_vbdev2;
-	struct spdk_uuid	uuid;
 	int			rc, cb_errno;
 
 	/* Create the base bdev */
@@ -227,7 +332,7 @@ ro_claims(void)
 	opts.name = "ro_ut0";
 	opts.uuid = NULL;
 	bdev2 = NULL;
-	rc = create_ro_disk(bdev_base.name, &opts, &bdev2);
+	rc = create_ro_disk(bdev_base.name, NULL, &opts, &bdev2);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev2 != NULL);
 	/*
@@ -277,7 +382,7 @@ ro_claims(void)
 	opts.name = "ro_ut0";
 	opts.uuid = NULL;
 	bdev1 = NULL;
-	rc = create_ro_disk(bdev_base.name, &opts, &bdev1);
+	rc = create_ro_disk(bdev_base.name, NULL, &opts, &bdev1);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev1 != NULL);
 	ro_vbdev1 = bdev1->ctxt;
@@ -288,7 +393,7 @@ ro_claims(void)
 
 	opts.name = "ro_ut1";
 	bdev2 = NULL;
-	rc = create_ro_disk(bdev_base.name, &opts, &bdev2);
+	rc = create_ro_disk(bdev_base.name, NULL, &opts, &bdev2);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(bdev2 != NULL);
 	ro_vbdev2 = bdev2->ctxt;
@@ -309,49 +414,6 @@ ro_claims(void)
 	poll_threads();
 	CU_ASSERT(cb_errno == 0);
 	CU_ASSERT(bdev_base.internal.claim_module == NULL);
-
-	/*
-	 * If a UUID is provided, it is used.
-	 */
-	spdk_uuid_generate(&uuid);
-	opts.name = "ro_ut0";
-	opts.uuid = &uuid;
-	bdev1 = NULL;
-	rc = create_ro_disk(bdev_base.name, &opts, &bdev1);
-	CU_ASSERT(rc == 0);
-	CU_ASSERT(bdev1 != NULL);
-	CU_ASSERT(spdk_uuid_compare(spdk_bdev_get_uuid(bdev1), &uuid) == 0);
-	poll_threads();
-	CU_ASSERT(cb_errno == 0);
-	cb_errno = 0x600dd06;
-	delete_ro_disk(bdev1, save_errno_cb, &cb_errno);
-	poll_threads();
-	CU_ASSERT(cb_errno == 0);
-
-	/*
-	 * bdevp argument is optional.
-	 */
-	rc = create_ro_disk(bdev_base.name, &opts, NULL);
-	CU_ASSERT(rc == 0);
-	poll_threads();
-	CU_ASSERT(cb_errno == 0);
-	bdev1 = spdk_bdev_get_by_name(opts.name);
-	CU_ASSERT(bdev1 != NULL);
-	cb_errno = 0x600dd06;
-	delete_ro_disk(bdev1, save_errno_cb, &cb_errno);
-	poll_threads();
-	CU_ASSERT(cb_errno == 0);
-
-	/*
-	 * Creating a bdev with no name should not work.
-	 */
-	opts.name = NULL;
-	opts.uuid = NULL;
-	rc = create_ro_disk(bdev_base.name, &opts, &bdev1);
-	CU_ASSERT(rc == -EINVAL);
-	opts.name = "";
-	rc = create_ro_disk(bdev_base.name, &opts, &bdev1);
-	CU_ASSERT(rc == -EINVAL);
 
 	/*
 	 * Deleting the wrong bdev should fail gracefully.
@@ -414,7 +476,7 @@ ro_io(void)
 	 */
 	opts.name = "ro0";
 	ro_bdev = NULL;
-	rc = create_ro_disk(spdk_bdev_get_name(base_bdev), &opts, &ro_bdev);
+	rc = create_ro_disk(spdk_bdev_get_name(base_bdev), NULL, &opts, &ro_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ro_bdev != NULL);
 	poll_threads();
@@ -535,7 +597,7 @@ ro_remove_base(void)
 	opts.name = ro[0].name;
 	opts.uuid = NULL;
 	ro[0].bdev = NULL;
-	rc = create_ro_disk(base_name, &opts, &ro[0].bdev);
+	rc = create_ro_disk(base_name, NULL, &opts, &ro[0].bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ro[0].bdev != NULL);
 	/* Allow bdev_register to be delivered. */
@@ -596,7 +658,7 @@ ro_remove_base(void)
 		opts.name = ro[i].name;
 		opts.uuid = NULL;
 		ro[i].bdev = NULL;
-		rc = create_ro_disk(base_name, &opts, &ro[i].bdev);
+		rc = create_ro_disk(base_name, NULL, &opts, &ro[i].bdev);
 		CU_ASSERT(rc == 0);
 		CU_ASSERT(ro[i].bdev != NULL);
 
@@ -668,6 +730,7 @@ main(int argc, char **argv)
 						     suite_setup,
 						     suite_teardown);
 
+	CU_ADD_TEST(suite, ro_create_opts);
 	CU_ADD_TEST(suite, ro_claims);
 	CU_ADD_TEST(suite, ro_io);
 	CU_ADD_TEST(suite, ro_remove_base);

@@ -375,47 +375,76 @@ vbdev_ro_release_bdev(struct vbdev_ro *ro_bdev)
 	}
 }
 
+static char *
+vbdev_ro_unique_name(const char *base_name)
+{
+	static pthread_mutex_t	lock;
+	static uint64_t	next = 0;
+	uint64_t cur;
+
+	pthread_mutex_lock(&lock);
+	cur = next++;
+	pthread_mutex_unlock(&lock);
+
+	return spdk_sprintf_alloc("ro_%s_%" PRIu64, base_name, cur);
+}
+
 /*
  * Read-only device public interface implementation
  */
 int
-create_ro_disk(const char *bdev_name, const struct vbdev_ro_opts *opts,
-	       struct spdk_bdev **bdevp)
+create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
+	       const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp)
 {
 	struct spdk_bdev	*base_bdev = NULL;
 	struct vbdev_ro		*ro_bdev = NULL;
 	int			rc;
 
-	base_bdev = spdk_bdev_get_by_name(bdev_name);
+	if ((base_name == NULL && base_uuid == NULL) ||
+	    (base_name != NULL && base_uuid != NULL)) {
+		SPDK_ERRLOG("Exactly one of base_name or base_uuid required\n");
+		return -EINVAL;
+	}
+
+	if (bdevp == NULL &&
+	    (opts == NULL || ((opts->name == NULL) && (opts->uuid == NULL)))) {
+		SPDK_ERRLOG("At least one of bdevp, opts->name, or opts->uuid required\n");
+		return -EINVAL;
+	}
+
+	if (base_name != NULL) {
+		base_bdev = spdk_bdev_get_by_name(base_name);
+	} else {
+		base_bdev = spdk_bdev_get_by_uuid(base_uuid);
+	}
 	if (base_bdev == NULL) {
 		return -ENOENT;
 	}
 
-	if (opts->name == NULL) {
-		return -EINVAL;
-	}
-
 	ro_bdev = calloc(1, sizeof(*ro_bdev));
 	if (ro_bdev == NULL) {
-		rc = -ENOMEM;
-		goto errout;
+		return -ENOMEM;
 	}
 
 	rc = vbdev_ro_claim_bdev(base_bdev, ro_bdev);
 	if (rc != 0) {
-		goto errout;
+		free(ro_bdev);
+		return rc;
 	}
 
-
 	ro_bdev->bdev.ctxt = ro_bdev;
-	ro_bdev->bdev.name = strdup(opts->name);
+	if (opts != NULL && opts->name != NULL) {
+		ro_bdev->bdev.name = strdup(opts->name);
+	} else {
+		ro_bdev->bdev.name = vbdev_ro_unique_name(spdk_bdev_get_name(base_bdev));
+	}
 	if (ro_bdev->bdev.name == NULL) {
 		rc = -ENOMEM;
 		goto errout;
 	}
 	ro_bdev->bdev.product_name = "read-only disk";
 
-	if (opts->uuid != NULL) {
+	if (opts != NULL && opts->uuid != NULL) {
 		ro_bdev->bdev.uuid = *opts->uuid;
 	} else {
 		spdk_uuid_generate(&ro_bdev->bdev.uuid);
