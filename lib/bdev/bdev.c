@@ -498,24 +498,36 @@ spdk_bdev_get_by_name(const char *bdev_name)
 	return bdev;
 }
 
-struct spdk_bdev *
-spdk_bdev_get_by_uuid(const char *bdev_uuid)
+static struct spdk_bdev *
+bdev_get_by_uuid(const struct spdk_uuid *uuid)
 {
 	struct spdk_bdev *bdev;
-	struct spdk_uuid uuid;
-
-	if (spdk_uuid_parse(&uuid, bdev_uuid) != 0) {
-		return NULL;
-	}
 
 	/* XXX-mg change to RB tree */
 	for (bdev = spdk_bdev_first(); bdev != NULL; bdev = spdk_bdev_next(bdev)) {
-		if (spdk_uuid_compare(&uuid, &bdev->uuid) == 0) {
+		if (spdk_uuid_compare(uuid, &bdev->uuid) == 0) {
 			return bdev;
 		}
 	}
 
 	return NULL;
+}
+
+struct spdk_bdev *
+spdk_bdev_get_by_uuid(const char *bdev_uuid)
+{
+	struct spdk_uuid uuid;
+	struct spdk_bdev *bdev;
+
+	if (spdk_uuid_parse(&uuid, bdev_uuid) != 0) {
+		return NULL;
+	}
+
+	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	bdev = bdev_get_by_uuid(&uuid);
+	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+
+	return bdev;
 }
 
 struct spdk_bdev_wait_for_examine_ctx {
@@ -6039,9 +6051,10 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 	return 0;
 }
 
-int
-spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
-		   void *event_ctx, struct spdk_bdev_desc **_desc)
+static int
+bdev_open_by(const char *bdev_name, const struct spdk_uuid *bdev_uuid,
+	      bool write, spdk_bdev_event_cb_t event_cb, void *event_ctx,
+	      struct spdk_bdev_desc **_desc)
 {
 	struct spdk_bdev_desc *desc;
 	struct spdk_bdev *bdev;
@@ -6053,14 +6066,33 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 		return -EINVAL;
 	}
 
+	if ((bdev_name == NULL && bdev_uuid == NULL) ||
+	    (bdev_name != NULL && bdev_uuid != NULL)) {
+		SPDK_ERRLOG("One of bdev_name or bdev_uuid must be non-NULL\n");
+		return -EINVAL;
+	}
+
 	pthread_mutex_lock(&g_bdev_mgr.mutex);
 
-	bdev = bdev_get_by_name(bdev_name);
+	if (bdev_name != NULL) {
+		bdev = bdev_get_by_name(bdev_name);
+		if (bdev == NULL) {
+			SPDK_NOTICELOG("Currently unable to find bdev with name: %s\n",
+				       bdev_name);
+			pthread_mutex_unlock(&g_bdev_mgr.mutex);
+			return -ENODEV;
+		}
+	} else {
+		bdev = bdev_get_by_uuid(bdev_uuid);
+		if (bdev == NULL) {
+			char uuid_str[SPDK_UUID_STRING_LEN];
 
-	if (bdev == NULL) {
-		SPDK_NOTICELOG("Currently unable to find bdev with name: %s\n", bdev_name);
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
-		return -ENODEV;
+			spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), bdev_uuid);
+			SPDK_NOTICELOG("Currently unable to find bdev with uuid: %s\n",
+				       uuid_str);
+			pthread_mutex_unlock(&g_bdev_mgr.mutex);
+			return -ENODEV;
+		}
 	}
 
 	desc = calloc(1, sizeof(*desc));
@@ -6104,6 +6136,21 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	pthread_mutex_unlock(&g_bdev_mgr.mutex);
 
 	return rc;
+}
+
+int
+spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
+		   void *event_ctx, struct spdk_bdev_desc **_desc)
+{
+	return bdev_open_by(bdev_name, NULL, write, event_cb, event_ctx, _desc);
+}
+
+int
+spdk_bdev_open_by_uuid(const struct spdk_uuid *uuid, bool write,
+		       spdk_bdev_event_cb_t event_cb,
+		       void *event_ctx, struct spdk_bdev_desc **_desc)
+{
+	return bdev_open_by(NULL, uuid, write, event_cb, event_ctx, _desc);
 }
 
 void

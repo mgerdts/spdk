@@ -3800,7 +3800,7 @@ bdev_close_while_hotremove(void)
 }
 
 static void
-bdev_open_ext(void)
+bdev_open_ext_test(void)
 {
 	struct spdk_bdev *bdev;
 	struct spdk_bdev_desc *desc1 = NULL;
@@ -4971,6 +4971,29 @@ bdev_writev_readv_ext(void)
 	poll_threads();
 }
 
+static void
+bdev_open_by_uuid(void)
+{
+	struct spdk_bdev *bdev;
+	struct spdk_bdev_desc *desc = NULL;
+	struct spdk_uuid uuid;
+	int rc;
+
+	/* Should be able to open bdev by uuid while it exists */
+	bdev = allocate_bdev("bdev0");
+	CU_ASSERT(bdev != NULL);
+	uuid = bdev->uuid;
+	rc = spdk_bdev_open_by_uuid(&uuid, false, bdev_ut_event_cb, NULL, &desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(desc != NULL);
+
+	/* Open should fail when it no longer exists */
+	spdk_bdev_close(desc);
+	free_bdev(bdev);
+	rc = spdk_bdev_open_by_uuid(&uuid, false, bdev_ut_event_cb, NULL, &desc);
+	CU_ASSERT(rc == -ENODEV);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -5006,7 +5029,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, bdev_zcopy_read);
 	CU_ADD_TEST(suite, bdev_open_while_hotremove);
 	CU_ADD_TEST(suite, bdev_close_while_hotremove);
-	CU_ADD_TEST(suite, bdev_open_ext);
+	CU_ADD_TEST(suite, bdev_open_ext_test);
 	CU_ADD_TEST(suite, bdev_set_io_timeout);
 	CU_ADD_TEST(suite, lba_range_overlap);
 	CU_ADD_TEST(suite, lock_lba_range_check_ranges);
@@ -5019,6 +5042,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, bdev_multi_allocation);
 	CU_ADD_TEST(suite, bdev_get_memory_domains);
 	CU_ADD_TEST(suite, bdev_writev_readv_ext);
+	CU_ADD_TEST(suite, bdev_open_by_uuid);
 
 	allocate_cores(1);
 	allocate_threads(1);
