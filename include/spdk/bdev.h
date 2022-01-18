@@ -322,7 +322,7 @@ struct spdk_bdev *spdk_bdev_get_by_name(const char *bdev_name);
  * \return Block device associated with the name or NULL if no block device with
  * bdev_uuid is currently registered.
  */
-struct spdk_bdev *spdk_bdev_get_by_uuid(const char *bdev_uuid);
+struct spdk_bdev *spdk_bdev_get_by_uuid(const struct spdk_uuid *dev_uuid);
 
 /**
  * Get the first registered block device.

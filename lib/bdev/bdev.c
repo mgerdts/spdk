@@ -514,17 +514,12 @@ bdev_get_by_uuid(const struct spdk_uuid *uuid)
 }
 
 struct spdk_bdev *
-spdk_bdev_get_by_uuid(const char *bdev_uuid)
+spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid)
 {
-	struct spdk_uuid uuid;
 	struct spdk_bdev *bdev;
 
-	if (spdk_uuid_parse(&uuid, bdev_uuid) != 0) {
-		return NULL;
-	}
-
 	pthread_mutex_lock(&g_bdev_mgr.mutex);
-	bdev = bdev_get_by_uuid(&uuid);
+	bdev = bdev_get_by_uuid(uuid);
 	pthread_mutex_unlock(&g_bdev_mgr.mutex);
 
 	return bdev;
