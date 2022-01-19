@@ -443,17 +443,10 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super 
 struct spdk_bs_dev *bs_create_zeroes_dev(struct spdk_blob *blob);
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
-typedef void(*blob_load_esnap_cpl)(void *ctx, int rc);
-
-struct esnap_ctx {
-	struct spdk_bdev		*bdev;
-	struct spdk_bdev_desc		*bdev_desc;
-	struct spdk_io_channel		**io_channels;
-	uint64_t			io_channels_count;
-};
+typedef void(*esnap_parent_cb_t)(void *ctx, struct spdk_bs_dev *dev, int rc);
 
 void bs_create_esnap_dev(struct spdk_blob *front, const struct spdk_uuid *esnap_uuid,
-			 blob_load_esnap_cpl cb_fn, void *cb_arg);
+			 esnap_parent_cb_t cb_fn, void *cb_arg);
 
 /* Unit Conversions
  *

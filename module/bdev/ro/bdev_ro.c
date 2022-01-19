@@ -418,7 +418,7 @@ create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
 		base_bdev = spdk_bdev_get_by_uuid(base_uuid);
 	}
 	if (base_bdev == NULL) {
-		return -ENOENT;
+		return -ENODEV;
 	}
 
 	ro_bdev = calloc(1, sizeof(*ro_bdev));

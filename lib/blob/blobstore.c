@@ -1357,12 +1357,30 @@ blob_load_snapshot_cpl(void *cb_arg, struct spdk_blob *snapshot, int bserrno)
 
 static void blob_update_clear_method(struct spdk_blob *blob);
 
-static void blob_load_esnap_done(void *ctx, int rc)
+/*
+ * XXX-mg extend this to be called every time there is a change in back_bs_dev.
+ * It needs to handle:
+ * 1. The initial back_bs_dev during blob open (success)
+ * 2. The initial back_bs_dev during blob open (fail)
+ * 3. Switch to a new back_bs_dev (install new, call destroy on old) while
+ *    frozen
+ */
+static void blob_load_esnap_done(void *ctx, struct spdk_bs_dev *dev, int rc)
 {
-	struct spdk_blob_load_ctx	*blob_load_ctx = ctx;;
+	struct spdk_blob_load_ctx	*blob_load_ctx = ctx;
 	struct spdk_blob		*blob = blob_load_ctx->blob;
+	struct spdk_bs_dev		*old_dev = blob->back_bs_dev;
 
-	blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
+	if (rc == 0) {
+		assert(dev != NULL);
+		blob->back_bs_dev = dev;
+		if (old_dev != NULL && old_dev->destroy != NULL) {
+			old_dev->destroy(old_dev);
+		}
+		blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
+	} else {
+		// XXX-mg anything here?
+	}
 	blob_load_final(ctx, rc);
 }
 

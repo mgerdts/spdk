@@ -222,9 +222,6 @@ struct spdk_bs_dev {
 
 	uint64_t	blockcnt;
 	uint32_t	blocklen; /* In bytes */
-
-	/* the esnap bdev descriptor for some sparse lvols */
-	struct esnap_ctx *esnap_ctx;
 };
 
 struct spdk_bs_type {
