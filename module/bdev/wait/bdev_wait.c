@@ -163,7 +163,7 @@ bdev_wait_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
  * registered.
  */
 static int
-bdev_wait_add(struct bdev_wait *wait_bdev, struct spdk_uuid *target_uuid)
+bdev_wait_add(struct bdev_wait *wait_bdev, const struct spdk_uuid *target_uuid)
 {
 	struct bdev_wait_target *target, *existing;
 	struct bdev_wait_target find;
@@ -243,17 +243,19 @@ static const struct spdk_bdev_fn_table bdev_wait_fn_table = {
 };
 
 static char *
-bdev_wait_unique_name(const char *uuid)
+bdev_wait_unique_name(const struct spdk_uuid *uuid)
 {
 	static pthread_mutex_t	lock;
-	static uint64_t	next = 0;
-	uint64_t cur;
+	static uint64_t		next = 0;
+	uint64_t		cur;
+	char			uuid_str[SPDK_UUID_STRING_LEN];
 
 	pthread_mutex_lock(&lock);
 	cur = next++;
 	pthread_mutex_unlock(&lock);
 
-	return spdk_sprintf_alloc("wait_%s_%" PRIu64, uuid, cur);
+	spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), uuid);
+	return spdk_sprintf_alloc("wait_%s_%" PRIu64, uuid_str, cur);
 }
 
 /*
@@ -265,13 +267,13 @@ bdev_wait_unique_name(const char *uuid)
  * wait, then performing its own lookup for the bdev that it is awaiting.
  */
 int
-create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uuid,
+create_wait_disk(const char *new_name, const struct spdk_uuid *new_uuid,
+		 const struct spdk_uuid *base_uuid,
 		 wait_disk_available_cb available_cb, void *available_ctx,
 		 struct spdk_bdev **bdevp)
 {
 	struct bdev_wait	*wait_bdev = NULL;
 	struct spdk_bdev	*bdev = NULL;
-	struct spdk_uuid	target_uuid;
 	int			rc;
 
 	if (base_uuid == NULL) {
@@ -295,18 +297,7 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 	if (new_uuid == NULL) {
 		spdk_uuid_generate(&bdev->uuid);
 	} else {
-		rc = spdk_uuid_parse(&bdev->uuid, new_uuid);
-		if (rc != 0) {
-			SPDK_ERRLOG("Invalid uuid '%s'\n", new_uuid);
-			return rc;
-		}
-	}
-
-	rc = spdk_uuid_parse(&target_uuid, base_uuid);
-	if (rc != 0) {
-		SPDK_ERRLOG("Invalid uuid '%s'\n", base_uuid);
-		free(wait_bdev);
-		return rc;
+		bdev->uuid = *new_uuid;
 	}
 
 	if (new_name == NULL) {
@@ -330,7 +321,7 @@ create_wait_disk(const char *new_name, const char *new_uuid, const char *base_uu
 	bdev->module = &wait_if;
 	bdev->fn_table = &bdev_wait_fn_table;
 
-	rc = bdev_wait_add(wait_bdev, &target_uuid);
+	rc = bdev_wait_add(wait_bdev, base_uuid);
 	if (rc != 0) {
 		free(bdev->name);
 		free(wait_bdev);

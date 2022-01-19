@@ -66,9 +66,10 @@ typedef void (*wait_disk_available_cb)(void *ctx, struct spdk_bdev *bdev);
  * \return -EINVAL if a required option is missing.
  * \return -ENOMEM if memory allocation fails.
  */
-int create_wait_disk(const char *new_name, const char *new_uuid,
-		 const char *base_uuid, wait_disk_available_cb available_cb,
-		 void *available_ctx, struct spdk_bdev **bdevp);
+int create_wait_disk(const char *new_name, const struct spdk_uuid *new_uuid,
+		     const struct spdk_uuid *base_uuid,
+		     wait_disk_available_cb available_cb, void *available_ctx,
+		     struct spdk_bdev **bdevp);
 
 /**
  * Delete a wait bdev.
@@ -78,5 +79,5 @@ int create_wait_disk(const char *new_name, const char *new_uuid,
  * \param cb_arg Argument to pass to cb_fn.
  */
 void delete_wait_disk(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn,
-	         void *cb_arg);
+		      void *cb_arg);
 #endif

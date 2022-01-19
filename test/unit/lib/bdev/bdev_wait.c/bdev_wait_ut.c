@@ -133,38 +133,42 @@ wait_create(void)
 {
 	struct spdk_bdev	*wait_bdev = NULL;
 	const char		*new_name = "wait0";
-	const char		*new_uuid = "bfad2ec9-8367-4f6d-89e6-4980b6f51875";
-	const char		*wait_uuid = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	const char		*new_uuid_str = "bfad2ec9-8367-4f6d-89e6-4980b6f51875";
+	const char		*wait_uuid_str = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	struct spdk_uuid	new_uuid, wait_uuid;
 	int			rc, cberrno;
 
+	CU_ASSERT(spdk_uuid_parse(&new_uuid, new_uuid_str) == 0);
+	CU_ASSERT(spdk_uuid_parse(&wait_uuid, wait_uuid_str) == 0);
+
 	/* Create a wait bdev with all parameters specified and test lookups. */
-	rc = create_wait_disk(new_name, new_uuid, wait_uuid,
+	rc = create_wait_disk(new_name, &new_uuid, &wait_uuid,
 			      wait_available_cb, NULL, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(wait_bdev != NULL);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	cberrno = 1;
 	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
 	poll_threads();
 	CU_ASSERT(cberrno == 0);
 
 	/* Again, missing name */
-	rc = create_wait_disk(NULL, new_uuid, wait_uuid,
+	rc = create_wait_disk(NULL, &new_uuid, &wait_uuid,
 			      wait_available_cb, NULL, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(wait_bdev != NULL);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(spdk_bdev_get_name(wait_bdev)) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	cberrno = 1;
 	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
 	poll_threads();
 	CU_ASSERT(cberrno == 0);
 
 	/* Again, missing new_name and new_uuid*/
-	rc = create_wait_disk(NULL, NULL, wait_uuid,
+	rc = create_wait_disk(NULL, NULL, &wait_uuid,
 			      wait_available_cb, NULL, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(wait_bdev != NULL);
@@ -176,7 +180,7 @@ wait_create(void)
 	CU_ASSERT(cberrno == 0);
 
 	/* With name, but NULL return address. */
-	rc = create_wait_disk(new_name, NULL, wait_uuid,
+	rc = create_wait_disk(new_name, NULL, &wait_uuid,
 			      wait_available_cb, NULL, NULL);
 	CU_ASSERT(rc == 0);
 	poll_threads();
@@ -193,16 +197,16 @@ wait_create(void)
 	CU_ASSERT(rc == -EINVAL);
 
 	/* Should fail with missing callback */
-	rc = create_wait_disk(new_name, NULL, wait_uuid,
+	rc = create_wait_disk(new_name, NULL, &wait_uuid,
 			      NULL, NULL, NULL);
 	CU_ASSERT(rc == -EINVAL);
 
 	/* Should fail on new_name collision */
-	rc = create_wait_disk(new_name, NULL, wait_uuid,
+	rc = create_wait_disk(new_name, NULL, &wait_uuid,
 			      wait_available_cb, NULL, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	poll_threads();
-	rc = create_wait_disk(new_name, NULL, wait_uuid,
+	rc = create_wait_disk(new_name, NULL, &wait_uuid,
 			      wait_available_cb, NULL, NULL);
 	CU_ASSERT(rc == -EEXIST);
 	delete_wait_disk(wait_bdev, save_errno_cb, &cberrno);
@@ -216,21 +220,25 @@ wait_create_open_delete(void)
 	struct spdk_bdev	*wait_bdev = NULL;
 	struct spdk_bdev_desc	*wait_desc = NULL;
 	const char		*new_name = "wait0";
-	const char		*new_uuid = "bfad2ec9-8367-4f6d-89e6-4980b6f51875";
-	const char		*wait_uuid = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	const char		*new_uuid_str = "bfad2ec9-8367-4f6d-89e6-4980b6f51875";
+	const char		*wait_uuid_str = "3ba002f7-da8e-49f9-b356-de1eabb99925";
 	struct ut_event_ctx	event_ctx = { 0 };
 	const struct ut_event_ctx	event_ctx_init = { .count = 0, .type = -1 };
 	struct wait_available_cb_ctx	wait_cb_ctx = { 0 };
+	struct spdk_uuid	new_uuid, wait_uuid;
 	int			rc, cberrno;
 
+	CU_ASSERT(spdk_uuid_parse(&new_uuid, new_uuid_str) == 0);
+	CU_ASSERT(spdk_uuid_parse(&wait_uuid, wait_uuid_str) == 0);
+
 	/* Create a wait bdev with all parameters specified and test lookups. */
-	rc = create_wait_disk(new_name, new_uuid, wait_uuid,
+	rc = create_wait_disk(new_name, &new_uuid, &wait_uuid,
 			      wait_available_cb, &wait_cb_ctx, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(wait_bdev != NULL);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
 	/* Verify open, close, and delete. */
@@ -242,13 +250,13 @@ wait_create_open_delete(void)
 	CU_ASSERT(wait_desc != NULL);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
 	spdk_bdev_close(wait_desc);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	CU_ASSERT(memcmp(&event_ctx, &event_ctx_init, sizeof (event_ctx)) == 0);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
@@ -258,20 +266,20 @@ wait_create_open_delete(void)
 	CU_ASSERT(cberrno == 0);
 	CU_ASSERT(memcmp(&event_ctx, &event_ctx_init, sizeof (event_ctx)) == 0);
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == NULL);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == NULL);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == NULL);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
 	/*
 	 * Verify that having the device open delays deletion but a notification
 	 * of its deletion is sent.
 	 */
-	rc = create_wait_disk(new_name, new_uuid, wait_uuid,
+	rc = create_wait_disk(new_name, &new_uuid, &wait_uuid,
 			      wait_available_cb, &wait_cb_ctx, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(wait_bdev != NULL);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
 	wait_desc = NULL;
@@ -282,7 +290,7 @@ wait_create_open_delete(void)
 	CU_ASSERT(wait_desc != NULL);
 	poll_threads();
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
 	cberrno = 1;
@@ -292,7 +300,7 @@ wait_create_open_delete(void)
 	CU_ASSERT(event_ctx.count == 1);
 	CU_ASSERT(event_ctx.type == SPDK_BDEV_EVENT_REMOVE);
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == wait_bdev);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == wait_bdev);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == wait_bdev);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 
 	event_ctx = event_ctx_init;
@@ -301,7 +309,7 @@ wait_create_open_delete(void)
 	CU_ASSERT(cberrno == 0);
 	CU_ASSERT(memcmp(&event_ctx, &event_ctx_init, sizeof (event_ctx)) == 0);
 	CU_ASSERT(spdk_bdev_get_by_name(new_name) == NULL);
-	CU_ASSERT(spdk_bdev_get_by_uuid(new_uuid) == NULL);
+	CU_ASSERT(spdk_bdev_get_by_uuid(&new_uuid) == NULL);
 	CU_ASSERT(wait_cb_ctx.bdev == NULL);
 }
 
@@ -316,30 +324,33 @@ wait_hotadd(void)
 		struct spdk_bdev		*bdev;
 		struct ut_event_ctx		event_ctx;
 		struct wait_available_cb_ctx	wait_cb_ctx;
-		const char			*wait_for_uuid;
+		const char			*wait_for_uuid_str;
+		struct spdk_uuid		wait_for_uuid;
 	} waiter[] = {
 		{
 			.bdev = NULL,
 			.event_ctx = event_ctx_init,
 			.wait_cb_ctx = { 0 },
-			.wait_for_uuid = "fe0dc824-ab01-4de9-9bc8-6a514b3d4eab"
+			.wait_for_uuid_str = "fe0dc824-ab01-4de9-9bc8-6a514b3d4eab"
 		}, {
 			.bdev = NULL,
 			.event_ctx = event_ctx_init,
 			.wait_cb_ctx = { 0 },
-			.wait_for_uuid = "33c42e6f-6304-48d6-86b8-3a693c59a468"
+			.wait_for_uuid_str = "33c42e6f-6304-48d6-86b8-3a693c59a468"
 		}, {
 			.bdev = NULL,
 			.event_ctx = event_ctx_init,
 			.wait_cb_ctx = { 0 },
 			/* Same as previous */
-			.wait_for_uuid = "33c42e6f-6304-48d6-86b8-3a693c59a468"
+			.wait_for_uuid_str = "33c42e6f-6304-48d6-86b8-3a693c59a468"
 		}
 	};
 
 	/* Create two wait disks, each waiting on a different base disk */
 	for (i = 0; i < SPDK_COUNTOF(waiter); i++) {
-		rc = create_wait_disk(NULL, NULL, waiter[i].wait_for_uuid,
+		CU_ASSERT(spdk_uuid_parse(&waiter[i].wait_for_uuid,
+					  waiter[i].wait_for_uuid_str) == 0);
+		rc = create_wait_disk(NULL, NULL, &waiter[i].wait_for_uuid,
 				      wait_available_cb, &waiter[i].wait_cb_ctx,
 				      &waiter[i].bdev);
 		CU_ASSERT(rc == 0);
@@ -369,7 +380,7 @@ wait_hotadd(void)
 	ut_bdevs[0].name = "match0";
 	ut_bdevs[0].fn_table = &base_fn_table;
 	ut_bdevs[0].module = &bdev_ut_if;
-	rc = spdk_uuid_parse(&ut_bdevs[0].uuid, waiter[0].wait_for_uuid);
+	ut_bdevs[0].uuid = waiter[0].wait_for_uuid;
 	poll_threads();
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(spdk_bdev_register(&ut_bdevs[0]) == 0);
@@ -381,11 +392,12 @@ wait_hotadd(void)
 	 * Create a bdev with a UUID that matches the second and third bdev.
 	 * The second and third waiters waiter should be updated.
 	 */
-	CU_ASSERT(strcmp(waiter[1].wait_for_uuid, waiter[2].wait_for_uuid) == 0);
+	CU_ASSERT(spdk_uuid_compare(&waiter[1].wait_for_uuid,
+		  &waiter[2].wait_for_uuid) == 0);
 	ut_bdevs[1].name = "match1";
 	ut_bdevs[1].fn_table = &base_fn_table;
 	ut_bdevs[1].module = &bdev_ut_if;
-	rc = spdk_uuid_parse(&ut_bdevs[1].uuid, waiter[1].wait_for_uuid);
+	ut_bdevs[1].uuid = waiter[1].wait_for_uuid;
 	poll_threads();
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(spdk_bdev_register(&ut_bdevs[1]) == 0);
@@ -416,10 +428,12 @@ wait_channel(void)
 	struct spdk_bdev	*wait_bdev;
 	struct spdk_bdev_desc	*wait_desc;
 	struct spdk_io_channel	*wait_ch;
-	const char		*wait_uuid = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	const char		*wait_uuid_str = "3ba002f7-da8e-49f9-b356-de1eabb99925";
+	struct spdk_uuid	wait_uuid;
 	int			rc;
 
-	rc = create_wait_disk(NULL, NULL, wait_uuid,
+	CU_ASSERT(spdk_uuid_parse(&wait_uuid, wait_uuid_str) == 0);
+	rc = create_wait_disk(NULL, NULL, &wait_uuid,
 			      wait_available_cb, NULL, &wait_bdev);
 	CU_ASSERT(rc == 0);
 	poll_threads();
