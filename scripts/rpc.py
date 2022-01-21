@@ -553,7 +553,8 @@ if __name__ == "__main__":
                                                          num_io_queues=args.num_io_queues,
                                                          ctrlr_loss_timeout_sec=args.ctrlr_loss_timeout_sec,
                                                          reconnect_delay_sec=args.reconnect_delay_sec,
-                                                         fast_io_fail_timeout_sec=args.fast_io_fail_timeout_sec))
+                                                         fast_io_fail_timeout_sec=args.fast_io_fail_timeout_sec,
+                                                         host_memory_domain_id=args.host_memory_domain_id))
 
     p = subparsers.add_parser('bdev_nvme_attach_controller', aliases=['construct_nvme_bdev'],
                               help='Add bdevs with nvme backend')
@@ -605,6 +606,7 @@ if __name__ == "__main__":
                    If fast_io_fail_timeout_sec is not zero, it has to be not less than reconnect_delay_sec and
                    less than ctrlr_loss_timeout_sec if ctrlr_loss_timeout_sec is not -1.""",
                    type=int)
+    p.add_argument('--host-memory-domain-id', type=int, help='Host ID for host memory domain translation.')
     p.set_defaults(func=bdev_nvme_attach_controller)
 
     def bdev_nvme_get_controllers(args):
