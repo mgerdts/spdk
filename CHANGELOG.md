@@ -31,6 +31,10 @@ Added `spdk_bdev_get_zone_id` API to retrieve zone_id for a certain LBA.
 
 Added `bdev_aio_rescan` RPC to allow rescanning the size of aio bdev.
 
+### crypto
+
+Support for AES_XTS was added for MLX5 polled mode driver (pmd).
+
 ### bdev_nvme
 
 Added discovery service to bdev_nvme module, which now can connect to a discovery controller.
