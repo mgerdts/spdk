@@ -380,7 +380,7 @@ esnap_open_done(struct esnap_create_ctx *create_ctx,
 		struct esnap_common_ctx *common_ctx, struct spdk_bs_dev *dev,
 		int bserrno)
 {
-	assert((dev == NULL) ^ (bserrno != 0));
+	assert((dev == NULL) ^ (bserrno == 0));
 
 	if (create_ctx != NULL) {
 		create_ctx->load_cb(create_ctx->load_arg, dev, bserrno);
@@ -667,7 +667,7 @@ esnap_open_ro(struct esnap_create_ctx *create_ctx,
 	lot_ctx->create_ctx = create_ctx;
 	lot_ctx->esnap_ctx = esnap_ctx;
 
-	spdk_for_each_thread(load_esnap_on_thread, esnap_ctx,
+	spdk_for_each_thread(load_esnap_on_thread, lot_ctx,
 			     load_esnap_on_thread_done);
 }
 

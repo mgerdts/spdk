@@ -8110,8 +8110,10 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
 #endif
 	CU_ADD_TEST(suite_bs, blob_extclone_eio);
+#if 0
 	CU_ADD_TEST(suite_bs, blob_extclone_hotremove);
 	CU_ADD_TEST(suite_bs, blob_extclone_hotadd);
+#endif
 
 	allocate_cores(1);
 	allocate_threads(2);
@@ -8124,8 +8126,10 @@ int main(int argc, char **argv)
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
+#if 0
 	g_use_extent_table = false;
 	CU_basic_run_tests();
+#endif
 	num_failures = CU_get_number_of_failures();
 	g_use_extent_table = true;
 	CU_basic_run_tests();
