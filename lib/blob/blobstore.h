@@ -440,13 +440,19 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super 
 
 #pragma pack(pop)
 
+struct spdk_blob_load_ctx;
+
 struct spdk_bs_dev *bs_create_zeroes_dev(struct spdk_blob *blob);
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
 
-typedef void(*esnap_parent_cb_t)(void *ctx, struct spdk_bs_dev *dev, int rc);
-
-void bs_create_esnap_dev(struct spdk_blob *front, const struct spdk_uuid *esnap_uuid,
-			 esnap_parent_cb_t cb_fn, void *cb_arg);
+typedef void(*blob_back_bs_dev_load_done_t)(struct spdk_blob_load_ctx *load_ctx,
+					    struct spdk_bs_dev *dev, int bserrno);
+typedef void(*blob_back_bs_dev_replace_t)(struct spdk_blob *blob,
+					  struct spdk_bs_dev *dev, int bserrno);
+void blob_create_esnap_dev(struct spdk_blob *blob, const struct spdk_uuid *uuid,
+			   blob_back_bs_dev_load_done_t load_cb,
+			   struct spdk_blob_load_ctx *load_cb_arg,
+			   blob_back_bs_dev_replace_t replace_cb);
 
 /* Unit Conversions
  *

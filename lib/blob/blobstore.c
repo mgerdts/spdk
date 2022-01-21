@@ -1365,23 +1365,87 @@ static void blob_update_clear_method(struct spdk_blob *blob);
  * 3. Switch to a new back_bs_dev (install new, call destroy on old) while
  *    frozen
  */
-static void blob_load_esnap_done(void *ctx, struct spdk_bs_dev *dev, int rc)
+static void
+blob_esnap_load_done(struct spdk_blob_load_ctx *ctx, struct spdk_bs_dev *dev, int rc)
 {
-	struct spdk_blob_load_ctx	*blob_load_ctx = ctx;
-	struct spdk_blob		*blob = blob_load_ctx->blob;
-	struct spdk_bs_dev		*old_dev = blob->back_bs_dev;
+	struct spdk_blob		*blob = ctx->blob;
+
+	assert(blob->back_bs_dev == NULL);
 
 	if (rc == 0) {
 		assert(dev != NULL);
 		blob->back_bs_dev = dev;
-		if (old_dev != NULL && old_dev->destroy != NULL) {
-			old_dev->destroy(old_dev);
-		}
 		blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
 	} else {
-		// XXX-mg anything here?
+		// XXX-mg anything here?  Probably same as error paths mentioned
+		// in the next few functions.
+		abort();
 	}
-	blob_load_final(ctx, rc);
+}
+
+struct blob_update_bs_dev_ctx {
+	struct spdk_blob	*blob;
+	struct spdk_bs_dev	*new_bs_dev;
+};
+
+static void
+blob_update_bs_dev_unfreeze_cpl(void *_ctx, int bserrno)
+{
+	/* XXX-mg figure out how to handle an unfreeze a failure. */
+	assert(bserrno == 0);
+
+	free(_ctx);
+}
+
+static void
+blob_update_bs_dev_freeze_cpl(void *_ctx, int bserrno)
+{
+	struct blob_update_bs_dev_ctx	*ctx = _ctx;
+	struct spdk_bs_dev		*new_dev = ctx->new_bs_dev;
+	struct spdk_bs_dev		*old_dev = ctx->blob->back_bs_dev;
+
+	/* XXX-mg figure out how to handle a freeze a failure. */
+	assert(bserrno == 0);
+
+	SPDK_NOTICELOG("Blob 0x" PRIx64 " replacing external snapshot %s with %s\n",
+		       spdk_bdev_get_name(old_dev->get_base_bdev(old_dev)),
+		       spdk_bdev_get_name(new_dev->get_base_bdev(new_dev)));
+	ctx->blob->back_bs_dev = ctx->new_bs_dev;
+	old_dev->destroy(old_dev);
+
+	blob_unfreeze_io(ctx->blob, blob_update_bs_dev_unfreeze_cpl, ctx);
+}
+
+static void
+blob_update_bs_dev(struct spdk_blob *blob, struct spdk_bs_dev *dev, int rc)
+{
+	struct spdk_bs_dev		*old_dev = blob->back_bs_dev;
+	struct blob_update_bs_dev_ctx	*ctx;
+
+	assert(old_dev != NULL);
+	assert(blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT);
+
+	/*
+	 * XXX-mg add support for a hot replace gone wrong.  For instance, if
+	 * the ro dev was removed followed by ENOMEM while creating the wait
+	 * dev.
+	 */
+	assert(rc == 0);
+	assert(dev != NULL);
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		/*
+		 * XXX-mg how do we put the blob into a state that this is
+		 * visible and ideally recoverable without a restart?
+		 */
+		abort();
+	}
+
+	ctx->blob = blob;
+	ctx->new_bs_dev = dev;
+
+	blob_freeze_io(ctx->blob, blob_update_bs_dev_freeze_cpl, ctx);
 }
 
 static void
@@ -1416,7 +1480,8 @@ blob_load_backing_dev(void *cb_arg)
 		SPDK_INFOLOG(blob, "Creating external snapshot device\n");
 
 		/* Use an existing bdev for unallocated blocks */
-		bs_create_esnap_dev(blob, &uuid, blob_load_esnap_done, ctx);
+		blob_create_esnap_dev(blob, &uuid, blob_esnap_load_done, ctx,
+				    blob_update_bs_dev);
 		return;
 	}
 

@@ -39,44 +39,76 @@
 #include "spdk/log.h"
 #include "spdk/string.h"
 #include "bdev/ro/bdev_ro.h"
+#include "bdev/wait/bdev_wait.h"
 
 #include "spdk_internal/event.h"
 
 #include "blobstore.h"
 
+#define ESNAP_CTX_MAGIC 0x600dcafe
+
+/* Instances of his structure live about as long as the blob does */
+struct esnap_common_ctx {
+	struct spdk_thread		*thread;
+	struct spdk_uuid		uuid;
+	char				uuid_str[SPDK_UUID_STRING_LEN];
+	struct spdk_blob		*blob;
+	blob_back_bs_dev_replace_t	replace_cb;
+	uint32_t			refcnt;
+};
+
+/* This structure is reallocated on hot plug events. */
 struct esnap_ctx {
-	/* back_bs_dev must be first: see BACK_BS_DEV_TO_ESNAP_CTX() */
+	/* back_bs_dev must be first: see back_bs_dev_to_esnap_ctx() */
 	struct spdk_bs_dev	back_bs_dev;
 
 	/*
 	 * io_channels, io_channels_count, and bdev_desc are used on every read.
-	 * Ensure they are in the same cache line. rc is here to help with
-	 * alignment.
+	 * Ensure they are in the same cache line.
 	 */
-	int			rc;
+	uint32_t		pad;
 	struct spdk_bdev_desc	*bdev_desc;
 	struct spdk_io_channel	**io_channels;
 	uint64_t		io_channels_count;
 
 	/* Seldom used fields where alignment doesn't matter. */
-	struct spdk_thread	*thread;
-	struct spdk_uuid	esnap_uuid;
 	struct spdk_bdev	*bdev;
-	struct spdk_blob	*blob;
-	esnap_parent_cb_t	parent_cb;
-	void			*parent_ctx;
+	struct esnap_common_ctx	*common;
+#ifdef ESNAP_CTX_MAGIC
+	uint32_t		magic;
+#endif
 };
 
 #define CPU_CACHE_LINE_SIZE 64
 SPDK_STATIC_ASSERT(offsetof(struct esnap_ctx, bdev_desc) % CPU_CACHE_LINE_SIZE == 0,
 		   "bdev_desc must be aligned on cache line");
 
-#define BACK_BS_DEV_TO_ESNAP_CTX(dev) ((struct esnap_ctx *)dev)
+struct esnap_create_ctx {
+	blob_back_bs_dev_load_done_t	load_cb;
+	struct spdk_blob_load_ctx	*load_arg;
+	struct esnap_ctx		*esnap_ctx;
+	int				rc;
+};
+
+static void esnap_open_ro(struct esnap_create_ctx *create_ctx,
+			  struct esnap_common_ctx *common_ctx);
+static void esnap_ctx_free(struct esnap_ctx *ctx);
+
+static struct esnap_ctx *
+back_bs_dev_to_esnap_ctx(struct spdk_bs_dev *bs_dev)
+{
+	struct esnap_ctx *dev = (struct esnap_ctx *)bs_dev;
+
+#ifdef ESNAP_CTX_MAGIC
+	assert(dev->magic == ESNAP_CTX_MAGIC);
+#endif
+	return dev;
+}
 
 static void esnap_unload_on_thread(void *_ctx)
 {
-	struct esnap_ctx *esnap_ctx = BACK_BS_DEV_TO_ESNAP_CTX(_ctx);
-	uint64_t tid = spdk_thread_get_id(spdk_get_thread());
+	struct esnap_ctx	*esnap_ctx = _ctx;
+	uint64_t		tid = spdk_thread_get_id(spdk_get_thread());
 
 	if (tid <= esnap_ctx->io_channels_count && esnap_ctx->io_channels[tid]) {
 		spdk_put_io_channel(esnap_ctx->io_channels[tid]);
@@ -85,8 +117,8 @@ static void esnap_unload_on_thread(void *_ctx)
 
 static void esnap_unload_on_thread_done(void *_ctx)
 {
-	struct esnap_ctx *esnap_ctx = BACK_BS_DEV_TO_ESNAP_CTX(_ctx);
-	struct spdk_bdev_desc *ro_desc = esnap_ctx->bdev_desc;
+	struct esnap_ctx 		*esnap_ctx = _ctx;
+	struct spdk_bdev_desc		*ro_desc = esnap_ctx->bdev_desc;
 
 	if (ro_desc != NULL) {
 		struct spdk_bdev *ro_bdev = spdk_bdev_desc_get_bdev(ro_desc);
@@ -95,8 +127,7 @@ static void esnap_unload_on_thread_done(void *_ctx)
 		delete_ro_disk(ro_bdev, NULL, NULL);
 	}
 
-	free(esnap_ctx->io_channels);
-	free(esnap_ctx);
+	esnap_ctx_free(esnap_ctx);
 }
 
 static void
@@ -120,7 +151,7 @@ static void
 esnap_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
 	  uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct esnap_ctx *ctx = BACK_BS_DEV_TO_ESNAP_CTX(dev);
+	struct esnap_ctx *ctx = back_bs_dev_to_esnap_ctx(dev);
 	uint64_t tid;
 	struct spdk_io_channel *ch;
 
@@ -148,7 +179,7 @@ esnap_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	   struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
 	   struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct esnap_ctx *ctx = BACK_BS_DEV_TO_ESNAP_CTX(dev);
+	struct esnap_ctx *ctx = back_bs_dev_to_esnap_ctx(dev);
 	uint64_t tid;
 	struct spdk_io_channel *ch;
 
@@ -168,7 +199,7 @@ esnap_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	       uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
 	       struct spdk_blob_ext_io_opts *ext_io_opts)
 {
-	struct esnap_ctx *ctx = BACK_BS_DEV_TO_ESNAP_CTX(dev);
+	struct esnap_ctx *ctx = back_bs_dev_to_esnap_ctx(dev);
 	uint64_t tid;
 	struct spdk_io_channel *ch;
 
@@ -222,39 +253,67 @@ esnap_unmap(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	assert(false);
 }
 
+static struct spdk_bdev *
+esnap_get_base_bdev(struct spdk_bs_dev *dev)
+{
+	struct esnap_ctx	*ctx = back_bs_dev_to_esnap_ctx(dev);
+
+	return ctx->bdev;
+}
+
 /*
- * XXX-mg
- * 1. Rename the function to show that it is only called for ro devices.
- * 2. Remove should create a wait bdev and install it. The parent callback
- *    should call destroy().  Be sure this is done on the right thread.
- * 3. Create something similar for the callback that is passed to the wait bdev.
+ * The following callbacks are replacements for those above when waiting for the
+ * external snapshot bdev to be registered.
  */
 static void
-esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
-		   void *event_ctx)
+esnap_wait_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
+		uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
 {
-	struct esnap_ctx *ctx = event_ctx;
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EIO);
+}
 
-	switch (type) {
-	case SPDK_BDEV_EVENT_REMOVE:
-		spdk_bdev_close(ctx->bdev_desc);
-		ctx->bdev_desc = NULL;
-		break;
-	default:
-		SPDK_NOTICELOG("Unsupported event %d\n", type);
-		break;
+static void
+esnap_wait_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
+		struct spdk_bs_dev_cb_args *cb_args)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EIO);
+}
+
+static void
+esnap_wait_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		     struct iovec *iov, int iovcnt, uint64_t lba,
+		     uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
+		     struct spdk_blob_ext_io_opts *ext_io_opts)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EIO);
+}
+
+static void
+esnap_wait_destroy(struct spdk_bs_dev *dev)
+{
+	struct esnap_ctx	*ctx = back_bs_dev_to_esnap_ctx(dev);
+	struct spdk_bdev_desc	*desc = ctx->bdev_desc;
+
+	if (desc != NULL) {
+		struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
+
+		spdk_bdev_close(desc);
+		delete_wait_disk(bdev, NULL, NULL);
 	}
+
+	free(ctx);
 }
 
 static struct esnap_ctx *
-esnap_ctx_alloc(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
-		esnap_parent_cb_t cb_fn, void *cb_arg)
+esnap_ctx_alloc(struct esnap_common_ctx *common)
 {
 	struct esnap_ctx	*ctx;
 	struct spdk_bs_dev	*back_bs_dev;
 	int			rc;
 
-	rc = (int) offsetof(struct esnap_ctx, bdev_desc);
+	assert(common->thread == spdk_get_thread());
+
 	/*
 	 * Every IO operation reads three members of ctx.  Ensure they are in
 	 * the same cache line.
@@ -265,11 +324,8 @@ esnap_ctx_alloc(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
 	}
 	memset(ctx, 0, sizeof (*ctx));
 
-	ctx->thread = spdk_get_thread();
-	ctx->blob = blob;
-	ctx->esnap_uuid = *esnap_uuid;
-	ctx->parent_cb = cb_fn;
-	ctx->parent_ctx = cb_arg;
+	ctx->common = common;
+	common->refcnt++;
 
 	back_bs_dev = &ctx->back_bs_dev;
 	back_bs_dev->create_channel = NULL;
@@ -283,61 +339,190 @@ esnap_ctx_alloc(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
 	back_bs_dev->writev_ext = esnap_writev_ext;
 	back_bs_dev->write_zeroes = esnap_write_zeroes;
 	back_bs_dev->unmap = esnap_unmap;
-
+	back_bs_dev->get_base_bdev = esnap_get_base_bdev;
+#ifdef ESNAP_CTX_MAGIC
+	ctx->magic = ESNAP_CTX_MAGIC;
+#endif
 	return ctx;
+}
+
+static void
+esnap_common_ctx_deref(struct esnap_common_ctx *common_ctx)
+{
+	assert(common_ctx->thread == spdk_get_thread());
+	if (common_ctx->refcnt == 0) {
+		SPDK_ERRLOG("Invalid refcnt\n");
+		abort();
+	}
+
+	common_ctx->refcnt--;
+	if (common_ctx->refcnt == 0) {
+		free(common_ctx);
+	}
 }
 
 static void
 esnap_ctx_free(struct esnap_ctx *ctx)
 {
+	esnap_common_ctx_deref(ctx->common);
+	free(ctx->io_channels);
 	free(ctx);
 }
 
+/*
+ * Calls the load or replace callback, as appropriate.  create_ctx should be
+ * non-NULL only during blob load, indicating that the load callback should be
+ * used.  If an error is being reported, dev must be NULL and bserrno must be
+ * non-zero.
+ */
 static void
-esnap_open_wait(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
-		esnap_parent_cb_t cb_fn, void *cb_arg)
+esnap_open_done(struct esnap_create_ctx *create_ctx,
+		struct esnap_common_ctx *common_ctx, struct spdk_bs_dev *dev,
+		int bserrno)
 {
-	// XXX-mg implement
-	cb_fn(cb_arg, NULL, -ENOSYS);
+	assert((dev == NULL) ^ (bserrno != 0));
+
+	if (create_ctx != NULL) {
+		create_ctx->load_cb(create_ctx->load_arg, dev, bserrno);
+		/*
+		 * Release the reference taken during initialization. If dev is
+		 * non-NULL, the esnap_ctx that contains dev will hold a
+		 * reference.
+		 */
+		esnap_common_ctx_deref(common_ctx);
+	} else {
+		/*
+		 * This callback will call comon_ctx->blob->back_bs_dev->destroy
+		 * or dev->destroy releasing a reference on common_ctx.
+		 */
+		common_ctx->replace_cb(common_ctx->blob, dev, bserrno);
+	}
+}
+
+/*
+ * Called when the bdev that is waited upon has been registered.
+ */
+static void
+esnap_wait_available_cb(void *_ctx, struct spdk_bdev *bdev)
+{
+	struct esnap_ctx	*ctx = _ctx;
+
+	/* XXX on right thread? */
+
+	esnap_open_ro(NULL, ctx->common);
 }
 
 static void
-esnap_maybe_open_wait(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
-		      esnap_parent_cb_t cb_fn, void *cb_arg, int errnum)
+esnap_bdev_wait_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+			 void *event_ctx)
 {
-	char uuid[SPDK_UUID_STRING_LEN];
+	SPDK_NOTICELOG("Unsupported event %d\n", type);
+}
 
-	switch (errnum) {
+static void
+esnap_open_wait(struct esnap_create_ctx *create_ctx,
+		struct esnap_common_ctx *common_ctx)
+{
+	struct esnap_ctx	*ctx;
+	struct spdk_bs_dev	*back_bs_dev;
+	int			rc;
+
+	assert(common_ctx->thread == spdk_get_thread());
+
+	ctx = esnap_ctx_alloc(common_ctx);
+	if (ctx == NULL) {
+		esnap_open_done(create_ctx, common_ctx, NULL, -ENOMEM);
+		return;
+	}
+
+	back_bs_dev = &ctx->back_bs_dev;
+	back_bs_dev->read = esnap_wait_read;
+	back_bs_dev->readv = esnap_wait_readv;
+	back_bs_dev->readv_ext = esnap_wait_readv_ext;
+	back_bs_dev->destroy = esnap_wait_destroy;
+	back_bs_dev->blocklen = 512;
+
+	rc = create_wait_disk(NULL, NULL, &common_ctx->uuid,
+			      esnap_wait_available_cb, ctx, &ctx->bdev);
+	if (rc != 0) {
+		esnap_ctx_free(ctx);
+		esnap_open_done(create_ctx, common_ctx, NULL, rc);
+		return;
+	}
+
+	/* Open it to maintain a hold */
+	rc = spdk_bdev_open_ext(ctx->bdev->name, false,
+				esnap_bdev_wait_event_cb, ctx, &ctx->bdev_desc);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to open just created bdev %s\n",
+			    ctx->bdev->name);
+		delete_wait_disk(ctx->bdev, NULL, NULL);
+		esnap_ctx_free(ctx);
+		esnap_open_done(create_ctx, common_ctx, NULL, rc);
+		return;
+	}
+
+	esnap_open_done(create_ctx, common_ctx, back_bs_dev, 0);
+}
+
+static void
+esnap_maybe_open_wait(struct esnap_create_ctx *create_ctx,
+		      struct esnap_common_ctx *common_ctx, int bserrno)
+{
+	switch (bserrno) {
 	case 0:
 		SPDK_ERRLOG("Invalid errnum 0\n");
 		abort();
 	case -ENODEV:
 	case -EAGAIN:
-		/* XXX-mg Do not create another wait if already waiting. */
+		/* XXX-mg Do not create another wait bdev if already waiting. */
 
-		spdk_uuid_fmt_lower(uuid, sizeof(uuid), esnap_uuid);
 		SPDK_NOTICELOG("Failed to open external snapshot for blob 0x%"
 			       PRIx64 ": error %d. Will try again when bdev "
 			       "with UUID %s is registered\n",
-			       spdk_blob_get_id(blob), errnum, uuid);
-		esnap_open_wait(blob, esnap_uuid, cb_fn, cb_arg);
+			       spdk_blob_get_id(common_ctx->blob), bserrno,
+			       common_ctx->uuid_str);
+		esnap_open_wait(create_ctx, common_ctx);
 		return;
 	default:
-		spdk_uuid_fmt_lower(uuid, sizeof(uuid), esnap_uuid);
-		SPDK_ERRLOG("Failed to open external snapshot for blob 0x%" PRIx64
-			    ": error %d.\n", spdk_blob_get_id(blob), errnum);
-		cb_fn(cb_arg, NULL, errnum);
+		SPDK_ERRLOG("Failed to open external snapshot for blob 0x%"
+			    PRIx64 ": error %d.\n",
+			    spdk_blob_get_id(common_ctx->blob), bserrno);
+		esnap_open_done(create_ctx, common_ctx, NULL, bserrno);
 		return;
 	}
 }
 
 static void
+esnap_bdev_ro_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+		   void *event_ctx)
+{
+	struct esnap_ctx *ctx = event_ctx;
+
+	switch (type) {
+	case SPDK_BDEV_EVENT_REMOVE:
+		esnap_open_wait(NULL, ctx->common);
+		break;
+	default:
+		SPDK_NOTICELOG("Unsupported event %d\n", type);
+		break;
+	}
+}
+
+struct load_on_thread_ctx {
+	struct esnap_create_ctx *create_ctx;
+	struct esnap_ctx	*esnap_ctx;
+	int			rc;
+};
+
+static void
 load_esnap_on_thread(void *arg1)
 {
-	struct esnap_ctx *esnap_ctx = arg1;
-	uint64_t tid;
+	struct load_on_thread_ctx	*lot_ctx = arg1;
+	struct esnap_ctx		*esnap_ctx = lot_ctx->esnap_ctx;
+	uint64_t			tid;
 
-	if (esnap_ctx->rc != 0) {
+	if (lot_ctx->rc != 0) {
 		return;
 	}
 
@@ -355,7 +540,7 @@ load_esnap_on_thread(void *arg1)
 			      (tid + 1) * sizeof(*esnap_ctx->io_channels));
 		if (!tmp) {
 			SPDK_ERRLOG("Memory allocation failed\n");
-			esnap_ctx->rc = -ENOMEM;
+			lot_ctx->rc = -ENOMEM;
 			return;
 		}
 		esnap_ctx->io_channels = tmp;
@@ -365,26 +550,29 @@ load_esnap_on_thread(void *arg1)
 	esnap_ctx->io_channels[tid] = spdk_bdev_get_io_channel(esnap_ctx->bdev_desc);
 	if (!esnap_ctx->io_channels[tid]) {
 		SPDK_ERRLOG("Failed to create external snapshot bdev io_channel\n");
-		esnap_ctx->rc = -ENOMEM;
+		lot_ctx->rc = -ENOMEM;
 	}
 }
 
 static void
 load_esnap_on_thread_done(void *arg1)
 {
-	struct esnap_ctx	*esnap_ctx = arg1;
-	struct spdk_bs_dev	*bs_dev = &esnap_ctx->back_bs_dev;
+	struct load_on_thread_ctx	*lot_ctx = arg1;
+	struct esnap_create_ctx		*create_ctx = lot_ctx->create_ctx;
+	struct esnap_ctx		*esnap_ctx = lot_ctx->esnap_ctx;
+	struct esnap_common_ctx		*common_ctx = esnap_ctx->common;
+	struct spdk_bs_dev		*bs_dev = &esnap_ctx->back_bs_dev;
 
-	assert(esnap_ctx->thread == spdk_get_thread());
-	assert(esnap_ctx->parent_cb != NULL);
+	assert(common_ctx->thread == spdk_get_thread());
 
-	if (esnap_ctx->rc != 0) {
-		esnap_maybe_open_wait(esnap_ctx->blob, &esnap_ctx->esnap_uuid,
-				      esnap_ctx->parent_cb,
-				      esnap_ctx->parent_ctx, esnap_ctx->rc);
+	if (lot_ctx->rc != 0) {
+		esnap_maybe_open_wait(create_ctx, common_ctx, lot_ctx->rc);
+		esnap_ctx_free(lot_ctx->esnap_ctx);
 		return;
+	} else {
+		esnap_open_done(create_ctx, common_ctx, bs_dev, 0);
 	}
-	esnap_ctx->parent_cb(esnap_ctx->parent_ctx, bs_dev, esnap_ctx->rc);
+	free(lot_ctx);
 }
 
 /*
@@ -392,29 +580,30 @@ load_esnap_on_thread_done(void *arg1)
  * and bdev_desc members of esnap_ctx are updated.
  */
 static void
-esnap_open_ro(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
-	      esnap_parent_cb_t cb_fn, void *cb_arg)
+esnap_open_ro(struct esnap_create_ctx *create_ctx,
+	      struct esnap_common_ctx *common_ctx)
 {
+	struct spdk_blob	*blob = common_ctx->blob;
 	uint32_t		io_unit_size = blob->bs->io_unit_size;
 	struct spdk_bdev	*ro_bdev, *base_bdev;
 	struct spdk_bs_dev	*back_bs_dev;
 	struct esnap_ctx	*esnap_ctx;
+	struct load_on_thread_ctx *lot_ctx;
 	int			rc;
 
-	assert(blob->back_bs_dev == NULL ||
-	       BACK_BS_DEV_TO_ESNAP_CTX(blob->back_bs_dev)->thread == spdk_get_thread());
+	assert(common_ctx->thread == spdk_get_thread());
 
-	esnap_ctx = esnap_ctx_alloc(blob, esnap_uuid, cb_fn, cb_arg);
+	esnap_ctx = esnap_ctx_alloc(common_ctx);
 	if (esnap_ctx == NULL) {
-		cb_fn(cb_arg, NULL, -ENOMEM);
+		esnap_open_done(create_ctx, common_ctx, NULL, -ENOMEM);
 		return;
 	}
 
-	rc = create_ro_disk(NULL, esnap_uuid, NULL, &ro_bdev);
+	rc = create_ro_disk(NULL, &common_ctx->uuid, NULL, &ro_bdev);
 	if (rc != 0) {
 		SPDK_ERRLOG("Unable to create external snapshot: error %d\n", rc);
 		esnap_ctx_free(esnap_ctx);
-		esnap_maybe_open_wait(blob, esnap_uuid, cb_fn, cb_arg, rc);
+		esnap_maybe_open_wait(create_ctx, common_ctx, rc);
 		return;
 	}
 	esnap_ctx->bdev = ro_bdev;
@@ -441,16 +630,16 @@ esnap_open_ro(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
 		 * replacement is registered, it should be automatically used
 		 * without having to reload the blobstore.
 		 */
-		esnap_maybe_open_wait(blob, esnap_uuid, cb_fn, cb_arg, -EAGAIN);
+		esnap_maybe_open_wait(create_ctx, common_ctx, -EAGAIN);
 		return;
 	}
 
-	rc = spdk_bdev_open_ext(ro_bdev->name, false, esnap_bdev_event_cb,
+	rc = spdk_bdev_open_ext(ro_bdev->name, false, esnap_bdev_ro_event_cb,
 				esnap_ctx, &esnap_ctx->bdev_desc);
 	if (rc != 0) {
 		delete_ro_disk(ro_bdev, NULL, NULL);
 		esnap_ctx_free(esnap_ctx);
-		esnap_maybe_open_wait(blob, esnap_uuid, cb_fn, cb_arg, rc);
+		esnap_maybe_open_wait(create_ctx, common_ctx, rc);
 		return;
 	}
 
@@ -461,20 +650,63 @@ esnap_open_ro(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
 	if (esnap_ctx->io_channels == NULL) {
 		delete_ro_disk(ro_bdev, NULL, NULL);
 		esnap_ctx_free(esnap_ctx);
-		cb_fn(cb_arg, NULL, -ENOMEM);
+		esnap_open_done(create_ctx, common_ctx, NULL, -ENOMEM);
 		return;
 	}
 
 	SPDK_NOTICELOG("Created read-only device %s with base bdev %s\n",
 		       ro_bdev->name, base_bdev->name);
 
+	lot_ctx = calloc(1, sizeof(*lot_ctx));
+	if (lot_ctx == NULL) {
+		delete_ro_disk(ro_bdev, NULL, NULL);
+		esnap_ctx_free(esnap_ctx);
+		esnap_open_done(create_ctx, common_ctx, NULL, -ENOMEM);
+		return;
+	}
+	lot_ctx->create_ctx = create_ctx;
+	lot_ctx->esnap_ctx = esnap_ctx;
+
 	spdk_for_each_thread(load_esnap_on_thread, esnap_ctx,
 			     load_esnap_on_thread_done);
 }
 
 void
-bs_create_esnap_dev(struct spdk_blob *blob, const struct spdk_uuid *esnap_uuid,
-		   esnap_parent_cb_t cb_fn, void *cb_arg)
+blob_create_esnap_dev(struct spdk_blob *blob, const struct spdk_uuid *uuid,
+		      blob_back_bs_dev_load_done_t load_cb,
+		      struct spdk_blob_load_ctx *load_cb_arg,
+		      blob_back_bs_dev_replace_t replace_cb)
 {
-	esnap_open_ro(blob, esnap_uuid, cb_fn, cb_arg);
+	struct esnap_create_ctx	*create_ctx;
+	struct esnap_common_ctx *common_ctx;
+
+	if (blob == NULL || uuid == NULL || load_cb == NULL || replace_cb == NULL) {
+		SPDK_ERRLOG("Required parameter(s) missing)\n");
+		abort();
+	}
+
+	create_ctx = calloc(1, sizeof(*create_ctx));
+	if (create_ctx == NULL) {
+		load_cb(load_cb_arg, NULL, -ENOMEM);
+		return;
+	}
+
+	create_ctx->load_cb = load_cb;
+	create_ctx->load_arg = load_cb_arg;
+
+	common_ctx = calloc(1, sizeof(*common_ctx));
+	if (common_ctx == NULL) {
+		free(create_ctx);
+		load_cb(load_cb_arg, NULL, -ENOMEM);
+		return;
+	}
+
+	common_ctx->thread = spdk_get_thread();
+	common_ctx->uuid = *uuid;
+	spdk_uuid_fmt_lower(common_ctx->uuid_str, sizeof(common_ctx->uuid_str), uuid);
+	common_ctx->blob = blob;
+	common_ctx->replace_cb = replace_cb;
+	common_ctx->refcnt = 1;
+
+	esnap_open_ro(create_ctx, common_ctx);
 }

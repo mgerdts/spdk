@@ -46,6 +46,7 @@
 #include "blob/blob_bs_dev.c"
 #include "thread/thread.c"
 #include "bdev/ro/bdev_ro.c"
+#include "bdev/wait/bdev_wait.c"
 #include "../bs_bdev_malloc.c"
 
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -7393,13 +7394,11 @@ bdev_io_complete_cb(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 	spdk_bdev_free_io(bdev_io);
 }
 
-#if 0
 static void
 blob_extclone_eio(void)
 {
 	struct spdk_blob_store	*bs = g_bs;
 	struct spdk_bs_dev	*dev = bs->dev;
-	struct spdk_bs_dev	*eiodev = bs_create_eio_dev(NULL);
 	struct spdk_blob_opts	opts;
 	struct spdk_blob	*blob;
 	spdk_blob_id		blobid;
@@ -7458,9 +7457,9 @@ blob_extclone_eio(void)
 	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
 	blob = g_blob;
 
-	/* It is an external clone, not backed by eio dev. */
+	/* It is an external clone, not backed by a wait bdev */
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read != eiodev->read);
+	CU_ASSERT(blob->back_bs_dev->read != esnap_wait_read);
 
 	/*
 	 * Write the same content as was written to the middle of the second
@@ -7524,7 +7523,7 @@ blob_extclone_eio(void)
 
 	/*
 	 * Load the blobstore. Verify that the blob can be opened and is backed
-	 * by the eio device.
+	 * by a wait bdev.
 	 */
 	spdk_bs_load(dev, NULL, bs_op_with_handle_complete, NULL);
 	poll_threads();
@@ -7538,9 +7537,9 @@ blob_extclone_eio(void)
 	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
 	blob = g_blob;
 
-	/* It is an external clone, but is backed by eio dev. */
+	/* It is an external clone, but is backed by wait bdev. */
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read == eiodev->read);
+	CU_ASSERT(blob->back_bs_dev->read == esnap_wait_read);
 
 	/* Verify that the first cluster can be read, as before. */
 	bs_ch = spdk_bs_alloc_io_channel(bs);
@@ -7571,7 +7570,6 @@ blob_extclone_eio(void)
 	free(read_buf);
 	free(write_buf);
 	spdk_bs_free_io_channel(bs_ch);
-	eiodev->destroy(eiodev);
 	ut_blob_close_and_delete(bs, blob);
 	ut_close_malloc_dev(0);
 	poll_threads();
@@ -7581,7 +7579,6 @@ static void
 blob_extclone_hotremove(void)
 {
 	struct spdk_blob_store	*bs = g_bs;
-	struct spdk_bs_dev	*eiodev = bs_create_eio_dev(NULL);
 	struct spdk_blob_opts	opts;
 	spdk_blob_id		blobid;
 	struct spdk_blob	*blob;
@@ -7607,17 +7604,17 @@ blob_extclone_hotremove(void)
 	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
 	blob = g_blob;
 
-	/* It is an external clone, not backed by eio dev. */
+	/* It is an external clone, not backed by wait bdev. */
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read != eiodev->read);
+	CU_ASSERT(blob->back_bs_dev->read != esnap_wait_read);
 
 	/*
 	 * Remove the external snapshot. The back_bs_dev should switch over to
-	 * an eio dev.
+	 * a wait bdev.
 	 */
 	ut_close_malloc_dev(0);
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read == eiodev->read);
+	CU_ASSERT(blob->back_bs_dev->read == esnap_wait_read);
 
 	/*
 	 * Clean up
@@ -7630,7 +7627,6 @@ static void
 blob_extclone_hotadd(void)
 {
 	struct spdk_blob_store	*bs = g_bs;
-	struct spdk_bs_dev	*eiodev = bs_create_eio_dev(NULL);
 	struct spdk_blob_opts	opts;
 	spdk_blob_id		blobid;
 	struct spdk_blob	*blob;
@@ -7656,17 +7652,17 @@ blob_extclone_hotadd(void)
 	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
 	blob = g_blob;
 
-	/* It is an external clone, not backed by eio dev. */
+	/* It is an external clone, not backed by wait bdev. */
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read != eiodev->read);
+	CU_ASSERT(blob->back_bs_dev->read == esnap_read);
 
 	/*
 	 * Remove the external snapshot. The back_bs_dev should switch over to
-	 * an eio dev.
+	 * an wait bdev.
 	 */
 	ut_close_malloc_dev(0);
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read == eiodev->read);
+	CU_ASSERT(blob->back_bs_dev->read == esnap_wait_read);
 
 	/*
 	 * Create the malloc device again. The blob should switch back to using
@@ -7674,7 +7670,7 @@ blob_extclone_hotadd(void)
 	 */
 	CU_ASSERT(ut_open_malloc_dev(0) != NULL);
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
-	CU_ASSERT(blob->back_bs_dev->read == seed_read);
+	CU_ASSERT(blob->back_bs_dev->read == esnap_read);
 
 	/*
 	 * Clean up
@@ -7683,7 +7679,6 @@ blob_extclone_hotadd(void)
 	ut_close_malloc_dev(0);
 	poll_threads();
 }
-#endif
 
 /* XXX-mg Test that size matches the requested size even when it doesn't match
  * the parent size (larger and smaller).  When larger, ensure that writes land
@@ -8037,6 +8032,7 @@ int main(int argc, char **argv)
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
 
+#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -8112,11 +8108,10 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
-#if 0
+#endif
 	CU_ADD_TEST(suite_bs, blob_extclone_eio);
 	CU_ADD_TEST(suite_bs, blob_extclone_hotremove);
 	CU_ADD_TEST(suite_bs, blob_extclone_hotadd);
-#endif
 
 	allocate_cores(1);
 	allocate_threads(2);
