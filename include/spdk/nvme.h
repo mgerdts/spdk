@@ -265,6 +265,13 @@ struct spdk_nvme_ctrlr_opts {
 	 * Default is `false` (ANA log page is read).
 	 */
 	bool disable_read_ana_log_page;
+
+	/**
+	 * Host ID for host memory domain translation. Used by NVDA_RDMA transport only.
+	 *
+	 * Default host ID is 0.
+	 */
+	uint64_t host_memory_domain_id;
 };
 
 /**
