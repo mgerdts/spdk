@@ -1366,13 +1366,14 @@ static void blob_update_clear_method(struct spdk_blob *blob);
  *    frozen
  */
 static void
-blob_esnap_load_done(struct spdk_blob_load_ctx *ctx, struct spdk_bs_dev *dev, int rc)
+blob_esnap_load_done(struct spdk_blob_load_ctx *ctx, struct spdk_bs_dev *dev,
+		     int bserrno)
 {
 	struct spdk_blob		*blob = ctx->blob;
 
 	assert(blob->back_bs_dev == NULL);
 
-	if (rc == 0) {
+	if (bserrno == 0) {
 		assert(dev != NULL);
 		blob->back_bs_dev = dev;
 		blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
@@ -1381,6 +1382,7 @@ blob_esnap_load_done(struct spdk_blob_load_ctx *ctx, struct spdk_bs_dev *dev, in
 		// in the next few functions.
 		abort();
 	}
+	blob_load_final(ctx, bserrno);
 }
 
 struct blob_update_bs_dev_ctx {
@@ -1407,7 +1409,8 @@ blob_update_bs_dev_freeze_cpl(void *_ctx, int bserrno)
 	/* XXX-mg figure out how to handle a freeze a failure. */
 	assert(bserrno == 0);
 
-	SPDK_NOTICELOG("Blob 0x" PRIx64 " replacing external snapshot %s with %s\n",
+	SPDK_NOTICELOG("Blob 0x%" PRIx64 " replacing external snapshot %s with %s\n",
+		       ctx->blob->id,
 		       spdk_bdev_get_name(old_dev->get_base_bdev(old_dev)),
 		       spdk_bdev_get_name(new_dev->get_base_bdev(new_dev)));
 	ctx->blob->back_bs_dev = ctx->new_bs_dev;
