@@ -302,7 +302,7 @@ esnap_wait_destroy(struct spdk_bs_dev *dev)
 		delete_wait_disk(bdev, NULL, NULL);
 	}
 
-	free(ctx);
+	esnap_ctx_free(ctx);
 }
 
 static struct esnap_ctx *
@@ -347,17 +347,17 @@ esnap_ctx_alloc(struct esnap_common_ctx *common)
 }
 
 static void
-esnap_common_ctx_deref(struct esnap_common_ctx *common_ctx)
+esnap_common_ctx_deref(struct esnap_common_ctx *common)
 {
-	assert(common_ctx->thread == spdk_get_thread());
-	if (common_ctx->refcnt == 0) {
+	assert(common->thread == spdk_get_thread());
+	if (common->refcnt == 0) {
 		SPDK_ERRLOG("Invalid refcnt\n");
 		abort();
 	}
 
-	common_ctx->refcnt--;
-	if (common_ctx->refcnt == 0) {
-		free(common_ctx);
+	common->refcnt--;
+	if (common->refcnt == 0) {
+		free(common);
 	}
 }
 
@@ -390,6 +390,7 @@ esnap_open_done(struct esnap_create_ctx *create_ctx,
 		 * reference.
 		 */
 		esnap_common_ctx_deref(common_ctx);
+		free(create_ctx);
 	} else {
 		/*
 		 * This callback will call comon_ctx->blob->back_bs_dev->destroy
