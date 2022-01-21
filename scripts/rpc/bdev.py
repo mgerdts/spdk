@@ -567,7 +567,7 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
                                 hostsvcid=None, prchk_reftag=None, prchk_guard=None,
                                 hdgst=None, ddgst=None, fabrics_timeout=None, multipath=None, num_io_queues=None,
                                 ctrlr_loss_timeout_sec=None, reconnect_delay_sec=None,
-                                fast_io_fail_timeout_sec=None):
+                                fast_io_fail_timeout_sec=None, host_memory_domain_id=None):
     """Construct block device for each NVMe namespace in the attached controller.
 
     Args:
@@ -602,6 +602,7 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
         0 means no such timeout.
         If fast_io_fail_timeout_sec is not zero, it has to be not less than reconnect_delay_sec and less than
         ctrlr_loss_timeout_sec if ctrlr_loss_timeout_sec is not -1. (optional)
+        host_memory_domain_id: Host ID for host memory domain translation. (optional)
 
     Returns:
         Names of created block devices.
@@ -660,6 +661,9 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
 
     if fast_io_fail_timeout_sec is not None:
         params['fast_io_fail_timeout_sec'] = fast_io_fail_timeout_sec
+
+    if host_memory_domain_id is not None:
+        params['host_memory_domain_id'] = host_memory_domain_id
 
     return client.call('bdev_nvme_attach_controller', params)
 
