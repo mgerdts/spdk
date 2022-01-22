@@ -83,6 +83,11 @@ struct vbdev_ro_opts {
 int create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
 		   const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp);
 
+int vbdev_ro_create_from_bdev(struct spdk_bdev *base_bdev,
+			      const struct vbdev_ro_opts *opts,
+			      struct spdk_bdev **bdevp);
+/* XXX-mg add others, replacing create_ro_disk */
+
 /**
  * Delete read-only vbdev
  *

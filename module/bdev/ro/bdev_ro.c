@@ -392,33 +392,18 @@ vbdev_ro_unique_name(const char *base_name)
 /*
  * Read-only device public interface implementation
  */
+
 int
-create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
-	       const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp)
+vbdev_ro_create_from_bdev(struct spdk_bdev *base_bdev,
+			  const struct vbdev_ro_opts *opts,
+			  struct spdk_bdev **bdevp)
 {
-	struct spdk_bdev	*base_bdev = NULL;
 	struct vbdev_ro		*ro_bdev = NULL;
 	int			rc;
 
-	if ((base_name == NULL && base_uuid == NULL) ||
-	    (base_name != NULL && base_uuid != NULL)) {
-		SPDK_ERRLOG("Exactly one of base_name or base_uuid required\n");
-		return -EINVAL;
-	}
-
-	if (bdevp == NULL &&
-	    (opts == NULL || ((opts->name == NULL) && (opts->uuid == NULL)))) {
-		SPDK_ERRLOG("At least one of bdevp, opts->name, or opts->uuid required\n");
-		return -EINVAL;
-	}
-
-	if (base_name != NULL) {
-		base_bdev = spdk_bdev_get_by_name(base_name);
-	} else {
-		base_bdev = spdk_bdev_get_by_uuid(base_uuid);
-	}
 	if (base_bdev == NULL) {
-		return -ENODEV;
+		SPDK_ERRLOG("base_bdev must not be NULL\n");
+		return -EINVAL;
 	}
 
 	ro_bdev = calloc(1, sizeof(*ro_bdev));
@@ -499,6 +484,65 @@ errout:
 		free(ro_bdev);
 	}
 	return rc;
+}
+
+int
+vbdev_ro_create_from_name(const char *base_name,
+			  const struct vbdev_ro_opts *opts,
+			  struct spdk_bdev **bdevp)
+{
+	struct spdk_bdev	*base_bdev = NULL;
+
+	base_bdev = spdk_bdev_get_by_name(base_name);
+	if (base_bdev == NULL) {
+		SPDK_ERRLOG("No bdev with name %s found\n", base_name);
+		return -ENODEV;
+	}
+
+	return vbdev_ro_create_from_bdev(base_bdev, opts, bdevp);
+}
+
+int
+vbdev_ro_create_from_uuid(const struct spdk_uuid *base_uuid,
+			  const struct vbdev_ro_opts *opts,
+			  struct spdk_bdev **bdevp)
+{
+	struct spdk_bdev	*base_bdev = NULL;
+
+	base_bdev = spdk_bdev_get_by_uuid(base_uuid);
+	if (base_bdev == NULL) {
+		char uuid_str[SPDK_UUID_STRING_LEN] = {0};
+
+		spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), base_uuid);
+		SPDK_ERRLOG("No bdev with uuid %s found\n", uuid_str);
+		return -ENODEV;
+	}
+
+	return vbdev_ro_create_from_bdev(base_bdev, opts, bdevp);
+}
+
+int
+create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
+	       const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp)
+{
+	struct spdk_bdev	*base_bdev = NULL;
+
+	if (bdevp == NULL &&
+	    (opts == NULL || ((opts->name == NULL) && (opts->uuid == NULL)))) {
+		SPDK_ERRLOG("At least one of bdevp, opts->name, or opts->uuid required\n");
+		return -EINVAL;
+	}
+
+	if (base_name != NULL) {
+		base_bdev = spdk_bdev_get_by_name(base_name);
+	} else {
+		base_bdev = spdk_bdev_get_by_uuid(base_uuid);
+	}
+	if (base_bdev == NULL) {
+		return -ENODEV;
+	}
+
+	return vbdev_ro_create_from_bdev(base_bdev, opts, bdevp);
 }
 
 void
