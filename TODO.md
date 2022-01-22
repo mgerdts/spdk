@@ -5,16 +5,8 @@ support clones of external snapshots.
 
 ## Blobstore
 
-### Consistent naming
-
-- seed --> external snapshot
-- external clone - simplified version of "clone of an external snapshot"
-
 ### Unavailability of external snapshot
 
-- Transition missing and removed external snapshot from eio bs dev to wait bdev.
-- Handle surprise add of external snapshot, transitioning from degraded to
-  healthy.
 - Make external snapshot health visible via an RPC call.
 
 ### Misc
