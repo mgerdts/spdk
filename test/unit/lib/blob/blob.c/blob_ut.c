@@ -7661,6 +7661,7 @@ blob_extclone_hotadd(void)
 	 * an wait bdev.
 	 */
 	ut_close_malloc_dev(0);
+	poll_threads();
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
 	CU_ASSERT(blob->back_bs_dev->read == esnap_wait_read);
 
@@ -8108,12 +8109,10 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
-#endif
 	CU_ADD_TEST(suite_bs, blob_extclone_eio);
-#if 0
 	CU_ADD_TEST(suite_bs, blob_extclone_hotremove);
-	CU_ADD_TEST(suite_bs, blob_extclone_hotadd);
 #endif
+	CU_ADD_TEST(suite_bs, blob_extclone_hotadd);
 
 	allocate_cores(1);
 	allocate_threads(2);

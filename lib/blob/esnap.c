@@ -55,6 +55,7 @@ struct esnap_common_ctx {
 	struct spdk_blob		*blob;
 	blob_back_bs_dev_replace_t	replace_cb;
 	uint32_t			refcnt;
+	bool				closing;
 };
 
 /* This structure is reallocated on hot plug events. */
@@ -91,7 +92,8 @@ struct esnap_create_ctx {
 };
 
 static void esnap_open_ro(struct esnap_create_ctx *create_ctx,
-			  struct esnap_common_ctx *common_ctx);
+			  struct esnap_common_ctx *common_ctx,
+			  struct spdk_bdev *base_bdev);
 static void esnap_ctx_free(struct esnap_ctx *ctx);
 
 static struct esnap_ctx *
@@ -133,6 +135,10 @@ static void esnap_unload_on_thread_done(void *_ctx)
 static void
 esnap_destroy(struct spdk_bs_dev *dev)
 {
+	struct esnap_ctx *ctx = back_bs_dev_to_esnap_ctx(dev);
+
+	ctx->common->closing = true;
+
 	if (dev != NULL) {
 		spdk_for_each_thread(esnap_unload_on_thread, dev, esnap_unload_on_thread_done);
 	}
@@ -295,6 +301,8 @@ esnap_wait_destroy(struct spdk_bs_dev *dev)
 	struct esnap_ctx	*ctx = back_bs_dev_to_esnap_ctx(dev);
 	struct spdk_bdev_desc	*desc = ctx->bdev_desc;
 
+	ctx->common->closing = true;
+
 	if (desc != NULL) {
 		struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
 
@@ -391,7 +399,7 @@ esnap_open_done(struct esnap_create_ctx *create_ctx,
 		 */
 		esnap_common_ctx_deref(common_ctx);
 		free(create_ctx);
-	} else {
+	} else if (!common_ctx->closing) {
 		/*
 		 * This callback will call comon_ctx->blob->back_bs_dev->destroy
 		 * or dev->destroy releasing a reference on common_ctx.
@@ -408,9 +416,12 @@ esnap_wait_available_cb(void *_ctx, struct spdk_bdev *bdev)
 {
 	struct esnap_ctx	*ctx = _ctx;
 
-	/* XXX on right thread? */
-
-	esnap_open_ro(NULL, ctx->common);
+	/*
+	 * XXX-mg
+	 * Create an async task to open this bdev on the thread that originally
+	 * created the back_bs_dev.
+	 */
+	esnap_open_ro(NULL, ctx->common, bdev);
 }
 
 static void
@@ -582,11 +593,11 @@ load_esnap_on_thread_done(void *arg1)
  */
 static void
 esnap_open_ro(struct esnap_create_ctx *create_ctx,
-	      struct esnap_common_ctx *common_ctx)
+	      struct esnap_common_ctx *common_ctx, struct spdk_bdev *base_bdev)
 {
 	struct spdk_blob	*blob = common_ctx->blob;
 	uint32_t		io_unit_size = blob->bs->io_unit_size;
-	struct spdk_bdev	*ro_bdev, *base_bdev;
+	struct spdk_bdev	*ro_bdev;
 	struct spdk_bs_dev	*back_bs_dev;
 	struct esnap_ctx	*esnap_ctx;
 	struct load_on_thread_ctx *lot_ctx;
@@ -600,7 +611,13 @@ esnap_open_ro(struct esnap_create_ctx *create_ctx,
 		return;
 	}
 
-	rc = create_ro_disk(NULL, &common_ctx->uuid, NULL, &ro_bdev);
+	if (base_bdev == NULL) {
+		rc = create_ro_disk(NULL, &common_ctx->uuid, NULL, &ro_bdev);
+	} else {
+		rc = vbdev_ro_create_from_bdev(base_bdev, NULL, &ro_bdev);
+		assert(rc != 0 ||
+		       spdk_uuid_compare(&common_ctx->uuid, &base_bdev->uuid) == 0);
+	}
 	if (rc != 0) {
 		SPDK_ERRLOG("Unable to create external snapshot: error %d\n", rc);
 		esnap_ctx_free(esnap_ctx);
@@ -709,5 +726,5 @@ blob_create_esnap_dev(struct spdk_blob *blob, const struct spdk_uuid *uuid,
 	common_ctx->replace_cb = replace_cb;
 	common_ctx->refcnt = 1;
 
-	esnap_open_ro(create_ctx, common_ctx);
+	esnap_open_ro(create_ctx, common_ctx, NULL);
 }
