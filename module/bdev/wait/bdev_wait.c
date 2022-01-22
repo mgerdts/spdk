@@ -116,23 +116,16 @@ bdev_wait_examine_disk(struct spdk_bdev *bdev)
 	struct bdev_wait_target	find = { 0 };
 
 	find.uuid = bdev->uuid;
-
 	pthread_mutex_lock(&g_bdev_wait_mutex);
 	target = RB_FIND(bdev_wait_target_tree, &g_bdev_wait_targets, &find);
-
-	if (target == NULL) {
-		pthread_mutex_unlock(&g_bdev_wait_mutex);
-		spdk_bdev_module_examine_done(&wait_if);
-		return;
-	}
-
-	/* XXX-mg not thrilled about the hold time for a global mutex.  Switch
-	 * to a per target mutex? */
-	LIST_FOREACH_SAFE(wait_bdev, &target->wait_bdevs, link, tmp) {
-		wait_bdev->available_cb(wait_bdev->available_ctx, bdev);
-	}
-
 	pthread_mutex_unlock(&g_bdev_wait_mutex);
+
+	if (target != NULL) {
+		LIST_FOREACH_SAFE(wait_bdev, &target->wait_bdevs, link, tmp) {
+			wait_bdev->available_cb(wait_bdev->available_ctx, bdev);
+		}
+	}
+
 	spdk_bdev_module_examine_done(&wait_if);
 }
 
@@ -192,6 +185,7 @@ bdev_wait_add(struct bdev_wait *wait_bdev, const struct spdk_uuid *target_uuid)
 	}
 
 	wait_bdev->target = target;
+
 	LIST_INSERT_HEAD(&target->wait_bdevs, wait_bdev, link);
 
 	pthread_mutex_unlock(&g_bdev_wait_mutex);
@@ -219,7 +213,6 @@ bdev_wait_remove(struct bdev_wait *wait_bdev)
 		RB_REMOVE(bdev_wait_target_tree, &g_bdev_wait_targets, target);
 		free(target);
 	}
-
 	pthread_mutex_unlock(&g_bdev_wait_mutex);
 }
 
