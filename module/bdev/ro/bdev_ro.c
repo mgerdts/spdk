@@ -486,6 +486,8 @@ errout:
 	return rc;
 }
 
+/* XXX-mg finish these. */
+#if 0
 int
 vbdev_ro_create_from_name(const char *base_name,
 			  const struct vbdev_ro_opts *opts,
@@ -520,6 +522,7 @@ vbdev_ro_create_from_uuid(const struct spdk_uuid *base_uuid,
 
 	return vbdev_ro_create_from_bdev(base_bdev, opts, bdevp);
 }
+#endif
 
 int
 create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
