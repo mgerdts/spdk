@@ -347,4 +347,32 @@ delete_wait_disk(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn,
 	spdk_bdev_unregister(bdev, cb_fn, cb_arg);
 }
 
+#if 0
+void
+bdev_wait_print(const char *msg)
+{
+	struct bdev_wait_target *target;
+	struct bdev_wait *wait_bdev;
+	char uuid_str[SPDK_UUID_STRING_LEN];
+
+	if (msg == NULL) {
+		msg = "";
+	}
+
+	printf("\nwait disks: %s\n", msg);
+	RB_FOREACH(target, bdev_wait_target_tree, &g_bdev_wait_targets) {
+		spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), &target->uuid);
+
+		printf("  (struct bdev_wait_target *)%p %s\n",
+			target, uuid_str);
+		LIST_FOREACH(wait_bdev, &target->wait_bdevs, link) {
+			printf("    (struct bdev_wait *)%p %s\n",
+				wait_bdev, wait_bdev->bdev.name);
+			assert(wait_bdev->target == target);
+		}
+	}
+	printf("\n");
+}
+#endif
+
 SPDK_BDEV_MODULE_REGISTER(bdev_wait, &wait_if)
