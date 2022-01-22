@@ -1413,6 +1413,7 @@ blob_update_bs_dev_freeze_cpl(void *_ctx, int bserrno)
 		       ctx->blob->id,
 		       spdk_bdev_get_name(old_dev->get_base_bdev(old_dev)),
 		       spdk_bdev_get_name(new_dev->get_base_bdev(new_dev)));
+
 	ctx->blob->back_bs_dev = ctx->new_bs_dev;
 	old_dev->destroy(old_dev);
 

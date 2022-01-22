@@ -120,6 +120,7 @@ ut_open_malloc_dev(size_t devidx)
 	rc = create_malloc_disk(&disk->bdev, disk->name, &disk->uuid,
 				disk->num_blocks, disk->block_size);
 	CU_ASSERT(rc == 0);
+	poll_threads();
 
 	return disk->bdev;
 }

@@ -7661,7 +7661,6 @@ blob_extclone_hotadd(void)
 	 * an wait bdev.
 	 */
 	ut_close_malloc_dev(0);
-	poll_threads();
 	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
 	CU_ASSERT(blob->back_bs_dev->read == esnap_wait_read);
 
@@ -8033,7 +8032,6 @@ int main(int argc, char **argv)
 	suite_blob = CU_add_suite_with_setup_and_teardown("blob_blob", NULL, NULL,
 			suite_blob_setup, suite_blob_cleanup);
 
-#if 0
 	CU_ADD_TEST(suite, blob_init);
 	CU_ADD_TEST(suite_bs, blob_open);
 	CU_ADD_TEST(suite_bs, blob_create);
@@ -8111,7 +8109,6 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_extclone_io_512_4096);
 	CU_ADD_TEST(suite_bs, blob_extclone_eio);
 	CU_ADD_TEST(suite_bs, blob_extclone_hotremove);
-#endif
 	CU_ADD_TEST(suite_bs, blob_extclone_hotadd);
 
 	allocate_cores(1);
@@ -8125,10 +8122,8 @@ int main(int argc, char **argv)
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
-#if 0
 	g_use_extent_table = false;
 	CU_basic_run_tests();
-#endif
 	num_failures = CU_get_number_of_failures();
 	g_use_extent_table = true;
 	CU_basic_run_tests();

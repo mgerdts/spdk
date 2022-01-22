@@ -55,7 +55,6 @@ struct esnap_common_ctx {
 	struct spdk_blob		*blob;
 	blob_back_bs_dev_replace_t	replace_cb;
 	uint32_t			refcnt;
-	bool				closing;
 };
 
 /* This structure is reallocated on hot plug events. */
@@ -135,10 +134,6 @@ static void esnap_unload_on_thread_done(void *_ctx)
 static void
 esnap_destroy(struct spdk_bs_dev *dev)
 {
-	struct esnap_ctx *ctx = back_bs_dev_to_esnap_ctx(dev);
-
-	ctx->common->closing = true;
-
 	if (dev != NULL) {
 		spdk_for_each_thread(esnap_unload_on_thread, dev, esnap_unload_on_thread_done);
 	}
@@ -301,8 +296,6 @@ esnap_wait_destroy(struct spdk_bs_dev *dev)
 	struct esnap_ctx	*ctx = back_bs_dev_to_esnap_ctx(dev);
 	struct spdk_bdev_desc	*desc = ctx->bdev_desc;
 
-	ctx->common->closing = true;
-
 	if (desc != NULL) {
 		struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
 
@@ -399,7 +392,7 @@ esnap_open_done(struct esnap_create_ctx *create_ctx,
 		 */
 		esnap_common_ctx_deref(common_ctx);
 		free(create_ctx);
-	} else if (!common_ctx->closing) {
+	} else {
 		/*
 		 * This callback will call comon_ctx->blob->back_bs_dev->destroy
 		 * or dev->destroy releasing a reference on common_ctx.
