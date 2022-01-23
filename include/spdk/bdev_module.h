@@ -495,6 +495,7 @@ struct spdk_bdev {
 		TAILQ_HEAD(, spdk_bdev_desc) open_descs;
 
 		TAILQ_ENTRY(spdk_bdev) link;
+		RB_ENTRY(spdk_bdev) by_uuid;
 
 		/** points to a reset bdev_io if one is in progress. */
 		struct spdk_bdev_io *reset_in_progress;

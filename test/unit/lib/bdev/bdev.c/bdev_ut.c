@@ -4972,6 +4972,40 @@ bdev_writev_readv_ext(void)
 }
 
 static void
+bdev_duplicate_uuid(void)
+{
+	struct spdk_bdev *bdev1, *bdev2;
+	int rc;
+
+	/* Create a bdev */
+	bdev1 = allocate_bdev("bdev1");
+	CU_ASSERT(bdev1 != NULL);
+
+	/* Try to create another bdev with the same UUID. Expect -EEXIST */
+	bdev2 = calloc(1, sizeof(*bdev2));
+	SPDK_CU_ASSERT_FATAL(bdev2 != NULL);
+
+	bdev2->name = "bdev2";
+	bdev2->uuid = bdev1->uuid;
+	bdev2->fn_table = &fn_table;
+	bdev2->module = &bdev_ut_if;
+	bdev2->blockcnt = 1024;
+	bdev2->blocklen = 512;
+
+	rc = spdk_bdev_register(bdev2);
+	CU_ASSERT(rc == -EEXIST);
+
+	/* Delete bdev1, then try again with bdev2.  Should succeed. */
+	free_bdev(bdev1);
+	rc = spdk_bdev_register(bdev2);
+	CU_ASSERT(rc == 0);
+
+	spdk_bdev_unregister(bdev2, NULL, NULL);
+	poll_threads();
+	free(bdev2);
+}
+
+static void
 bdev_open_by_uuid(void)
 {
 	struct spdk_bdev *bdev;
@@ -5042,6 +5076,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, bdev_multi_allocation);
 	CU_ADD_TEST(suite, bdev_get_memory_domains);
 	CU_ADD_TEST(suite, bdev_writev_readv_ext);
+	CU_ADD_TEST(suite, bdev_duplicate_uuid);
 	CU_ADD_TEST(suite, bdev_open_by_uuid);
 
 	allocate_cores(1);
