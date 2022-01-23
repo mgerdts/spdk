@@ -87,7 +87,6 @@ DEFINE_STUB(create_ro_disk, int,
 	     const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp), -ENOTSUP);
 DEFINE_STUB_V(delete_ro_disk,
 	      (struct spdk_bdev *ro_bdev, spdk_bdev_unregister_cb cb_fn, void *cb_arg));
-DEFINE_STUB_V(seed_unload_on_thread_done, (void *_ctx));
 
 struct ut_request {
 	fs_request_fn fn;
