@@ -42,6 +42,7 @@
 
 #include "spdk/bdev_module.h"
 #include "bdev/ro/bdev_ro.h"
+#include "bdev/wait/bdev_wait.h"
 #include "spdk_cunit.h"
 #include "unit/lib/blob/bs_dev_common.c"
 #include "common/lib/test_env.c"
@@ -87,6 +88,16 @@ DEFINE_STUB(create_ro_disk, int,
 	     const struct vbdev_ro_opts *opts, struct spdk_bdev **bdevp), -ENOTSUP);
 DEFINE_STUB_V(delete_ro_disk,
 	      (struct spdk_bdev *ro_bdev, spdk_bdev_unregister_cb cb_fn, void *cb_arg));
+DEFINE_STUB(create_wait_disk, int,
+	    (const char *new_name, const struct spdk_uuid *new_uuid,
+	     const struct spdk_uuid *base_uuid, wait_disk_available_cb available_cb,
+	     void *available_ctx, struct spdk_bdev **bdevp), -ENOTSUP);
+DEFINE_STUB_V(delete_wait_disk,
+	      (struct spdk_bdev *ro_bdev, spdk_bdev_unregister_cb cb_fn, void *cb_arg));
+DEFINE_STUB(vbdev_ro_create_from_bdev, int,
+	    (struct spdk_bdev *base_bdev, const struct vbdev_ro_opts *opts,
+	     struct spdk_bdev **bdevp), -ENOTSUP);
+DEFINE_STUB(bdev_ro_get_base_bdev, struct spdk_bdev *, (struct spdk_bdev *bdev), NULL);
 
 struct ut_request {
 	fs_request_fn fn;
