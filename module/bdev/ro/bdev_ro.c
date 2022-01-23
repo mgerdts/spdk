@@ -531,6 +531,12 @@ create_ro_disk(const char *base_name, const struct spdk_uuid *base_uuid,
 {
 	struct spdk_bdev	*base_bdev = NULL;
 
+	if ((base_name == NULL && base_uuid == NULL) ||
+	    (base_name != NULL && base_uuid != NULL)) {
+		SPDK_ERRLOG("One of base name or base uuid is required\n");
+		return -EINVAL;
+	}
+
 	if (bdevp == NULL &&
 	    (opts == NULL || ((opts->name == NULL) && (opts->uuid == NULL)))) {
 		SPDK_ERRLOG("At least one of bdevp, opts->name, or opts->uuid required\n");
