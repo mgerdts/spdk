@@ -9,10 +9,6 @@ support clones of external snapshots.
 
 - Make external snapshot health visible via an RPC call.
 
-### Misc
-
-- Add a RB tree for faster lookups and to ensure uniqueness of bdev uuids.
-
 ## lvol
 
 - Does lvol_get_xattr_value need to get the external snapshot name?  Since
