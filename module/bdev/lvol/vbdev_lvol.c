@@ -10,6 +10,7 @@
 #include "spdk/log.h"
 #include "spdk/string.h"
 #include "spdk/uuid.h"
+#include "spdk/bdev.h"
 
 #include "vbdev_lvol.h"
 
@@ -735,6 +736,20 @@ vbdev_lvol_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 
 	}
 
+	spdk_json_write_named_bool(w, "external_clone", spdk_blob_is_external_clone(blob));
+
+	if (spdk_blob_is_external_clone(blob)) {
+		const char *name;
+		size_t name_len;
+
+		rc = spdk_blob_get_external_cookie(blob, (const void **)&name, &name_len);
+		if (rc == 0) {
+			if (name != NULL && strnlen(name, name_len) + 1 == name_len) {
+				spdk_json_write_named_string(w, "external_snapshot_name", name);
+			}
+		}
+	}
+
 end:
 	spdk_json_write_object_end(w);
 
@@ -949,12 +964,75 @@ vbdev_lvol_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_
 static int
 vbdev_lvol_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
 {
-	struct spdk_lvol *lvol = ctx;
+	struct spdk_lvol *lvol = ctx, *lvol_tmp;
 	struct spdk_bdev *base_bdev;
+	struct spdk_lvol_store *lvs;
+	struct spdk_bdev *esnap_bdev;
+	const char *cookie;
+	size_t cookie_len;
+	int rc, total = 0;
 
-	base_bdev = lvol->lvol_store->bs_dev->get_base_bdev(lvol->lvol_store->bs_dev);
+	lvs = lvol->lvol_store;
+	base_bdev = lvs->bs_dev->get_base_bdev(lvol->lvol_store->bs_dev);
 
-	return spdk_bdev_get_memory_domains(base_bdev, domains, array_size);
+	/* XXX-mg
+	 * The only in-tree effect of this call seems to be to set
+	 * bdev_desc->memory_domains_supported, which is used only by _bdev_io_submit_ext(). It's
+	 * not clear to me what happens if strictly one of the blobstore's bdev or the external
+	 * snapshot's bdev support memory doamins.
+	 *
+	 * I wonder what out-of-tree consumers do with this.
+	 */
+	TAILQ_FOREACH(lvol_tmp, &lvs->lvols, link) {
+		if (lvol_tmp->blob == NULL) {
+			SPDK_DEBUGLOG(vbdev_lvol, "lvol %s has no blob: skipping\n",
+				      lvol_tmp->name);
+			continue;
+		}
+		if (!spdk_blob_is_external_clone(lvol_tmp->blob)) {
+			continue;
+		}
+		/* XXX-mg do we ever get here? */
+
+		rc = spdk_blob_get_external_cookie(lvol_tmp->blob, (const void **)&cookie,
+						   &cookie_len);
+		if (rc != 0) {
+			SPDK_ERRLOG("External clone lvol %s blob %" PRIx64
+				    " snapshot lookup failed: %d\n", lvol_tmp->name,
+				    spdk_blob_get_id(lvol_tmp->blob), rc);
+			return rc;
+		}
+
+		esnap_bdev = spdk_bdev_get_by_name(cookie);
+		if (esnap_bdev == NULL) {
+			SPDK_ERRLOG("External snapshot bdev %s missing for lvol %s\n",
+				    cookie, lvol->name);
+			return -ENODEV;
+		}
+		rc = spdk_bdev_get_memory_domains(esnap_bdev, domains, array_size);
+		if (rc < 0) {
+			return rc;
+		}
+		total += rc;
+		/* array_size can be 0 to get the number of memory domains */
+		if (domains) {
+			domains += spdk_min(array_size, rc);
+		}
+		if (array_size) {
+			array_size -= spdk_min(array_size, rc);
+		}
+	}
+
+	/* blobstore created on top of bdev which reports memory domains doesn't touch data.
+	 * refer to spdk_bs_opts::use_zero_cluster */
+	rc = spdk_bdev_get_memory_domains(base_bdev, domains, array_size);
+	if (rc < 0) {
+		return rc;
+	}
+	total += rc;
+	SPDK_INFOLOG(vbdev_lvol, "vbdev_lvol %s reported %d memory domains\n", lvol->name, total);
+
+	return total;
 }
 
 static struct spdk_bdev_fn_table vbdev_lvol_fn_table = {
@@ -1034,6 +1112,8 @@ _create_lvol_disk(struct spdk_lvol *lvol, bool destroy)
 		     spdk_bs_get_cluster_size(lvol->lvol_store->blobstore);
 	assert((total_size % bdev->blocklen) == 0);
 	bdev->blockcnt = total_size / bdev->blocklen;
+	SPDK_NOTICELOG("Creating lvol %s, total_size %zu, blockcnt %zu\n", lvol->name, total_size,
+		       bdev->blockcnt);
 	bdev->uuid = lvol->uuid;
 	bdev->required_alignment = lvs_bdev->bdev->required_alignment;
 	bdev->split_on_optimal_io_boundary = true;
@@ -1150,6 +1230,26 @@ vbdev_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 	req->cb_arg = cb_arg;
 
 	spdk_lvol_create_clone(lvol, clone_name, _vbdev_lvol_create_cb, req);
+}
+
+int
+vbdev_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+			     const char *back_name, const char *clone_name,
+			     spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+
+	req = calloc(1, sizeof(*req));
+	if (req == NULL) {
+		cb_fn(cb_arg, NULL, -ENOMEM);
+		return 0;
+	}
+
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+
+	return spdk_lvol_create_bdev_clone(lvs, back_name, clone_name,
+					   _vbdev_lvol_create_cb, req);
 }
 
 static void
