@@ -38,6 +38,12 @@ bool g_ext_api_called;
 DEFINE_STUB_V(spdk_bdev_module_fini_start_done, (void));
 DEFINE_STUB(spdk_bdev_get_memory_domains, int, (struct spdk_bdev *bdev,
 		struct spdk_memory_domain **domains, int array_size), 0);
+DEFINE_STUB(spdk_blob_is_external_clone, bool, (const struct spdk_blob *blob), false);
+DEFINE_STUB(spdk_blob_get_external_parent, const char *, (struct spdk_blob *blob), NULL);
+DEFINE_STUB(spdk_blob_get_external_cookie, int,
+	    (struct spdk_blob *blob, const void **cookie, size_t *len), -ENOTSUP);
+
+struct spdk_bdev *spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid);
 
 const struct spdk_bdev_aliases_list *
 spdk_bdev_get_aliases(const struct spdk_bdev *bdev)
@@ -161,6 +167,12 @@ void
 spdk_lvol_open(struct spdk_lvol *lvol, spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
 {
 	cb_fn(cb_arg, lvol, g_lvolerrno);
+}
+
+spdk_blob_id
+spdk_blob_get_id(struct spdk_blob *blob)
+{
+	return 0;
 }
 
 uint64_t
@@ -473,6 +485,13 @@ spdk_bdev_get_by_name(const char *bdev_name)
 		return g_base_bdev;
 	}
 
+	return NULL;
+}
+
+struct spdk_bdev *
+spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid)
+{
+	SPDK_CU_ASSERT_FATAL(false);
 	return NULL;
 }
 
