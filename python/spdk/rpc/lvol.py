@@ -1,6 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2017 Intel Corporation.
 #  All rights reserved.
+#  Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 
 def bdev_lvol_create_lvstore(client, bdev_name, lvs_name, cluster_sz=None,
@@ -120,6 +121,25 @@ def bdev_lvol_clone(client, snapshot_name, clone_name):
         'clone_name': clone_name
     }
     return client.call('bdev_lvol_clone', params)
+
+
+def bdev_lvol_clone_bdev(client, bdev_uuid, lvs_name, clone_name):
+    """Create a logical volume based on a snapshot.
+
+    Args:
+        bdev_uuid: bdev to clone; must not be an lvol in same lvstore as clone
+        lvs_name: name of logical volume store to use
+        clone_name: name of logical volume to create
+
+    Returns:
+        Name of created logical volume clone.
+    """
+    params = {
+        'bdev_uuid': bdev_uuid,
+        'lvs_name': lvs_name,
+        'clone_name': clone_name
+    }
+    return client.call('bdev_lvol_clone_bdev', params)
 
 
 def bdev_lvol_rename(client, old_name, new_name):

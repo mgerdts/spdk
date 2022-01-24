@@ -9720,6 +9720,28 @@ Example response:
 }
 ~~~
 
+### bdev_lvol_clone_bdev {#rpc_bdev_lvol_clone_bdev}
+
+Create a logical volume based on an external snapshot bdev. The external snapshot bdev
+is a bdev that will not be written to by any consumer and must not be an lvol in the
+lvstore as the clone.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+bdev_uuid               | Required | string      | UUID for bdev that acts as the external snapshot
+lvs_name                | Required | string      | logical volume store name
+clone_name              | Required | string      | Name for the logical volume to create
+
+#### Response
+
+UUID of the created logical volume clone is returned.
+
+#### Example
+
+XXX-mg add example
+
 ### bdev_lvol_rename {#rpc_bdev_lvol_rename}
 
 Rename a logical volume. New name will rename only the alias of the logical volume.
