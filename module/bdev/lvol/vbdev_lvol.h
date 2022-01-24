@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
  */
 
 #ifndef SPDK_VBDEV_LVOL_H
@@ -41,6 +42,9 @@ void vbdev_lvol_create_snapshot(struct spdk_lvol *lvol, const char *snapshot_nam
 
 void vbdev_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 			     spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg);
+int vbdev_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+				 const char *back_name, const char *clone_name,
+				 spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg);
 
 /**
  * \brief Change size of lvol
