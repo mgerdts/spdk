@@ -13,6 +13,9 @@
 
 #include "common/lib/ut_multithread.c"
 
+#define SPDK_BLOBSTORE_H
+#define BLOB_EXTERNAL_SNAPSHOT_BDEV "EXTSNAP"
+
 #include "lvol/lvol.c"
 
 #define DEV_BUFFER_SIZE (64 * 1024 * 1024)
@@ -29,6 +32,12 @@
 
 #define SPDK_BLOB_THIN_PROV (1ULL << 0)
 
+DEFINE_STUB(spdk_blob_get_external_cookie, int,
+	    (struct spdk_blob *blob, const void **cookie, size_t *len), -ENOTSUP);
+DEFINE_STUB(spdk_bdev_get_name, const char *, (const struct spdk_bdev *bdev), "mock_name");
+DEFINE_STUB(spdk_bdev_create_bs_dev_ro, int,
+	    (const char *bdev_name, spdk_bdev_event_cb_t event_cb, void *event_ctx,
+	     struct spdk_bs_dev **bs_dev), -ENOTSUP);
 const char *uuid = "828d9766-ae50-11e7-bd8d-001e67edf350";
 
 struct spdk_blob {
