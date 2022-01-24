@@ -155,6 +155,11 @@ bdev_lvol_clone [-h] snapshot_name clone_name
     Create a clone with clone_name of a given lvol snapshot.
     optional arguments:
     -h, --help  show help
+bdev_lvol_clone_bdev [-h] slvs_name bdev_name clone_name
+    Create a clone with clone_name of a given external snapshot, where the external
+    snapshot may be any bdev.
+    optional arguments:
+    -h, --help  show help
 bdev_lvol_rename [-h] old_name new_name
     Change lvol bdev name
     optional arguments:

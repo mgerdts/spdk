@@ -13,6 +13,9 @@
 
 #include "common/lib/ut_multithread.c"
 
+#define SPDK_BLOBSTORE_H
+#define BLOB_EXTERNAL_SNAPSHOT_BDEV "EXTSNAP"
+
 #include "lvol/lvol.c"
 
 #define DEV_BUFFER_SIZE (64 * 1024 * 1024)
@@ -28,6 +31,8 @@
 #define SPDK_BLOB_OPTS_MAX_CHANNEL_OPS 512
 
 #define SPDK_BLOB_THIN_PROV (1ULL << 0)
+
+DEFINE_STUB(spdk_blob_get_external_parent, const char *, (struct spdk_blob *blob), NULL);
 
 const char *uuid = "828d9766-ae50-11e7-bd8d-001e67edf350";
 
