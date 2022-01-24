@@ -1758,6 +1758,19 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('clone_name', help='lvol clone name')
     p.set_defaults(func=bdev_lvol_clone)
 
+    def bdev_lvol_clone_bdev(args):
+        print_json(rpc.lvol.bdev_lvol_clone_bdev(args.client,
+                                                 lvs_name=args.lvs_name,
+                                                 bdev_name=args.bdev_name,
+                                                 clone_name=args.clone_name))
+
+    p = subparsers.add_parser('bdev_lvol_clone_bdev',
+                              help='Create a clone of a non-lvol bdev')
+    p.add_argument('lvs_name', help='logical volume store name')
+    p.add_argument('bdev_name', help='read-only non-lvol bdev to clone')
+    p.add_argument('clone_name', help='lvol clone name')
+    p.set_defaults(func=bdev_lvol_clone_bdev)
+
     def bdev_lvol_rename(args):
         rpc.lvol.bdev_lvol_rename(args.client,
                                   old_name=args.old_name,

@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2020-2022, NVIDIA CORPORATION. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -110,6 +111,7 @@ struct spdk_lvol {
 	char				uuid_str[SPDK_UUID_STRING_LEN];
 	bool				thin_provision;
 	struct spdk_bdev		*bdev;
+	char				*esnap_name;
 	int				ref_count;
 	bool				action_in_progress;
 	enum blob_clear_method		clear_method;

@@ -3,7 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -167,7 +167,7 @@ load_next_lvol(void *cb_arg, struct spdk_blob *blob, int lvolerrno)
 	struct spdk_blob_store *bs = lvs->blobstore;
 	struct spdk_lvol *lvol, *tmp;
 	spdk_blob_id blob_id;
-	const char *attr;
+	const char *attr, *esnap_name;
 	size_t value_len;
 	int rc;
 
@@ -228,6 +228,17 @@ load_next_lvol(void *cb_arg, struct spdk_blob *blob, int lvolerrno)
 	}
 
 	snprintf(lvol->name, sizeof(lvol->name), "%s", attr);
+
+	esnap_name = spdk_blob_get_external_parent(blob);
+	if (esnap_name != NULL) {
+		lvol->esnap_name = strdup(lvol->esnap_name);
+		if (lvol->esnap_name == NULL) {
+			SPDK_ERRLOG("Cannot allocate space for external snapshot name\n");
+			lvol_free(lvol);
+			req->lvserrno = -ENOMEM;
+			goto invalid;
+		}
+	}
 
 	TAILQ_INSERT_TAIL(&lvs->lvols, lvol, link);
 
@@ -1071,6 +1082,85 @@ spdk_lvol_create(struct spdk_lvol_store *lvs, const char *name, uint64_t sz,
 
 	spdk_blob_opts_init(&opts, sizeof(opts));
 	opts.thin_provision = thin_provision;
+	opts.num_clusters = num_clusters;
+	opts.clear_method = lvol->clear_method;
+	opts.xattrs.count = SPDK_COUNTOF(xattr_names);
+	opts.xattrs.names = xattr_names;
+	opts.xattrs.ctx = lvol;
+	opts.xattrs.get_value = lvol_get_xattr_value;
+
+	spdk_bs_create_blob_ext(lvs->blobstore, &opts, lvol_create_cb, req);
+
+	return 0;
+}
+
+int
+spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+			    const char *back_name, const char *clone_name,
+			    spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+	struct spdk_blob_store *bs;
+	struct spdk_lvol *lvol;
+	struct spdk_blob_opts opts;
+	uint64_t num_clusters;
+	char *xattr_names[] = {LVOL_NAME, "uuid"};
+	struct spdk_bdev *bdev = spdk_bdev_get_by_name(back_name);;
+	uint64_t sz;
+	int rc;
+
+	if (lvs == NULL) {
+		SPDK_ERRLOG("lvol store does not exist\n");
+		return -EINVAL;
+	}
+
+	if (bdev == NULL) {
+		SPDK_ERRLOG("bdev does not exist\n");
+		return -EINVAL;
+	}
+
+	rc = lvs_verify_lvol_name(lvs, clone_name);
+	if (rc < 0) {
+		return rc;
+	}
+
+	sz = spdk_bdev_get_num_blocks(bdev) * spdk_bdev_get_block_size(bdev);
+	bs = lvs->blobstore;
+
+	req = calloc(1, sizeof(*req));
+	if (!req) {
+		SPDK_ERRLOG("Cannot alloc memory for lvol request pointer\n");
+		return -ENOMEM;
+	}
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+
+	lvol = calloc(1, sizeof(*lvol));
+	if (!lvol) {
+		free(req);
+		SPDK_ERRLOG("Cannot alloc memory for lvol base pointer\n");
+		return -ENOMEM;
+	}
+	lvol->esnap_name = strdup(back_name);
+	if (lvol->esnap_name == NULL) {
+		free(lvol);
+		free(req);
+		SPDK_ERRLOG("Cannot alloc memory for lvol external snapshot name\n");
+		return -ENOMEM;
+	}
+	lvol->lvol_store = lvs;
+	num_clusters = spdk_divide_round_up(sz, spdk_bs_get_cluster_size(bs));
+	lvol->thin_provision = true;
+	lvol->clear_method = BLOB_CLEAR_WITH_DEFAULT;
+	snprintf(lvol->name, sizeof(lvol->name), "%s", clone_name);
+	TAILQ_INSERT_TAIL(&lvol->lvol_store->pending_lvols, lvol, link);
+	spdk_uuid_generate(&lvol->uuid);
+	spdk_uuid_fmt_lower(lvol->uuid_str, sizeof(lvol->uuid_str), &lvol->uuid);
+	req->lvol = lvol;
+
+	spdk_blob_opts_init(&opts, sizeof(opts));
+	spdk_uuid_copy(&opts.external_snapshot_uuid, spdk_bdev_get_uuid(bdev));
+	opts.thin_provision = true;
 	opts.num_clusters = num_clusters;
 	opts.clear_method = lvol->clear_method;
 	opts.xattrs.count = SPDK_COUNTOF(xattr_names);

@@ -3,7 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -66,6 +66,10 @@ bool g_ext_api_called;
 DEFINE_STUB_V(spdk_bdev_module_fini_start_done, (void));
 DEFINE_STUB(spdk_bdev_get_memory_domains, int, (struct spdk_bdev *bdev,
 		struct spdk_memory_domain **domains, int array_size), 0);
+DEFINE_STUB(spdk_blob_is_external_clone, bool, (const struct spdk_blob *blob), false);
+DEFINE_STUB(spdk_blob_get_external_parent, const char *, (struct spdk_blob *blob), NULL);
+
+struct spdk_bdev *spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid);
 
 const struct spdk_bdev_aliases_list *
 spdk_bdev_get_aliases(const struct spdk_bdev *bdev)
@@ -456,6 +460,13 @@ spdk_bdev_get_by_name(const char *bdev_name)
 		return g_base_bdev;
 	}
 
+	return NULL;
+}
+
+struct spdk_bdev *
+spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid)
+{
+	SPDK_CU_ASSERT_FATAL(false);
 	return NULL;
 }
 
