@@ -103,7 +103,7 @@ fini_accel(void)
  */
 struct ut_disk_info {
 	const char		*name;
-	const char		*uuid_str;
+	char			*uuid_str;
 	const uint64_t		num_blocks;
 	const uint32_t		block_size;
 	/* Remaining initialized to 0 */
