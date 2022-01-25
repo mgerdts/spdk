@@ -65,6 +65,39 @@ static void suite_blob_cleanup(void);
 DEFINE_STUB(spdk_memory_domain_memzero, int, (struct spdk_memory_domain *src_domain,
 		void *src_domain_ctx, struct iovec *iov, uint32_t iovcnt, void (*cpl_cb)(void *, int),
 		void *cpl_cb_arg), 0);
+static bool
+is_ext_clone(struct spdk_blob *_blob, const char *_uuid_str)
+{
+	const void *val = NULL;
+	size_t len;
+	bool c1, c2, c3;
+
+	CU_ASSERT(blob_get_xattr_value(_blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, &val, &len, true) == 0);
+	CU_ASSERT((c1 = (val != NULL && strcmp(val, _uuid_str) == 0)));
+	CU_ASSERT((c2 = !!(_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT)));
+	CU_ASSERT((c3 = (_blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT)));
+
+	return c1 && c2 && c3;
+}
+
+static bool
+is_not_ext_clone(struct spdk_blob *_blob)
+{
+	const void *val = NULL;
+	size_t len;
+	bool c1, c2, c3, c4;
+
+	CU_ASSERT((c1 = (blob_get_xattr_value(_blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, &val, &len,
+					      true) == -ENOENT)));
+	CU_ASSERT((c2 = (val == NULL)));
+	CU_ASSERT((c3 = ((_blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT) == 0)));
+	CU_ASSERT((c4 = (_blob->parent_id != SPDK_BLOBID_EXTERNAL_SNAPSHOT)));
+
+	return c1 && c2 && c3 && c4;
+}
+
+#define UT_ASSERT_IS_EXT_CLONE(_blob, _uuid) CU_ASSERT(is_ext_clone(_blob, _uuid))
+#define UT_ASSERT_IS_NOT_EXT_CLONE(_blob) CU_ASSERT(is_not_ext_clone(_blob))
 
 static void
 _get_xattr_value(void *arg, const char *name,
@@ -7451,6 +7484,165 @@ blob_extclone_size(void)
 }
 
 static void
+blob_extclone_snapshot(void)
+{
+	/*
+	 * When a snapshot is created, the blob that is being snapped becomes
+	 * the leaf node (a clone of the snapshot) and the newly created
+	 * snapshot sits between the snapped blob and the external snapshot.
+	 *
+	 * Before creating snap1
+	 *
+	 *   ,--------.     ,----------.
+	 *   |  blob  |     |  vbdev   |
+	 *   | blob1  |<----| nvme1n42 |
+	 *   |  (rw)  |     |   (ro)   |
+	 *   `--------'     `----------'
+	 *       Figure 1
+	 *
+	 * After creating snap1
+	 *
+	 *   ,--------.     ,--------.     ,----------.
+	 *   |  blob  |     |  blob  |     |  vbdev   |
+	 *   | blob1  |<----| snap1  |<----| nvme1n42 |
+	 *   |  (rw)  |     |  (ro)  |     |   (ro)   |
+	 *   `--------'     `--------'     `----------'
+	 *       Figure 2
+	 *
+	 * Starting from Figure 2, if snap1 is removed, the chain reverts to
+	 * what it looks like in Figure 1.
+	 *
+	 * Starting from Figure 2, if blob1 is removed, the chain becomes:
+	 *
+	 *   ,--------.     ,----------.
+	 *   |  blob  |     |  vbdev   |
+	 *   | snap1  |<----| nvme1n42 |
+	 *   |  (ro)  |     |   (ro)   |
+	 *   `--------'     `----------'
+	 *       Figure 3
+	 *
+	 * In each case, the blob pointed to by the nvme vbdev is considered
+	 * the "external clone".  The external clone must have:
+	 *
+	 *   - XATTR_INTERNAL for BLOB_EXTERNAL_SNAPSHOT_BDEV (UUID as string)
+	 *   - blob->invalid_flags must contain SPDK_BLOB_EXTERNAL_SNAPSHOT
+	 *   - blob->parent_id must be SPDK_BLOBID_EXTERNAL_SNAPSHOT.
+	 *
+	 * No other blob that descends from the external clone may have any of
+	 * those set.
+	 */
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct spdk_blob	*blob, *snap_blob;
+	spdk_blob_id		blobid, snap_blobid;
+	const char		*ext_uuid_str = mdisks[0].uuid_str;
+
+	/* Create a bdev */
+	ut_open_malloc_dev(0);
+
+	/* Create a blob clone of the bdev and open it. */
+	ut_spdk_blob_opts_init(&opts);
+	spdk_uuid_copy(&opts.external_snapshot_uuid, &mdisks[0].uuid);
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
+
+	/*
+	 * Create a snapshot of the blob. The snapshot becomes the external
+	 * clone
+	 */
+	spdk_bs_create_snapshot(bs, blobid, NULL, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	snap_blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, snap_blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	snap_blob = g_blob;
+
+	UT_ASSERT_IS_NOT_EXT_CLONE(blob);
+	UT_ASSERT_IS_EXT_CLONE(snap_blob, ext_uuid_str);
+
+	/*
+	 * Delete the snapshot.  The original blob becomes the external clone.
+	 */
+	ut_blob_close_and_delete(bs, snap_blob);
+	snap_blob = NULL;
+	snap_blobid = SPDK_BLOBID_INVALID;
+	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
+
+	/*
+	 * Create the snapshot again, then delete the original blob.  The
+	 * snapshot should survive as the external clone.
+	 */
+	spdk_bs_create_snapshot(bs, blobid, NULL, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	snap_blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, snap_blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	snap_blob = g_blob;
+
+	UT_ASSERT_IS_NOT_EXT_CLONE(blob);
+	UT_ASSERT_IS_EXT_CLONE(snap_blob, ext_uuid_str);
+
+	ut_blob_close_and_delete(bs, blob);
+	blob = NULL;
+	blobid = SPDK_BLOBID_INVALID;
+	UT_ASSERT_IS_EXT_CLONE(snap_blob, ext_uuid_str);
+
+	/*
+	 * Clone the snapshot.  The snapshot continues to be the external clone.
+	 */
+	spdk_bs_create_clone(bs, snap_blobid, NULL, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	UT_ASSERT_IS_NOT_EXT_CLONE(blob);
+	UT_ASSERT_IS_EXT_CLONE(snap_blob, ext_uuid_str);
+
+	/*
+	 * Delete the snapshot. The clone becomes the external clone.
+	 */
+	ut_blob_close_and_delete(bs, snap_blob);
+	snap_blob = NULL;
+	snap_blobid = SPDK_BLOBID_INVALID;
+	UT_ASSERT_IS_EXT_CLONE(blob, ext_uuid_str);
+
+	/*
+	 * Clean up
+	 */
+	ut_blob_close_and_delete(bs, blob);
+	ut_close_malloc_dev(0);
+	poll_threads();
+}
+
+static void
 bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 	      void *event_ctx)
 {
@@ -8058,6 +8250,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_decouple_snapshot);
 	CU_ADD_TEST(suite_bs, blob_extclone_defaults);
 	CU_ADD_TEST(suite_bs, blob_extclone_size);
+	CU_ADD_TEST(suite_bs, blob_extclone_snapshot);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_4096);
 	CU_ADD_TEST(suite, blob_extclone_io_512_512);
 	CU_ADD_TEST(suite, blob_extclone_io_4096_512);
