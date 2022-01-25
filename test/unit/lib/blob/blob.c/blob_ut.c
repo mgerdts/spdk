@@ -8265,6 +8265,56 @@ blob_extclone_snapshot(void)
 }
 
 static void
+blob_extclone_inflate(void)
+{
+	struct spdk_blob_store	*bs = g_bs;
+	struct spdk_blob_opts	opts;
+	struct ut_esnap_opts	esnap_opts;
+	struct spdk_blob	*blob;
+	spdk_blob_id		blobid;
+	struct spdk_io_channel *channel;
+	const uint32_t		blocklen = spdk_bs_get_io_unit_size(bs);
+	bool			destroyed = false;
+
+	/* Create the external clone */
+	ut_spdk_blob_opts_init(&opts);
+	ut_esnap_opts_init(blocklen, 2048, __func__, &destroyed, &esnap_opts);
+	opts.external_snapshot_cookie = &esnap_opts;
+	opts.external_snapshot_cookie_len = sizeof(esnap_opts);
+	opts.num_clusters = 10;
+	spdk_bs_create_blob_ext(bs, &opts, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	/* Open the external clone */
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_blob != NULL);
+	blob = g_blob;
+
+	UT_ASSERT_IS_EXT_CLONE(blob, &esnap_opts, sizeof(esnap_opts));
+
+	/* Inflate the blob and verify that it is no longer an extern clone. */
+	channel = spdk_bs_alloc_io_channel(bs);
+	CU_ASSERT(channel != NULL);
+	spdk_bs_inflate_blob(bs, channel, blobid, blob_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+
+	UT_ASSERT_IS_NOT_EXT_CLONE(blob);
+
+	/*
+	 * Clean up
+	 */
+	spdk_bs_free_io_channel(channel);
+	ut_blob_close_and_delete(bs, blob);
+	poll_threads();
+}
+
+static void
 suite_bs_setup(void)
 {
 	struct spdk_bs_dev *dev;
@@ -8471,6 +8521,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, blob_esnap_io_512_4096);
 	CU_ADD_TEST(suite_esnap_bs, blob_esnap_thread_add_remove);
 	CU_ADD_TEST(suite_esnap_bs, blob_extclone_snapshot);
+	CU_ADD_TEST(suite_esnap_bs, blob_extclone_inflate);
 
 	allocate_cores(1);
 	allocate_threads(2);
