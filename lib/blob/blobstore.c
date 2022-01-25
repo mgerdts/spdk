@@ -6528,6 +6528,12 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 	if (ctx->allocate_all) {
 		/* remove thin provisioning */
 		bs_blob_list_remove(_blob);
+		if (_blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
+			blob_remove_xattr(_blob, BLOB_EXTERNAL_SNAPSHOT_BDEV, true);
+			_blob->invalid_flags &= ~SPDK_BLOB_EXTERNAL_SNAPSHOT;
+		} else {
+			blob_remove_xattr(_blob, BLOB_SNAPSHOT, true);
+		}
 		_blob->invalid_flags = _blob->invalid_flags & ~SPDK_BLOB_THIN_PROV;
 		_blob->back_bs_dev->destroy(_blob->back_bs_dev);
 		_blob->back_bs_dev = NULL;
@@ -6571,6 +6577,10 @@ bs_cluster_needs_allocation(struct spdk_blob *blob, uint64_t cluster, bool alloc
 	if (blob->parent_id == SPDK_BLOBID_INVALID) {
 		/* Blob have no parent blob */
 		return allocate_all;
+	}
+
+	if (blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
+		return true;
 	}
 
 	b = (struct spdk_blob_bs_dev *)blob->back_bs_dev;
@@ -6635,6 +6645,14 @@ bs_inflate_blob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno)
 
 	ctx->original.blob = _blob;
 	ctx->original.md_ro = _blob->md_ro;
+
+	if (_blob->parent_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
+		/*
+		 * There is no simple way to detect thin provisioning or zeroes
+		 * in an external snapshot
+		 */
+		ctx->allocate_all = true;
+	}
 
 	if (_blob->locked_operation_in_progress) {
 		SPDK_DEBUGLOG(blob, "Cannot inflate blob - another operation in progress\n");
