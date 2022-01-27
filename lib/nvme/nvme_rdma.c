@@ -2916,7 +2916,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 	uint64_t				completions_per_poller = 0;
 	uint64_t				poller_completions = 0;
 	uint64_t				rdma_completions;
-
+	int					num_failed_qpairs = 0;
 
 	if (completions_per_qpair == 0) {
 		completions_per_qpair = MAX_COMPLETIONS_PER_POLL;
@@ -2949,6 +2949,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		}
 
 		if (spdk_unlikely(qpair->transport_failure_reason != SPDK_NVME_QPAIR_FAILURE_NONE)) {
+			num_failed_qpairs++;
 			nvme_rdma_fail_qpair(qpair, 0);
 			continue;
 		}
@@ -3012,7 +3013,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		}
 	}
 
-	return total_completions;
+	return num_failed_qpairs != 0 ? -ENXIO : total_completions;
 }
 
 static int
