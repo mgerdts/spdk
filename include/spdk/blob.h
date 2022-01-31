@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -192,6 +193,8 @@ struct spdk_bs_dev {
 		      struct spdk_bs_dev_cb_args *cb_args);
 
 	struct spdk_bdev *(*get_base_bdev)(struct spdk_bs_dev *dev);
+
+	bool (*memory_domains_supported)(struct spdk_bs_dev *dev);
 
 	uint64_t	blockcnt;
 	uint32_t	blocklen; /* In bytes */

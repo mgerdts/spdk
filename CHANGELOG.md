@@ -7,6 +7,13 @@
 Added `bdev_nvme_add_error_injection` and `bdev_nvme_remove_error_injection` RPCs to add and
 remove NVMe error injections.
 
+### blobstore
+
+Structure `spdk_bs_opts` is extended with operation callback `memory_domains supported`.
+When the new callback returns true, blobstore reserves an additional cluster for internal usage. This cluster will
+be used to read unallocated clusters/snapshot instead of `memset` in existing zeroes device. That allows to support
+SPDK memory domains API in blobstore.
+
 ## v22.01
 
 ### accel
