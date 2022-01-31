@@ -60,6 +60,9 @@ When the new callback returns true, blobstore reserves an additional cluster for
 be used to read unallocated clusters/snapshot instead of `memset` in existing zeroes device. That allows to support
 SPDK memory domains API in blobstore.
 
+New functions `spdk_blob_io_writev_ext` and `spdk_blob_io_readv_ext` are added. The new functions accept
+`spdk_blob_ext_io_opts` structure with extended IO request options.
+
 ### env
 
 Added `spdk_pci_for_each_device`.
