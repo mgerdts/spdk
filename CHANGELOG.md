@@ -53,6 +53,13 @@ added to the RPC `bdev_nvme_set_options`. They can be overridden if they are giv
 
 Updated DPDK submodule to DPDK 21.11.
 
+### blobstore
+
+Structure `spdk_bs_opts` is extended with operation callback `memory_domains supported`.
+When the new callback returns true, blobstore reserves an additional cluster for internal usage. This cluster will
+be used to read unallocated clusters/snapshot instead of `memset` in existing zeroes device. That allows to support
+SPDK memory domains API in blobstore.
+
 ### env
 
 Added `spdk_pci_for_each_device`.
