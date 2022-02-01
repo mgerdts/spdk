@@ -3618,10 +3618,18 @@ bdev_name_add(struct spdk_bdev_name *bdev_name, struct spdk_bdev *bdev, const ch
 }
 
 static void
-bdev_name_del(struct spdk_bdev_name *bdev_name)
+bdev_name_del_unsafe(struct spdk_bdev_name *bdev_name)
 {
 	RB_REMOVE(bdev_name_tree, &g_bdev_mgr.bdev_names, bdev_name);
 	free(bdev_name->name);
+}
+
+static void
+bdev_name_del(struct spdk_bdev_name *bdev_name)
+{
+	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	bdev_name_del_unsafe(bdev_name);
+	pthread_mutex_unlock(&g_bdev_mgr.mutex);
 }
 
 int
@@ -3652,25 +3660,35 @@ spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias)
 	return 0;
 }
 
-int
-spdk_bdev_alias_del(struct spdk_bdev *bdev, const char *alias)
+static int
+bdev_alias_del(struct spdk_bdev *bdev, const char *alias,
+	       void (*alias_del_fn)(struct spdk_bdev_name *n))
 {
 	struct spdk_bdev_alias *tmp;
 
 	TAILQ_FOREACH(tmp, &bdev->aliases, tailq) {
 		if (strcmp(alias, tmp->alias.name) == 0) {
 			TAILQ_REMOVE(&bdev->aliases, tmp, tailq);
-			pthread_mutex_lock(&g_bdev_mgr.mutex);
-			bdev_name_del(&tmp->alias);
-			pthread_mutex_unlock(&g_bdev_mgr.mutex);
+			alias_del_fn(&tmp->alias);
 			free(tmp);
 			return 0;
 		}
 	}
 
-	SPDK_INFOLOG(bdev, "Alias %s does not exists\n", alias);
-
 	return -ENOENT;
+}
+
+int
+spdk_bdev_alias_del(struct spdk_bdev *bdev, const char *alias)
+{
+	int rc;
+
+	rc = bdev_alias_del(bdev, alias, bdev_name_del);
+	if (rc == -ENOENT) {
+		SPDK_INFOLOG(bdev, "Alias %s does not exist\n", alias);
+	}
+
+	return rc;
 }
 
 void
@@ -3680,9 +3698,7 @@ spdk_bdev_alias_del_all(struct spdk_bdev *bdev)
 
 	TAILQ_FOREACH_SAFE(p, &bdev->aliases, tailq, tmp) {
 		TAILQ_REMOVE(&bdev->aliases, p, tailq);
-		pthread_mutex_lock(&g_bdev_mgr.mutex);
 		bdev_name_del(&p->alias);
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
 		free(p);
 	}
 }
@@ -6021,6 +6037,7 @@ static int
 bdev_register(struct spdk_bdev *bdev)
 {
 	char *bdev_name;
+	char uuid[SPDK_UUID_STRING_LEN];
 	int ret;
 
 	assert(bdev->module != NULL);
@@ -6049,6 +6066,11 @@ bdev_register(struct spdk_bdev *bdev)
 	bdev->internal.qd_poller = NULL;
 	bdev->internal.qos = NULL;
 
+	TAILQ_INIT(&bdev->internal.open_descs);
+	TAILQ_INIT(&bdev->internal.locked_ranges);
+	TAILQ_INIT(&bdev->internal.pending_locked_ranges);
+	TAILQ_INIT(&bdev->aliases);
+
 	ret = bdev_name_add(&bdev->internal.bdev_name, bdev, bdev->name);
 	if (ret != 0) {
 		free(bdev_name);
@@ -6058,6 +6080,18 @@ bdev_register(struct spdk_bdev *bdev)
 	/* If the user didn't specify a uuid, generate one. */
 	if (spdk_mem_all_zero(&bdev->uuid, sizeof(bdev->uuid))) {
 		spdk_uuid_generate(&bdev->uuid);
+	}
+
+	/* Add the UUID alias only if it's different than the name */
+	spdk_uuid_fmt_lower(uuid, sizeof(uuid), &bdev->uuid);
+	if (strcmp(bdev->name, uuid) != 0) {
+		ret = spdk_bdev_alias_add(bdev, uuid);
+		if (ret != 0) {
+			SPDK_ERRLOG("Unable to add uuid:%s alias for bdev %s\n", uuid, bdev->name);
+			bdev_name_del(&bdev->internal.bdev_name);
+			free(bdev_name);
+			return ret;
+		}
 	}
 
 	if (spdk_bdev_get_buf_align(bdev) > 1) {
@@ -6083,12 +6117,6 @@ bdev_register(struct spdk_bdev *bdev)
 	if (bdev->phys_blocklen == 0) {
 		bdev->phys_blocklen = spdk_bdev_get_data_block_size(bdev);
 	}
-
-	TAILQ_INIT(&bdev->internal.open_descs);
-	TAILQ_INIT(&bdev->internal.locked_ranges);
-	TAILQ_INIT(&bdev->internal.pending_locked_ranges);
-
-	TAILQ_INIT(&bdev->aliases);
 
 	bdev->internal.reset_in_progress = NULL;
 
@@ -6186,7 +6214,7 @@ _remove_notify(void *arg)
 	pthread_mutex_unlock(&desc->mutex);
 }
 
-/* Must be called while holding bdev->internal.mutex.
+/* Must be called while holding g_bdev_mgr.mutex and bdev->internal.mutex.
  * returns: 0 - bdev removed and ready to be destructed.
  *          -EBUSY - bdev can't be destructed yet.  */
 static int
@@ -6194,6 +6222,7 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_desc	*desc, *tmp;
 	int			rc = 0;
+	char			uuid[SPDK_UUID_STRING_LEN];
 
 	/* Notify each descriptor about hotremoval */
 	TAILQ_FOREACH_SAFE(desc, &bdev->internal.open_descs, link, tmp) {
@@ -6214,7 +6243,12 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
 	if (rc == 0) {
 		TAILQ_REMOVE(&g_bdev_mgr.bdevs, bdev, internal.link);
 		SPDK_DEBUGLOG(bdev, "Removing bdev %s from list done\n", bdev->name);
-		bdev_name_del(&bdev->internal.bdev_name);
+
+		/* Delete the name and the UUID alias */
+		spdk_uuid_fmt_lower(uuid, sizeof(uuid), &bdev->uuid);
+		bdev_name_del_unsafe(&bdev->internal.bdev_name);
+		bdev_alias_del(bdev, uuid, bdev_name_del_unsafe);
+
 		spdk_notify_send("bdev_unregister", spdk_bdev_get_name(bdev));
 	}
 
