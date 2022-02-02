@@ -56,12 +56,14 @@ function compare_block() {
 	local a2_name=$3
 	local -n a1=$2
 	local -n a2=$3
+	local len1=${#a1[@]}
+	local len2=${#a2[@]}
 	local ret=1
 
-	if (( ${#a1[@]} < block )); then
-		echo "ERROR: compare_block: array1 is too short"
-	elif (( ${#a2[@]} < block )); then
-		echo "ERROR: compare_block: array2 is too short"
+	if (( len1 < block )); then
+		echo "ERROR: compare_block: $a1_name is too short ($len1 < $block)"
+	elif (( len2 < block )); then
+		echo "ERROR: compare_block: $a2_name is too short ($len2 < $block)"
 	elif [[ -z ${a1[block]} && -z ${a2[block]} ]]; then
 		echo "ERROR: both blocks are null"
 	elif [[ ${a1[block]} != ${a2[block]} ]]; then
@@ -80,31 +82,42 @@ function compare_blocks() {
 	local -n a2=$2
 	local start=${3:-0}
 	local count=${4:-}
+	local len1=${#a1[@]}
+	local len2=${#a2[@]}
 	local block
+	local good=0
 	local ret=0
 
 	if [[ -z $count ]]; then
-		local l1=${#a1[@]}
-		local l2=${#a2[@]}
-		if (( l1 != l2 )); then
-			echo "ERROR: arrays have different lengths ($l1, $l2)"
+		if (( len1 != len2 )); then
+			echo "ERROR: $a1_name and $a2_name have different lengths ($len1, $len2)"
 			xtrace_restore
 			return $ret
 		fi
-		(( count = l1 - start ))
+		(( count = len1 - start ))
 	fi
 
 	for (( block=start; block < (start + count); block++ )); do
-		compare_block $block $a1_name $a2_name && continue
+		if compare_block $block $a1_name $a2_name; then
+			(( good++ )) || true
+			continue
+		fi
 		ret=1
 		break
 	done
+
+	if (( ret == 0 )); then
+		echo "compare_blocks: found $good matching blocks"
+	fi
 
 	xtrace_restore
 	return $ret
 }
 
 function test_esnap_compare_with_lvol_bdev() {
+	# Ensure that writes to an external snapshot perform copy-on write
+	# whether the write is entirely on one cluster or spans multiple.
+
 	local block_size=4096
 	local esnap_size_mb=1
 	local esnap_block_count=$(( esnap_size_mb * 1024 * 1024 / block_size ))
@@ -126,8 +139,8 @@ function test_esnap_compare_with_lvol_bdev() {
 	lvs_uuid=$(rpc_cmd bdev_lvol_create_lvstore -c "$lvs_cluster_size" "$malloc_name" lvs_test)
 
 	# Create a clone of the external snapshot.
-	lvol_uuid1=$(rpc_cmd bdev_lvol_clone_bdev lvs_test "$esnap_name" lvol_test1)
-	nbd_start_disks "$DEFAULT_RPC_ADDR" "$lvol_uuid1" /dev/nbd0
+	lvol_uuid=$(rpc_cmd bdev_lvol_clone_bdev lvs_test "$esnap_name" lvol_test1)
+	nbd_start_disks "$DEFAULT_RPC_ADDR" "$lvol_uuid" /dev/nbd0
 
 	# Read the clone content and verify that it matches the external snapshot.
 	lvol_sums1=( $(get_block_checksums /dev/nbd0 $block_size 0 $esnap_block_count) )
@@ -156,8 +169,8 @@ function test_esnap_compare_with_lvol_bdev() {
 
 	# Clean up the lvol
 	nbd_stop_disks "$DEFAULT_RPC_ADDR" /dev/nbd0
-	rpc_cmd bdev_lvol_delete "$lvol_uuid1"
-	rpc_cmd bdev_get_bdevs -b "$lvol_uuid1" && false
+	rpc_cmd bdev_lvol_delete "$lvol_uuid"
+	rpc_cmd bdev_get_bdevs -b "$lvol_uuid" && false
 
 	# Verify the external snapshot did not change.
 	nbd_start_disks "$DEFAULT_RPC_ADDR" "$esnap_name" /dev/nbd0
@@ -172,6 +185,64 @@ function test_esnap_compare_with_lvol_bdev() {
 	check_leftover_devices
 }
 
+function test_esnap_partial_last_cluster() {
+	# The external snapshot is 3 MiB, the cluster size is 2 MiB.  The lvol
+	# should be 2 MiB.
+	#
+	# If the external clone is grown to land on a cluster boundary, reads
+	# beyond the end of the external snapshot will be zeroes.
+
+	local block_size=4096
+	local esnap_size_mb=3
+	local esnap_full_cluster_size_mb=4
+	local esnap_block_count=$(( esnap_size_mb * 1024 * 1024 / block_size ))
+	local lvs_size_mb=$(( esnap_size_mb * 4 ))
+	local lvs_cluster_size=$(( 2 * 1024 * 1024 ))
+	local blocks_per_cluster=$(( lvs_cluster_size / block_size ))
+	local esnap_name
+
+	# Create an external snapshot device, fill each block with unique content,
+	# then remember a hash of each block.
+	esnap_name=$(rpc_cmd bdev_malloc_create $esnap_size_mb $block_size)
+	nbd_start_disks "$DEFAULT_RPC_ADDR" "$esnap_name" /dev/nbd0
+	dd if=/dev/urandom of=/dev/nbd0 oflag=direct bs=1024k count=$esnap_size_mb status=none
+	esnap_sums=( $(get_block_checksums /dev/nbd0 $block_size 0 $esnap_block_count))
+	nbd_stop_disks "$DEFAULT_RPC_ADDR" /dev/nbd0
+
+	# Create the lvstore
+	malloc_name=$(rpc_cmd bdev_malloc_create $lvs_size_mb $block_size)
+	lvs_uuid=$(rpc_cmd bdev_lvol_create_lvstore -c "$lvs_cluster_size" "$malloc_name" lvs_test)
+
+	# Create a clone of the external snapshot.
+	lvol_uuid=$(rpc_cmd bdev_lvol_clone_bdev lvs_test "$esnap_name" lvol_test1)
+
+	# Get the size of both bdevs to verify they are the same.
+	esnap_j=$(rpc_cmd bdev_get_bdevs -b "$esnap_name")
+	esnap_blocksize=$(jq -r '.[0].block_size' <<< "$esnap_j")
+	esnap_numblocks=$(jq -r '.[0].num_blocks' <<< "$esnap_j")
+	lvol_j=$(rpc_cmd bdev_get_bdevs -b "$lvol_uuid")
+	lvol_blocksize=$(jq -r '.[0].block_size' <<< "$lvol_j")
+	lvol_numblocks=$(jq -r '.[0].num_blocks' <<< "$lvol_j")
+	lvol_j=$(rpc_cmd bdev_get_bdevs -b "$lvol_uuid")
+	lvol_blocksize=$(jq -r '.[0].block_size' <<< "$lvol_j")
+	lvol_numblocks=$(jq -r '.[0].num_blocks' <<< "$lvol_j")
+	(( block_size == lvol_blocksize ))
+	(( lvol_blocksize * lvol_numblocks == esnap_full_cluster_size_mb * 1024 * 1024 ))
+
+	nbd_start_disks "$DEFAULT_RPC_ADDR" "$lvol_uuid" /dev/nbd0
+	lvol_sums=( $(get_block_checksums /dev/nbd0 $block_size 0 $lvol_numblocks))
+	compare_blocks esnap_sums lvol_sums 0 $esnap_block_count
+	zero_sums=( $(get_block_checksums /dev/zero $block_size 0 $lvol_numblocks) )
+	compare_blocks zero_sums lvol_sums $esnap_numblocks $((lvol_numblocks - esnap_numblocks))
+
+	nbd_stop_disks "$DEFAULT_RPC_ADDR" /dev/nbd0
+	rpc_cmd bdev_lvol_delete_lvstore -u "$lvs_uuid"
+	rpc_cmd bdev_lvol_get_lvstores -u "$lvs_uuid" && false
+	rpc_cmd bdev_malloc_delete "$malloc_name"
+	rpc_cmd bdev_malloc_delete "$esnap_name"
+	check_leftover_devices
+}
+
 $SPDK_BIN_DIR/spdk_tgt &
 spdk_pid=$!
 trap 'killprocess "$spdk_pid"; exit 1' SIGINT SIGTERM EXIT
@@ -179,6 +250,7 @@ waitforlisten $spdk_pid
 modprobe nbd
 
 run_test "test_esnap_compare_with_lvol_bdev" test_esnap_compare_with_lvol_bdev
+#run_test "test_esnap_partial_last_cluster" test_esnap_partial_last_cluster
 
 trap - SIGINT SIGTERM EXIT
 killprocess $spdk_pid
