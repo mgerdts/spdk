@@ -3913,6 +3913,14 @@ void spdk_nvme_cuse_update_namespaces(struct spdk_nvme_ctrlr *ctrlr);
  */
 typedef void (*spdk_nvme_reg_cb)(void *ctx, uint64_t value, const struct spdk_nvme_cpl *cpl);
 
+/**
+ * Signature for callback invoked when transport specific controller initialization is done.
+ *
+ * \param ctrlr NVMe controller.
+ * \param rc Initialization result. Zero for success.
+ */
+typedef void (*spdk_nvme_transport_ctrlr_init_cb)(struct spdk_nvme_ctrlr *ctrlr, int rc);
+
 struct nvme_request;
 
 struct spdk_nvme_transport;
@@ -4020,6 +4028,8 @@ struct spdk_nvme_transport_ops {
 	int (*ctrlr_get_memory_domains)(const struct spdk_nvme_ctrlr *ctrlr,
 					struct spdk_memory_domain **domains,
 					int array_size);
+
+	int (*ctrlr_init)(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb);
 };
 
 /**

@@ -789,6 +789,16 @@ enum nvme_ctrlr_state {
 	NVME_CTRLR_STATE_WAIT_FOR_HOST_ID,
 
 	/**
+	 * Let transport layer do its part of initialization.
+	 */
+	NVME_CTRLR_STATE_TRANSPORT_INIT,
+
+	/**
+	 * Waiting for transport layer to finish initialization.
+	 */
+	NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT,
+
+	/**
 	 * Controller initialization has completed and the controller is ready.
 	 */
 	NVME_CTRLR_STATE_READY,
@@ -1533,6 +1543,8 @@ void nvme_transport_poll_group_free_stats(struct spdk_nvme_transport_poll_group 
 		struct spdk_nvme_transport_poll_group_stat *stats);
 enum spdk_nvme_transport_type nvme_transport_get_trtype(const struct spdk_nvme_transport
 		*transport);
+int nvme_transport_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb);
+
 /*
  * Below ref related functions must be called with the global
  *  driver lock held for the multi-process condition.

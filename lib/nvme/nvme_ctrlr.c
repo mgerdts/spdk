@@ -1435,6 +1435,10 @@ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
 		return "set host ID";
 	case NVME_CTRLR_STATE_WAIT_FOR_HOST_ID:
 		return "wait for set host ID";
+	case NVME_CTRLR_STATE_TRANSPORT_INIT:
+		return "transport specific initialization";
+	case NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT:
+		return "wait for transport specific intialization";
 	case NVME_CTRLR_STATE_READY:
 		return "ready";
 	case NVME_CTRLR_STATE_ERROR:
@@ -2954,7 +2958,7 @@ nvme_ctrlr_set_host_id_done(void *arg, const struct spdk_nvme_cpl *cpl)
 		NVME_CTRLR_DEBUGLOG(ctrlr, "Set Features - Host ID was successful\n");
 	}
 
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_TRANSPORT_INIT, ctrlr->opts.admin_timeout_ms);
 }
 
 static int
@@ -2970,7 +2974,7 @@ nvme_ctrlr_set_host_id(struct spdk_nvme_ctrlr *ctrlr)
 		 * Set Features - Host Identifier after Connect, so we don't need to do anything here.
 		 */
 		NVME_CTRLR_DEBUGLOG(ctrlr, "NVMe-oF transport - not sending Set Features - Host ID\n");
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_TRANSPORT_INIT, ctrlr->opts.admin_timeout_ms);
 		return 0;
 	}
 
@@ -2987,7 +2991,7 @@ nvme_ctrlr_set_host_id(struct spdk_nvme_ctrlr *ctrlr)
 	/* If the user specified an all-zeroes host identifier, don't send the command. */
 	if (spdk_mem_all_zero(host_id, host_id_size)) {
 		NVME_CTRLR_DEBUGLOG(ctrlr, "User did not specify host ID - not sending Set Features - Host ID\n");
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_TRANSPORT_INIT, ctrlr->opts.admin_timeout_ms);
 		return 0;
 	}
 
@@ -3777,6 +3781,19 @@ nvme_ctrlr_process_init_enable_wait_for_ready_1(void *ctx, uint64_t value,
 	}
 }
 
+static void
+nvme_transport_ctrlr_init_done(struct spdk_nvme_ctrlr *ctrlr, int rc)
+{
+	assert(ctrlr->state == NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT);
+	if (rc) {
+		NVME_CTRLR_ERRLOG(ctrlr, "Failed to do transport specific initialization: rc %d\n",
+				  rc);
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
+	} else {
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
+	}
+}
+
 /**
  * This function will be called repeatedly during initialization until the controller is ready.
  */
@@ -3979,6 +3996,18 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 		rc = nvme_ctrlr_set_host_id(ctrlr);
 		break;
 
+	case NVME_CTRLR_STATE_TRANSPORT_INIT:
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT,
+				     ctrlr->opts.admin_timeout_ms);
+		rc = nvme_transport_ctrlr_init(ctrlr, nvme_transport_ctrlr_init_done);
+		if (rc == -ENOTSUP) {
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
+			rc = 0;
+		} else if (rc) {
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
+		}
+		break;
+
 	case NVME_CTRLR_STATE_READY:
 		NVME_CTRLR_DEBUGLOG(ctrlr, "Ctrlr already in ready state\n");
 		return 0;
@@ -4008,6 +4037,7 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 	case NVME_CTRLR_STATE_WAIT_FOR_SUPPORTED_INTEL_LOG_PAGES:
 	case NVME_CTRLR_STATE_WAIT_FOR_DB_BUF_CFG:
 	case NVME_CTRLR_STATE_WAIT_FOR_HOST_ID:
+	case NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT:
 		spdk_nvme_qpair_process_completions(ctrlr->adminq, 0);
 		break;
 

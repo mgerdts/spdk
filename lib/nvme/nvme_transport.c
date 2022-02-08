@@ -824,3 +824,15 @@ enum spdk_nvme_transport_type nvme_transport_get_trtype(const struct spdk_nvme_t
 {
 	return transport->ops.type;
 }
+
+int
+nvme_transport_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb)
+{
+	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
+
+	if (transport->ops.ctrlr_init) {
+		return transport->ops.ctrlr_init(ctrlr, cb);
+	}
+
+	return -ENOTSUP;
+}
