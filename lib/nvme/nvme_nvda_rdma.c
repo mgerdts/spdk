@@ -1443,9 +1443,13 @@ nvme_rdma_get_memory_translation(struct nvme_request *req, struct nvme_rdma_qpai
 						       req->payload.opts->memory_domain_ctx,
 						       rqpair->memory_domain->domain, &ctx, _ctx->addr,
 						       _ctx->length, &dma_translation);
-		if (spdk_unlikely(rc) || dma_translation.iov_count != 1) {
-			SPDK_ERRLOG("DMA memory translation failed, rc %d, iov count %u\n", rc, dma_translation.iov_count);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("DMA memory translation failed, rc %d\n", rc);
 			return rc;
+		} else if (spdk_unlikely(dma_translation.iov_count != 1)) {
+			SPDK_ERRLOG("Translation to multiple iovs is not supported, iov count %u\n",
+				    dma_translation.iov_count);
+			return -ENOTSUP;
 		}
 
 		_ctx->lkey = dma_translation.rdma.lkey;
