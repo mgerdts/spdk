@@ -93,6 +93,20 @@ nvme_transport_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 	return 0;
 }
 
+bool g_async_transport_ctrlr_init;
+DEFINE_RETURN_MOCK(nvme_transport_ctrlr_init, int);
+int
+nvme_transport_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb)
+{
+	if (g_async_transport_ctrlr_init) {
+		HANDLE_RETURN_MOCK(nvme_transport_ctrlr_init);
+		return 0;
+	}
+
+	cb(ctrlr, ut_nvme_transport_ctrlr_init_mocked ? MOCK_GET(nvme_transport_ctrlr_init) : 0);
+	return 0;
+}
+
 struct spdk_nvme_ctrlr *nvme_transport_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 		const struct spdk_nvme_ctrlr_opts *opts,
 		void *devhandle)
@@ -3250,6 +3264,57 @@ test_nvme_ctrlr_get_memory_domains(void)
 	MOCK_CLEAR(nvme_transport_ctrlr_get_memory_domains);
 }
 
+static void
+test_nvme_ctrlr_transport_init(void)
+{
+	DECLARE_AND_CONSTRUCT_CTRLR();
+
+
+	/* Sync transport init succeeded */
+	ctrlr.state = NVME_CTRLR_STATE_TRANSPORT_INIT;
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr_process_init(&ctrlr) == 0);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_READY);
+
+	/* Sync transport init failed */
+	ctrlr.state = NVME_CTRLR_STATE_TRANSPORT_INIT;
+	MOCK_SET(nvme_transport_ctrlr_init, -1);
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr_process_init(&ctrlr) == 0);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_ERROR);
+	MOCK_CLEAR(nvme_transport_ctrlr_init);
+
+	g_async_transport_ctrlr_init = true;
+
+	/* Async transport init succeeded */
+	ctrlr.state = NVME_CTRLR_STATE_TRANSPORT_INIT;
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr_process_init(&ctrlr) == 0);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT);
+	nvme_transport_ctrlr_init_done(&ctrlr, 0);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_READY);
+
+	/* Async transport init failed */
+	ctrlr.state = NVME_CTRLR_STATE_TRANSPORT_INIT;
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr_process_init(&ctrlr) == 0);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_WAIT_FOR_TRANSPORT_INIT);
+	nvme_transport_ctrlr_init_done(&ctrlr, -1);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_ERROR);
+
+	/* Transport init not supported */
+	ctrlr.state = NVME_CTRLR_STATE_TRANSPORT_INIT;
+	MOCK_SET(nvme_transport_ctrlr_init, -ENOTSUP);
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr_process_init(&ctrlr) == 0);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_READY);
+	MOCK_CLEAR(nvme_transport_ctrlr_init);
+
+	/* Transport init failed without cb */
+	ctrlr.state = NVME_CTRLR_STATE_TRANSPORT_INIT;
+	MOCK_SET(nvme_transport_ctrlr_init, -1);
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr_process_init(&ctrlr) == -1);
+	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_ERROR);
+	MOCK_CLEAR(nvme_transport_ctrlr_init);
+
+	g_async_transport_ctrlr_init = false;
+}
+
 int main(int argc, char **argv)
 {
 	CU_pSuite	suite = NULL;
@@ -3304,6 +3369,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_nvme_ctrlr_parse_ana_log_page);
 	CU_ADD_TEST(suite, test_nvme_ctrlr_ana_resize);
 	CU_ADD_TEST(suite, test_nvme_ctrlr_get_memory_domains);
+	CU_ADD_TEST(suite, test_nvme_ctrlr_transport_init);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
