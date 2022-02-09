@@ -400,23 +400,6 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 	rqpair = nvme_rdma_qpair(req->qpair);
 	TAILQ_REMOVE(&rqpair->outstanding_reqs, rdma_req, link);
 
-	if (spdk_unlikely(rqpair->qpair.id == 0) &&
-	    spdk_unlikely(req->cmd.opc == SPDK_NVME_OPC_IDENTIFY &&
-			  req->cmd.cdw10_bits.identify.cns == SPDK_NVME_IDENTIFY_CTRLR)) {
-		struct spdk_nvme_ctrlr_data *cdata;
-		struct spdk_nvme_ctrlr_data_vendor *cdata_vendor;
-		assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_CONTIG);
-		cdata = req->payload.contig_or_cb_arg;
-		cdata_vendor = (struct spdk_nvme_ctrlr_data_vendor *)cdata->vs;
-		SPDK_NOTICELOG("Identify controller response: vendor cdata 0x%08x\n",
-			       cdata_vendor->ovsncs.raw);
-		if (!cdata_vendor->ovsncs.bits.passthrough_sqe) {
-			SPDK_ERRLOG("Target doesn't support SQE mode, failing connection\n");
-			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
-		}
-	}
-
 	nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
 	nvme_free_request(req);
 }
@@ -3074,6 +3057,16 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 static int
 nvme_rdma_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb)
 {
+	struct spdk_nvme_ctrlr_data_vendor *cdata_vendor;
+
+	cdata_vendor = (struct spdk_nvme_ctrlr_data_vendor *)ctrlr->cdata.vs;
+	SPDK_NOTICELOG("NVDA_RDMA controller init: vendor cdata 0x%08x\n",
+		       cdata_vendor->ovsncs.raw);
+	if (!cdata_vendor->ovsncs.bits.passthrough_sqe) {
+		SPDK_ERRLOG("Target doesn't support SQE mode, failing connection\n");
+		return -1;
+	}
+
 	nvme_fabric_ctrlr_update_ioccsz(ctrlr);
 	cb(ctrlr, 0);
 	return 0;
