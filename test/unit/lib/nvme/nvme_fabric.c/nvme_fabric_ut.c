@@ -435,6 +435,26 @@ test_nvme_fabric_qpair_connect(void)
 	CU_ASSERT(rc == -EINVAL);
 }
 
+static void
+test_nvme_fabric_ctrlr_update_ioccsz(void)
+{
+	struct spdk_nvme_ctrlr ctrlr = {};
+
+	/* Minimum allowed values */
+	ctrlr.cdata.nvmf_specific.ioccsz = 260;
+	ctrlr.cdata.nvmf_specific.icdoff = 0;
+	nvme_fabric_ctrlr_update_ioccsz(&ctrlr);
+	CU_ASSERT(ctrlr.ioccsz_bytes == 4096);
+	CU_ASSERT(ctrlr.icdoff == 0);
+
+	/* Maximum allowed values */
+	ctrlr.cdata.nvmf_specific.ioccsz = 0xFFFF;
+	ctrlr.cdata.nvmf_specific.icdoff = 0xFFFF;
+	nvme_fabric_ctrlr_update_ioccsz(&ctrlr);
+	CU_ASSERT(ctrlr.ioccsz_bytes == 0xFFFF * 16 - 64);
+	CU_ASSERT(ctrlr.icdoff == 0xFFFF);
+}
+
 int main(int argc, char **argv)
 {
 	CU_pSuite	suite = NULL;
@@ -449,6 +469,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_nvme_fabric_get_discovery_log_page);
 	CU_ADD_TEST(suite, test_nvme_fabric_discover_probe);
 	CU_ADD_TEST(suite, test_nvme_fabric_qpair_connect);
+	CU_ADD_TEST(suite, test_nvme_fabric_ctrlr_update_ioccsz);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
