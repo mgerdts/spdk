@@ -70,6 +70,7 @@ DEFINE_STUB_V(spdk_memory_domain_destroy, (struct spdk_memory_domain *device));
 DEFINE_STUB(spdk_memory_domain_pull_data, int, (struct spdk_memory_domain *src_domain,
 		void *src_domain_ctx, struct iovec *src_iov, uint32_t src_iov_cnt, struct iovec *dst_iov,
 		uint32_t dst_iov_cnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg), 0);
+DEFINE_STUB_V(nvme_fabric_ctrlr_update_ioccsz, (struct spdk_nvme_ctrlr *ctrlr));
 
 DEFINE_RETURN_MOCK(spdk_memory_domain_create, int);
 int
@@ -1370,6 +1371,27 @@ test_nvme_rdma_poll_group_get_qpair_by_id(void)
 	STAILQ_REMOVE_HEAD(&group.destroyed_qpairs, link);
 }
 
+
+static uint32_t g_ctrlr_init_done_count;
+
+static void
+ctrlr_init_done(struct spdk_nvme_ctrlr *ctrlr, int rc)
+{
+	CU_ASSERT(rc == 0);
+	++g_ctrlr_init_done_count;
+}
+
+static void
+test_nvme_rdma_ctrlr_init(void)
+{
+	struct nvme_rdma_ctrlr rctrlr = {};
+
+	CU_ASSERT(nvme_rdma_ctrlr_init(&rctrlr.ctrlr, ctrlr_init_done) == 0);
+	CU_ASSERT(g_ctrlr_init_done_count == 1);
+
+	g_ctrlr_init_done_count = 0;
+}
+
 int main(int argc, char **argv)
 {
 	CU_pSuite	suite = NULL;
@@ -1402,6 +1424,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_rdma_ctrlr_get_memory_domains);
 	CU_ADD_TEST(suite, test_rdma_get_memory_translation);
 	CU_ADD_TEST(suite, test_nvme_rdma_poll_group_get_qpair_by_id);
+	CU_ADD_TEST(suite, test_nvme_rdma_ctrlr_init);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
