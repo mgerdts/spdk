@@ -66,6 +66,7 @@ DEFINE_STUB(spdk_nvme_poll_group_process_completions, int64_t, (struct spdk_nvme
 
 DEFINE_STUB(nvme_poll_group_connect_qpair, int, (struct spdk_nvme_qpair *qpair), 0);
 DEFINE_STUB_V(nvme_qpair_resubmit_requests, (struct spdk_nvme_qpair *qpair, uint32_t num_requests));
+DEFINE_STUB_V(nvme_fabric_ctrlr_update_ioccsz, (struct spdk_nvme_ctrlr *ctrlr));
 
 static void
 test_nvme_tcp_pdu_set_data_buf(void)
@@ -1573,6 +1574,26 @@ test_nvme_tcp_ctrlr_delete_io_qpair(void)
 	CU_ASSERT(rc == 0);
 }
 
+static uint32_t g_ctrlr_init_done_count;
+
+static void
+ctrlr_init_done(struct spdk_nvme_ctrlr *ctrlr, int rc)
+{
+	CU_ASSERT(rc == 0);
+	++g_ctrlr_init_done_count;
+}
+
+static void
+test_nvme_tcp_ctrlr_init(void)
+{
+	struct nvme_tcp_ctrlr tctrlr = {};
+
+	CU_ASSERT(nvme_tcp_ctrlr_init(&tctrlr.ctrlr, ctrlr_init_done) == 0);
+	CU_ASSERT(g_ctrlr_init_done_count == 1);
+
+	g_ctrlr_init_done_count = 0;
+}
+
 int main(int argc, char **argv)
 {
 	CU_pSuite	suite = NULL;
@@ -1607,6 +1628,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_nvme_tcp_ctrlr_disconnect_qpair);
 	CU_ADD_TEST(suite, test_nvme_tcp_ctrlr_create_io_qpair);
 	CU_ADD_TEST(suite, test_nvme_tcp_ctrlr_delete_io_qpair);
+	CU_ADD_TEST(suite, test_nvme_tcp_ctrlr_init);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();

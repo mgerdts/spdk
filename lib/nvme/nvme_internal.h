@@ -1249,6 +1249,7 @@ int	nvme_fabric_ctrlr_discover(struct spdk_nvme_ctrlr *ctrlr,
 int	nvme_fabric_qpair_connect(struct spdk_nvme_qpair *qpair, uint32_t num_entries);
 int	nvme_fabric_qpair_connect_async(struct spdk_nvme_qpair *qpair, uint32_t num_entries);
 int	nvme_fabric_qpair_connect_poll(struct spdk_nvme_qpair *qpair);
+void	nvme_fabric_ctrlr_update_ioccsz(struct spdk_nvme_ctrlr *ctrlr);
 
 typedef int (*spdk_nvme_parse_ana_log_page_cb)(
 	const struct spdk_nvme_ana_group_descriptor *desc, void *cb_arg);

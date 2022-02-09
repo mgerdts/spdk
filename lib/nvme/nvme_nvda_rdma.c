@@ -488,13 +488,6 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
 		}
-
-		/* @todo: We set in-capsule related fields here because in nvme_ctrlr.c
-		 * it depends on transport type. Is there a better way?
-		 */
-		rqpair->qpair.ctrlr->ioccsz_bytes = cdata->nvmf_specific.ioccsz * 16 -
-			sizeof(struct spdk_nvme_cmd);
-		rqpair->qpair.ctrlr->icdoff = cdata->nvmf_specific.icdoff;
 	}
 
 	nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
@@ -2924,6 +2917,14 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 	return 1;
 }
 
+static int
+nvme_rdma_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb)
+{
+	nvme_fabric_ctrlr_update_ioccsz(ctrlr);
+	cb(ctrlr, 0);
+	return 0;
+}
+
 void
 spdk_nvme_nvda_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks);
 
@@ -2955,6 +2956,7 @@ static const struct spdk_nvme_transport_ops rdma_ops = {
 	.ctrlr_disconnect_qpair = nvme_rdma_ctrlr_disconnect_qpair,
 
 	.ctrlr_get_memory_domains = nvme_rdma_ctrlr_get_memory_domains,
+	.ctrlr_init = nvme_rdma_ctrlr_init,
 
 	.qpair_abort_reqs = nvme_rdma_qpair_abort_reqs,
 	.qpair_reset = nvme_rdma_qpair_reset,

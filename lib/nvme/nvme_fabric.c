@@ -667,3 +667,18 @@ nvme_fabric_qpair_connect(struct spdk_nvme_qpair *qpair, uint32_t num_entries)
 
 	return rc;
 }
+
+
+void
+nvme_fabric_ctrlr_update_ioccsz(struct spdk_nvme_ctrlr *ctrlr)
+{
+	if (ctrlr->cdata.nvmf_specific.ioccsz < 4) {
+		SPDK_ERRLOG("Incorrect IOCCSZ %u, the minimum value should be 4\n",
+			    ctrlr->cdata.nvmf_specific.ioccsz);
+		ctrlr->cdata.nvmf_specific.ioccsz = 4;
+		assert(0);
+	}
+
+	ctrlr->ioccsz_bytes = ctrlr->cdata.nvmf_specific.ioccsz * 16 - sizeof(struct spdk_nvme_cmd);
+	ctrlr->icdoff = ctrlr->cdata.nvmf_specific.icdoff;
+}
