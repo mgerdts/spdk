@@ -2404,6 +2404,14 @@ nvme_tcp_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 	free(stats);
 }
 
+static int
+nvme_tcp_ctrlr_init(struct spdk_nvme_ctrlr *ctrlr, spdk_nvme_transport_ctrlr_init_cb cb)
+{
+	nvme_fabric_ctrlr_update_ioccsz(ctrlr);
+	cb(ctrlr, 0);
+	return 0;
+}
+
 const struct spdk_nvme_transport_ops tcp_ops = {
 	.name = "TCP",
 	.type = SPDK_NVME_TRANSPORT_TCP,
@@ -2428,6 +2436,8 @@ const struct spdk_nvme_transport_ops tcp_ops = {
 	.ctrlr_delete_io_qpair = nvme_tcp_ctrlr_delete_io_qpair,
 	.ctrlr_connect_qpair = nvme_tcp_ctrlr_connect_qpair,
 	.ctrlr_disconnect_qpair = nvme_tcp_ctrlr_disconnect_qpair,
+
+	.ctrlr_init = nvme_tcp_ctrlr_init,
 
 	.qpair_abort_reqs = nvme_tcp_qpair_abort_reqs,
 	.qpair_reset = nvme_tcp_qpair_reset,
