@@ -97,6 +97,10 @@ handling new connections. To notify transport layer `spdk_nvmf_poll_group_add` a
 Structure `spdk_scsi_lun` has been extended with new member `resizing` so that SCSI layer now reports
 unit attention for disk resize.
 
+### thread
+
+Added `spdk_thread_exec_msg()` API.
+
 ### trace
 
 Added `spdk_trace_create_tpoint_group_mask` to return tracepoint group mask from
