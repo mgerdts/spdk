@@ -72,6 +72,7 @@ struct esnap_create_ctx {
 };
 
 static void esnap_ctx_free(struct esnap_ctx *ctx);
+static void esnap_realloc_channels(void *esnap_ctx);
 
 static struct esnap_ctx *
 back_bs_dev_to_esnap_ctx(struct spdk_bs_dev *bs_dev)
@@ -127,9 +128,7 @@ get_io_channel(struct esnap_ctx *ctx)
 
 	if (spdk_unlikely(tid >= ctx->io_channels_count ||
 			  ctx->io_channels[tid] == NULL)) {
-		SPDK_NOTICELOG("blob 0x%" PRIx64 " thread %" PRIu64
-			       " needs io channel to be allocated\n",
-			       ctx->blob->id, tid);
+		spdk_thread_send_msg(ctx->thread, esnap_realloc_channels, ctx);
 		return NULL;
 	}
 	return ctx->io_channels[tid];
@@ -144,7 +143,7 @@ esnap_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *paylo
 
 	ch = get_io_channel(ctx);
 	if (spdk_unlikely(ch == NULL)) {
-		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
 		return;
 	}
 
@@ -170,7 +169,7 @@ esnap_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 
 	ch = get_io_channel(ctx);
 	if (spdk_unlikely(ch == NULL)) {
-		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
 		return;
 	}
 
@@ -188,7 +187,7 @@ esnap_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 
 	ch = get_io_channel(ctx);
 	if (spdk_unlikely(ch == NULL)) {
-		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENODEV);
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
 		return;
 	}
 
@@ -384,7 +383,8 @@ load_esnap_on_thread_done(void *arg1)
 }
 
 static void
-esnap_alloc_channels(struct esnap_ctx *esnap_ctx, esnap_alloc_channels_cb_t cb_fn, void *cb_arg)
+esnap_alloc_channels(struct esnap_ctx *esnap_ctx, uint64_t count,
+		     esnap_alloc_channels_cb_t cb_fn, void *cb_arg)
 {
 	struct load_on_thread_ctx	*lot_ctx;
 	uint64_t			new_count;
@@ -411,7 +411,7 @@ esnap_alloc_channels(struct esnap_ctx *esnap_ctx, esnap_alloc_channels_cb_t cb_f
 	lot_ctx->cb_arg = cb_arg;
 
 	/* +1 since thread_id starts from 1 */
-	new_count = spdk_thread_get_count() + 1;
+	new_count = count + 1;
 	if (new_count > esnap_ctx->io_channels_count) {
 		/*
 		 * We need to reallocate esnap_ctx->io_channels, but can't do it
@@ -461,6 +461,31 @@ esnap_alloc_channels(struct esnap_ctx *esnap_ctx, esnap_alloc_channels_cb_t cb_f
 	 */
 	spdk_for_each_thread(load_esnap_on_thread, lot_ctx,
 			     load_esnap_on_thread_done);
+}
+
+static void
+esnap_realloc_channels_done(void *_ctx, int bserrno)
+{
+	struct esnap_ctx *ctx = _ctx;
+
+	if (bserrno != 0) {
+		SPDK_ERRLOG("blob 0x%" PRIx64 "realloc channels failed: %d\n",
+			    ctx->blob->id, bserrno);
+	}
+}
+
+static void
+esnap_realloc_channels(void *_ctx)
+{
+	uint64_t		count;
+	struct esnap_ctx	*esnap_ctx = _ctx;
+
+	/*
+	 * If threads exited after a thread was added, the thread count may not
+	 * indicate the highest thread id.
+	 */
+	count = spdk_max(spdk_thread_get_id(esnap_ctx->thread), spdk_thread_get_count());
+	esnap_alloc_channels(esnap_ctx, count, esnap_realloc_channels_done, esnap_ctx);
 }
 
 /*
@@ -525,5 +550,6 @@ blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
 		return;
 	}
 
-	esnap_alloc_channels(esnap_ctx, esnap_open_done, create_ctx);
+	esnap_alloc_channels(esnap_ctx, spdk_thread_get_count(),
+			     esnap_open_done, create_ctx);
 }

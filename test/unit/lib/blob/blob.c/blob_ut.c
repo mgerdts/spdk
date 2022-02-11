@@ -8219,7 +8219,7 @@ blob_extclone_write(void)
 }
 
 static void
-blob_extclone_thread_add(void)
+_blob_extclone_thread_add(const char *read_fn)
 {
 	struct spdk_blob_store	*bs = g_bs;
 	struct spdk_blob_opts	opts;
@@ -8287,28 +8287,42 @@ blob_extclone_thread_add(void)
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
 
-	/* The various forms of read should all fail on a "new" thread. */
+	/*
+	 * Now, when the first IO on a thread should return -ENOMEM and the
+	 * subsequent should succeed. -ENOMEM is one of the real reasons
+	 * channel creation could fail, but there's not a good way to get the
+	 * real reason.
+	 */
 	set_thread(1);
 
-	/* readv should fail with ENODEV. */
-	g_bserrno = 0;
-	spdk_blob_io_read(blob, bs_ch, buf, 0, 1, bs_op_complete, NULL);
-	poll_threads();
-	CU_ASSERT(g_bserrno == -ENODEV);
-
-	/* readv() should fail with ENODEV */
+	/* read should first fail with -ENOMEM. */
 	iov.iov_base = buf;
 	iov.iov_len = bs->io_unit_size;
 	g_bserrno = 0;
-	spdk_blob_io_readv(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL);
+	if (strcmp(read_fn, "read") == 0) {
+		spdk_blob_io_read(blob, bs_ch, buf, 0, 1, bs_op_complete, NULL);
+	} else if (strcmp(read_fn, "readv") == 0) {
+		spdk_blob_io_readv(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL);
+	} else if (strcmp(read_fn, "readv_ext") == 0) {
+		spdk_blob_io_readv_ext(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL, NULL);
+	} else {
+		abort();
+	}
 	poll_threads();
-	CU_ASSERT(g_bserrno == -ENODEV);
+	CU_ASSERT(g_bserrno == -ENOMEM);
 
-	/* readv_ext() should fail with ENODEV */
-	g_bserrno = 0;
-	spdk_blob_io_readv_ext(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL, NULL);
+	/* Try again, it should succeed. */
+	if (strcmp(read_fn, "read") == 0) {
+		spdk_blob_io_read(blob, bs_ch, buf, 0, 1, bs_op_complete, NULL);
+	} else if (strcmp(read_fn, "readv") == 0) {
+		spdk_blob_io_readv(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL);
+	} else if (strcmp(read_fn, "readv_ext") == 0) {
+		spdk_blob_io_readv_ext(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL, NULL);
+	} else {
+		abort();
+	}
 	poll_threads();
-	CU_ASSERT(g_bserrno == -ENODEV);
+	CU_ASSERT(g_bserrno == 0);
 
 	/* Clean up */
 	free(buf);
@@ -8317,6 +8331,14 @@ blob_extclone_thread_add(void)
 	ut_blob_close_and_delete(bs, blob);
 	ut_close_malloc_dev(0);
 	poll_threads();
+}
+
+static void
+blob_extclone_thread_add(void)
+{
+	_blob_extclone_thread_add("read");
+	_blob_extclone_thread_add("readv");
+	_blob_extclone_thread_add("readv_ext");
 }
 
 static void
