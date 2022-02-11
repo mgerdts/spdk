@@ -43,6 +43,8 @@
 
 #include "blobstore.h"
 
+typedef void(*esnap_alloc_channels_cb_t)(void *ctx, int bserrno);
+
 struct esnap_ctx {
 	/* back_bs_dev must be first: see back_bs_dev_to_esnap_ctx() */
 	struct spdk_bs_dev	back_bs_dev;
@@ -280,13 +282,23 @@ esnap_ctx_free(struct esnap_ctx *ctx)
 }
 
 static void
-esnap_open_done(struct esnap_create_ctx *create_ctx, struct spdk_bs_dev *dev,
-		int bserrno)
+esnap_open_done(void *ctx, int bserrno)
 {
+	struct esnap_create_ctx *create_ctx = ctx;
+	struct esnap_ctx	*esnap_ctx = create_ctx->esnap_ctx;
+	struct spdk_bs_dev	*dev = NULL;
+
+	if (esnap_ctx != NULL && bserrno == 0) {
+		dev = &create_ctx->esnap_ctx->back_bs_dev;
+	}
 	assert((dev == NULL) ^ (bserrno == 0));
-	assert(create_ctx != NULL);
 
 	create_ctx->load_cb(create_ctx->load_arg, dev, bserrno);
+
+	if (bserrno != 0 && esnap_ctx != NULL) {
+		/* XXX-mg need to handle some channels allocated */
+		esnap_ctx_free(esnap_ctx);
+	}
 	free(create_ctx);
 }
 
@@ -312,9 +324,10 @@ esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 }
 
 struct load_on_thread_ctx {
-	struct esnap_create_ctx	*create_ctx;
-	struct esnap_ctx	*esnap_ctx;
-	int			rc;
+	struct esnap_ctx		*esnap_ctx;
+	esnap_alloc_channels_cb_t	cb_fn;
+	void				*cb_arg;
+	int				rc;
 };
 
 static void
@@ -353,19 +366,39 @@ static void
 load_esnap_on_thread_done(void *arg1)
 {
 	struct load_on_thread_ctx	*lot_ctx = arg1;
-	struct esnap_create_ctx		*create_ctx = lot_ctx->create_ctx;
 	struct esnap_ctx		*esnap_ctx = lot_ctx->esnap_ctx;
-	struct spdk_bs_dev		*bs_dev = &esnap_ctx->back_bs_dev;
 
 	assert(esnap_ctx->thread == spdk_get_thread());
 
-	if (lot_ctx->rc != 0) {
-		esnap_open_done(create_ctx, NULL, lot_ctx->rc);
-		esnap_ctx_free(esnap_ctx);
-	} else {
-		esnap_open_done(create_ctx, bs_dev, 0);
-	}
+	lot_ctx->cb_fn(lot_ctx->cb_arg, lot_ctx->rc);
 	free(lot_ctx);
+}
+
+static void
+esnap_alloc_channels(struct esnap_ctx *esnap_ctx, esnap_alloc_channels_cb_t cb_fn, void *cb_arg)
+{
+	struct load_on_thread_ctx *lot_ctx;
+
+	/* +1 since thread_id starts from 1 */
+	esnap_ctx->io_channels_count = spdk_thread_get_count() + 1;
+	esnap_ctx->io_channels = calloc(esnap_ctx->io_channels_count,
+					sizeof(*esnap_ctx->io_channels));
+	if (esnap_ctx->io_channels == NULL) {
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+
+	lot_ctx = calloc(1, sizeof(*lot_ctx));
+	if (lot_ctx == NULL) {
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+	lot_ctx->esnap_ctx = esnap_ctx;
+	lot_ctx->cb_fn = cb_fn;
+	lot_ctx->cb_arg = cb_arg;
+
+	spdk_for_each_thread(load_esnap_on_thread, lot_ctx,
+			     load_esnap_on_thread_done);
 }
 
 /*
@@ -377,12 +410,11 @@ blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
 		      blob_back_bs_dev_load_done_t load_cb,
 		      struct spdk_blob_load_ctx *load_cb_arg)
 {
-	struct esnap_create_ctx	*create_ctx;
 	uint32_t		io_unit_size = blob->bs->io_unit_size;
 	struct spdk_bdev	*bdev;
 	struct spdk_bs_dev	*back_bs_dev;
+	struct esnap_create_ctx	*create_ctx;
 	struct esnap_ctx	*esnap_ctx;
-	struct load_on_thread_ctx *lot_ctx;
 	int			rc;
 
 	if (blob == NULL || uuid_str == NULL || load_cb == NULL) {
@@ -401,15 +433,15 @@ blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
 
 	esnap_ctx = esnap_ctx_alloc(blob, uuid_str);
 	if (esnap_ctx == NULL) {
-		esnap_open_done(create_ctx, NULL, -ENOMEM);
+		load_cb(load_cb_arg, NULL, -ENOMEM);
 		return;
 	}
+	create_ctx->esnap_ctx = esnap_ctx;
 
-	rc = spdk_bdev_open_ext(uuid_str, false, esnap_bdev_event_cb, esnap_ctx,
-				&esnap_ctx->bdev_desc);
+	rc = spdk_bdev_open_ext(esnap_ctx->uuid, false, esnap_bdev_event_cb,
+				esnap_ctx, &esnap_ctx->bdev_desc);
 	if (rc != 0) {
-		esnap_ctx_free(esnap_ctx);
-		esnap_open_done(create_ctx, NULL, rc);
+		esnap_open_done(create_ctx, rc);
 		return;
 	}
 	bdev = spdk_bdev_desc_get_bdev(esnap_ctx->bdev_desc);
@@ -427,30 +459,9 @@ blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
 		SPDK_ERRLOG("External snapshot device %s block size %" PRIu32
 			    " larger than blobstore io_unit_size %" PRIu32 "\n",
 			    bdev->name, back_bs_dev->blocklen, io_unit_size);
-		esnap_ctx_free(esnap_ctx);
-		esnap_open_done(create_ctx, NULL, -EINVAL);
+		esnap_open_done(create_ctx, -EINVAL);
 		return;
 	}
 
-	/* +1 since thread_id starts from 1 */
-	esnap_ctx->io_channels_count = spdk_thread_get_count() + 1;
-	esnap_ctx->io_channels = calloc(esnap_ctx->io_channels_count,
-					sizeof(*esnap_ctx->io_channels));
-	if (esnap_ctx->io_channels == NULL) {
-		esnap_ctx_free(esnap_ctx);
-		esnap_open_done(create_ctx, NULL, -ENOMEM);
-		return;
-	}
-
-	lot_ctx = calloc(1, sizeof(*lot_ctx));
-	if (lot_ctx == NULL) {
-		esnap_ctx_free(esnap_ctx);
-		esnap_open_done(create_ctx, NULL, -ENOMEM);
-		return;
-	}
-	lot_ctx->create_ctx = create_ctx;
-	lot_ctx->esnap_ctx = esnap_ctx;
-
-	spdk_for_each_thread(load_esnap_on_thread, lot_ctx,
-			     load_esnap_on_thread_done);
+	esnap_alloc_channels(esnap_ctx, esnap_open_done, create_ctx);
 }
