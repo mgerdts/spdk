@@ -95,6 +95,7 @@ static struct spdk_memory_domain *g_bdevperf_memory_domain;
 struct spdk_memory_domain_rdma_ctx g_rdma_memory_domain_ctx;
 struct spdk_memory_domain_host_ctx g_host_memory_domain_ctx;
 static int g_io_unit_size = 0;
+static int g_io_alignment = 1;
 static struct spdk_thread *g_main_thread;
 static int g_time_in_sec = 0;
 static bool g_mix_specified = false;
@@ -1434,6 +1435,8 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 	TAILQ_INSERT_TAIL(&g_bdevperf.jobs, job, link);
 
 	for (n = 0; n < task_num; n++) {
+		size_t alignment = spdk_max(spdk_bdev_get_buf_align(job->bdev), (size_t)g_io_alignment);
+
 		task = calloc(1, sizeof(struct bdevperf_task));
 		if (!task) {
 			fprintf(stderr, "Failed to allocate task from memory\n");
@@ -1441,10 +1444,16 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 		}
 
 		if (g_memory_domains) {
-			task->buf = calloc(1, job->buf_size + spdk_bdev_get_buf_align(job->bdev));
-			/* @todo: handle alignment requirements */
+			/* Minimum alignment for posix_memalign is sizeof(void *) */
+			alignment = spdk_max(alignment, sizeof(void*));
+			rc = posix_memalign(&task->buf, alignment, job->buf_size);
+			if (rc) {
+				fprintf(stderr, "Failed to allocate aligned buffer: "
+					"rc %d, alignment %lu, size %lu\n",
+					rc, alignment, job->buf_size);
+			}
 		} else {
-			task->buf = spdk_zmalloc(job->buf_size, spdk_bdev_get_buf_align(job->bdev), NULL,
+			task->buf = spdk_zmalloc(job->buf_size, alignment, NULL,
 						 SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 		}
 		if (!task->buf) {
@@ -2215,6 +2224,9 @@ bdevperf_parse_arg(int ch, char *arg)
 			g_show_performance_real_time = 1;
 			g_show_performance_period_in_usec = tmp * 1000000;
 			break;
+		case 'a':
+			g_io_alignment = tmp;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -2247,6 +2259,7 @@ bdevperf_usage(void)
 	printf(" -D <type>                 enable using bdev API with memory domain and set source domain type: rdma, host\n");
 	printf(" -H <host_id>              host_id to use for host memory domain translation\n");
 	printf(" -O <size>                 IO unit size\n");
+	printf(" -a <alignment>            IO buffer alignment\n");
 }
 
 static int
@@ -2364,8 +2377,8 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:O:", NULL,
-				      bdevperf_parse_arg, bdevperf_usage)) !=
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:O:a:",
+				      NULL, bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
 	}
