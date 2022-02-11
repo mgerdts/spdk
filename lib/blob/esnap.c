@@ -58,6 +58,7 @@ struct esnap_ctx {
 	uint64_t		io_channels_count;
 
 	/* Seldom used fields where alignment doesn't matter. */
+	struct spdk_io_channel	**old_io_channels;
 	struct spdk_bdev	*bdev;
 	struct spdk_thread	*thread;
 	char			*uuid;
@@ -354,6 +355,11 @@ load_esnap_on_thread(void *arg1)
 		return;
 	}
 
+	if (esnap_ctx->io_channels[tid] != NULL) {
+		/* Must be in the midst of a realloc, this one already done. */
+		return;
+	}
+
 	esnap_ctx->io_channels[tid] = spdk_bdev_get_io_channel(esnap_ctx->bdev_desc);
 	if (!esnap_ctx->io_channels[tid] && !spdk_thread_is_exited(spdk_get_thread())) {
 		SPDK_ERRLOG("Failed to create external snapshot bdev io_channel\n");
@@ -370,6 +376,9 @@ load_esnap_on_thread_done(void *arg1)
 
 	assert(esnap_ctx->thread == spdk_get_thread());
 
+	free(esnap_ctx->old_io_channels);
+	esnap_ctx->old_io_channels = NULL;
+
 	lot_ctx->cb_fn(lot_ctx->cb_arg, lot_ctx->rc);
 	free(lot_ctx);
 }
@@ -377,14 +386,18 @@ load_esnap_on_thread_done(void *arg1)
 static void
 esnap_alloc_channels(struct esnap_ctx *esnap_ctx, esnap_alloc_channels_cb_t cb_fn, void *cb_arg)
 {
-	struct load_on_thread_ctx *lot_ctx;
+	struct load_on_thread_ctx	*lot_ctx;
+	uint64_t			new_count;
+	struct spdk_io_channel		**new_channels;
 
-	/* +1 since thread_id starts from 1 */
-	esnap_ctx->io_channels_count = spdk_thread_get_count() + 1;
-	esnap_ctx->io_channels = calloc(esnap_ctx->io_channels_count,
-					sizeof(*esnap_ctx->io_channels));
-	if (esnap_ctx->io_channels == NULL) {
-		cb_fn(cb_arg, -ENOMEM);
+	assert(esnap_ctx->thread == spdk_get_thread());
+
+	if (esnap_ctx->old_io_channels != NULL) {
+		/*
+		 * Another instance of this function has kicked off a realloc
+		 * that is still in progress.
+		 */
+		cb_fn(cb_arg, -EBUSY);
 		return;
 	}
 
@@ -397,6 +410,55 @@ esnap_alloc_channels(struct esnap_ctx *esnap_ctx, esnap_alloc_channels_cb_t cb_f
 	lot_ctx->cb_fn = cb_fn;
 	lot_ctx->cb_arg = cb_arg;
 
+	/* +1 since thread_id starts from 1 */
+	new_count = spdk_thread_get_count() + 1;
+	if (new_count > esnap_ctx->io_channels_count) {
+		/*
+		 * We need to reallocate esnap_ctx->io_channels, but can't do it
+		 * with realloc(). If realloc() were used and it had to allocate
+		 * copy, and free, the space it frees may be referenced by
+		 * another thread running on another reactor.
+		 *
+		 * Instead, allocate the new space and copy existing io channel
+		 * pointers to this new space. Other threads running
+		 * concurrently will read from the old space during the copy.
+		 * Once the copy is complete, update esnap_ctx->io_channels to
+		 * reference the new space. Now any threads that are running
+		 * concurrently with the rest of the processing will run on the
+		 * new space.
+		 *
+		 * Once spdk_for_each_thread() has done its thing on each
+		 * thread, we know that anyone that was running concurrently
+		 * with this switcharoo has is no longer at risk of referencing
+		 * old memory and the load_esnap_on_thread_done() callback can
+		 * free the old memory.
+		 */
+		new_channels = calloc(new_count, sizeof(*esnap_ctx->io_channels));
+		if (new_channels == NULL) {
+			free(lot_ctx);
+			cb_fn(cb_arg, -ENOMEM);
+			return;
+		}
+		if (esnap_ctx->io_channels != NULL) {
+			memcpy(new_channels, esnap_ctx->io_channels,
+			       sizeof(*esnap_ctx->io_channels) * esnap_ctx->io_channels_count);
+			esnap_ctx->old_io_channels = esnap_ctx->io_channels;
+		}
+		esnap_ctx->io_channels = new_channels;
+		esnap_ctx->io_channels_count = new_count;
+		/*
+		 * XXX-mg: do we need a memory barrier here to make the story I
+		 * told above true?  How about to ensure that the update to
+		 * io_channels_count happens after io_channels?
+		 */
+	}
+
+	/*
+	 * Load on all threads even if we didn't realloc. It may be that there
+	 * was some thread that did not initialize the first time due to
+	 * implementation details of tid allocation that are abstracted away
+	 * from here.
+	 */
 	spdk_for_each_thread(load_esnap_on_thread, lot_ctx,
 			     load_esnap_on_thread_done);
 }
