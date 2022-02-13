@@ -71,6 +71,19 @@ struct esnap_create_ctx {
 	struct esnap_ctx		*esnap_ctx;
 };
 
+struct esnap_resub_ctx {
+	struct spdk_thread		*thread;
+	struct esnap_ctx		*ctx;
+	struct spdk_io_channel		*channel;
+	void				*payload;
+	struct iovec			*iov;
+	int				iovcnt;
+	uint32_t			lba_count;
+	uint64_t			lba;
+	struct spdk_bs_dev_cb_args	*cb_args;
+	struct spdk_blob_ext_io_opts	*ext_io_opts;
+};
+
 static void esnap_ctx_free(struct esnap_ctx *ctx);
 static void esnap_realloc_channels(void *esnap_ctx);
 
@@ -121,6 +134,35 @@ esnap_complete(struct spdk_bdev_io *bdev_io, bool success, void *args)
 	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, success ? 0 : -EIO);
 }
 
+static void
+realloc_io_ch_and_resub(struct esnap_ctx *ctx, struct spdk_io_channel *channel,
+			void *payload, struct iovec *iov, int iovcnt, uint64_t lba,
+			uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
+			struct spdk_blob_ext_io_opts *ext_io_opts)
+{
+	struct esnap_resub_ctx	*resub;
+
+	resub = calloc(1, sizeof(*resub));
+	if (resub == NULL) {
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
+		return;
+	}
+
+	resub->thread = spdk_get_thread();
+	resub->ctx = ctx;
+	resub->channel = channel;
+	resub->payload = payload;
+	resub->iov = iov;
+	resub->iovcnt = iovcnt;
+	resub->payload = payload;
+	resub->lba = lba;
+	resub->lba_count = lba_count;
+	resub->cb_args = cb_args;
+	resub->ext_io_opts = ext_io_opts;
+
+	spdk_thread_send_msg(ctx->thread, esnap_realloc_channels, resub);
+}
+
 static inline struct spdk_io_channel *
 get_io_channel(struct esnap_ctx *ctx)
 {
@@ -128,7 +170,9 @@ get_io_channel(struct esnap_ctx *ctx)
 
 	if (spdk_unlikely(tid >= ctx->io_channels_count ||
 			  ctx->io_channels[tid] == NULL)) {
-		spdk_thread_send_msg(ctx->thread, esnap_realloc_channels, ctx);
+		SPDK_NOTICELOG("blob 0x%" PRIx64 " thread %" PRIu64
+			       " needs io channel to be allocated\n",
+			       ctx->blob->id, tid);
 		return NULL;
 	}
 	return ctx->io_channels[tid];
@@ -143,7 +187,8 @@ esnap_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *paylo
 
 	ch = get_io_channel(ctx);
 	if (spdk_unlikely(ch == NULL)) {
-		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
+		realloc_io_ch_and_resub(ctx, channel, payload, NULL, 0, lba,
+					lba_count, cb_args, NULL);
 		return;
 	}
 
@@ -169,7 +214,8 @@ esnap_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 
 	ch = get_io_channel(ctx);
 	if (spdk_unlikely(ch == NULL)) {
-		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
+		realloc_io_ch_and_resub(ctx, channel, NULL, iov, iovcnt, lba,
+					lba_count, cb_args, NULL);
 		return;
 	}
 
@@ -187,7 +233,8 @@ esnap_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 
 	ch = get_io_channel(ctx);
 	if (spdk_unlikely(ch == NULL)) {
-		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
+		realloc_io_ch_and_resub(ctx, channel, NULL, iov, iovcnt, lba,
+					lba_count, cb_args, ext_io_opts);
 		return;
 	}
 
@@ -464,28 +511,75 @@ esnap_alloc_channels(struct esnap_ctx *esnap_ctx, uint64_t count,
 }
 
 static void
+esnap_realloc_resubmit(void *_ctx)
+{
+	struct esnap_resub_ctx	*resub = _ctx;
+	struct esnap_ctx	*esnap_ctx = resub->ctx;
+	struct spdk_bs_dev	*dev = &esnap_ctx->back_bs_dev;
+	struct spdk_bs_dev_cb_args *cb_args = resub->cb_args;
+	uint64_t		tid = spdk_thread_get_id(spdk_get_thread());
+
+	assert(resub->thread == spdk_get_thread());
+
+	/*
+	 * If this thread still doesn't have a channel, don't start an infinite
+	 * loop of resubmissions. Complete with -ENOMEM as hint to the submitter
+	 * that they may want to retry a limited number of times.
+	 */
+	if (tid >= esnap_ctx->io_channels_count || esnap_ctx->io_channels[tid] == NULL) {
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOMEM);
+		free(resub);
+		return;
+	}
+
+	if (resub->payload != NULL) {
+		esnap_read(dev, resub->channel, resub->payload, resub->lba,
+			   resub->lba_count, cb_args);
+	} else if (resub->ext_io_opts == NULL) {
+		esnap_readv(dev, resub->channel, resub->iov, resub->iovcnt,
+			    resub->lba, resub->lba_count, cb_args);
+	} else {
+		esnap_readv_ext(dev, resub->channel, resub->iov, resub->iovcnt,
+				resub->lba, resub->lba_count, cb_args,
+				resub->ext_io_opts);
+	}
+	free(resub);
+}
+
+static void
 esnap_realloc_channels_done(void *_ctx, int bserrno)
 {
-	struct esnap_ctx *ctx = _ctx;
+	struct esnap_resub_ctx	*resub = _ctx;
+	struct esnap_ctx	*esnap_ctx = resub->ctx;
+	int rc;
 
 	if (bserrno != 0) {
 		SPDK_ERRLOG("blob 0x%" PRIx64 "realloc channels failed: %d\n",
-			    ctx->blob->id, bserrno);
+			    esnap_ctx->blob->id, bserrno);
+	}
+	rc = spdk_thread_send_msg(resub->thread, esnap_realloc_resubmit, resub);
+	if (rc != 0) {
+		SPDK_ERRLOG("blob 0x%" PRIx64 "resubmit to original thread failed: %d\n",
+			    esnap_ctx->blob->id, rc);
+		free(resub);
 	}
 }
 
 static void
 esnap_realloc_channels(void *_ctx)
 {
+	struct esnap_resub_ctx	*resub = _ctx;
+	struct esnap_ctx	*esnap_ctx = resub->ctx;
 	uint64_t		count;
-	struct esnap_ctx	*esnap_ctx = _ctx;
+
+	assert(esnap_ctx->thread == spdk_get_thread());
 
 	/*
 	 * If threads exited after a thread was added, the thread count may not
 	 * indicate the highest thread id.
 	 */
 	count = spdk_max(spdk_thread_get_id(esnap_ctx->thread), spdk_thread_get_count());
-	esnap_alloc_channels(esnap_ctx, count, esnap_realloc_channels_done, esnap_ctx);
+	esnap_alloc_channels(esnap_ctx, count, esnap_realloc_channels_done, resub);
 }
 
 /*

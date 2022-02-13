@@ -8287,15 +8287,13 @@ _blob_extclone_thread_add(const char *read_fn)
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
 
+
 	/*
-	 * Now, when the first IO on a thread should return -ENOMEM and the
-	 * subsequent should succeed. -ENOMEM is one of the real reasons
-	 * channel creation could fail, but there's not a good way to get the
-	 * real reason.
+	 * Read should succeed after transparently allocating additional
+	 * channels
 	 */
 	set_thread(1);
-
-	/* read should first fail with -ENOMEM. */
+	CU_ASSERT(esnap_ctx->io_channels_count < spdk_thread_get_id(spdk_get_thread()) + 1);
 	iov.iov_base = buf;
 	iov.iov_len = bs->io_unit_size;
 	g_bserrno = 0;
@@ -8309,20 +8307,8 @@ _blob_extclone_thread_add(const char *read_fn)
 		abort();
 	}
 	poll_threads();
-	CU_ASSERT(g_bserrno == -ENOMEM);
-
-	/* Try again, it should succeed. */
-	if (strcmp(read_fn, "read") == 0) {
-		spdk_blob_io_read(blob, bs_ch, buf, 0, 1, bs_op_complete, NULL);
-	} else if (strcmp(read_fn, "readv") == 0) {
-		spdk_blob_io_readv(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL);
-	} else if (strcmp(read_fn, "readv_ext") == 0) {
-		spdk_blob_io_readv_ext(blob, bs_ch, &iov, 1, 0, 1, blob_op_complete, NULL, NULL);
-	} else {
-		abort();
-	}
-	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(esnap_ctx->io_channels_count == g_thread_count + 1);
 
 	/* Clean up */
 	free(buf);
