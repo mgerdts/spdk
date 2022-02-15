@@ -409,42 +409,44 @@ bdevperf_test_done(void *ctx)
 		       (double)g_time_in_usec / 1000000);
 	}
 
-	TAILQ_FOREACH_SAFE(job, &g_bdevperf.jobs, link, jtmp) {
-		TAILQ_REMOVE(&g_bdevperf.jobs, job, link);
+	if (!TAILQ_EMPTY(&g_bdevperf.jobs)) {
+		TAILQ_FOREACH_SAFE(job, &g_bdevperf.jobs, link, jtmp) {
+			TAILQ_REMOVE(&g_bdevperf.jobs, job, link);
 
-		performance_dump_job(&g_stats, job);
+			performance_dump_job(&g_stats, job);
 
-		TAILQ_FOREACH_SAFE(task, &job->task_list, link, ttmp) {
-			TAILQ_REMOVE(&job->task_list, task, link);
-			if (task->mr) {
-				ibv_dereg_mr(task->mr);
+			TAILQ_FOREACH_SAFE(task, &job->task_list, link, ttmp) {
+				TAILQ_REMOVE(&job->task_list, task, link);
+				if (task->mr) {
+					ibv_dereg_mr(task->mr);
+				}
+
+				if (g_memory_domains) {
+					free(task->buf);
+				} else {
+					spdk_free(task->buf);
+				}
+				spdk_free(task->md_buf);
+				free(task);
 			}
 
-			if (g_memory_domains) {
-				free(task->buf);
-			} else {
-				spdk_free(task->buf);
+			if (job->verify) {
+				spdk_bit_array_free(&job->outstanding);
 			}
-			spdk_free(task->md_buf);
-			free(task);
+			spdk_zipf_free(&job->zipf);
+			free(job->name);
+			free(job);
 		}
 
-		if (job->verify) {
-			spdk_bit_array_free(&job->outstanding);
+		printf("\r =============================================================\n");
+		printf("\r %-28s: %10.2f IOPS %10.2f MiB/s\n",
+		       "Total", g_stats.total_io_per_second, g_stats.total_mb_per_second);
+		if (g_stats.total_failed_per_second != 0 || g_stats.total_timeout_per_second != 0) {
+			printf("\r %-28s: %10.2f Fail/s %8.2f TO/s\n",
+			       "", g_stats.total_failed_per_second, g_stats.total_timeout_per_second);
 		}
-		spdk_zipf_free(&job->zipf);
-		free(job->name);
-		free(job);
+		fflush(stdout);
 	}
-
-	printf("\r =============================================================\n");
-	printf("\r %-28s: %10.2f IOPS %10.2f MiB/s\n",
-	       "Total", g_stats.total_io_per_second, g_stats.total_mb_per_second);
-	if (g_stats.total_failed_per_second != 0 || g_stats.total_timeout_per_second != 0) {
-		printf("\r %-28s: %10.2f Fail/s %8.2f TO/s\n",
-		       "", g_stats.total_failed_per_second, g_stats.total_timeout_per_second);
-	}
-	fflush(stdout);
 
 	if (g_request && !g_shutdown) {
 		rpc_perform_tests_cb();
