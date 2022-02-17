@@ -68,6 +68,7 @@ struct bdevperf_task {
 	struct spdk_bdev_io_wait_entry	bdev_io_wait;
 	struct spdk_bdev_ext_io_opts	ext_io_opts;
 	struct ibv_mr			*mr;
+	struct iovec			*translate_iovs;
 };
 
 static const char *g_workload_type = NULL;
@@ -96,6 +97,7 @@ struct spdk_memory_domain_rdma_ctx g_rdma_memory_domain_ctx;
 struct spdk_memory_domain_host_ctx g_host_memory_domain_ctx;
 static int g_io_unit_size = 0;
 static int g_io_alignment = 1;
+static int g_translate_iov_size = 0;
 static struct spdk_thread *g_main_thread;
 static int g_time_in_sec = 0;
 static bool g_mix_specified = false;
@@ -427,6 +429,7 @@ bdevperf_test_done(void *ctx)
 					spdk_free(task->buf);
 				}
 				spdk_free(task->md_buf);
+				free(task->translate_iovs);
 				free(task);
 			}
 
@@ -739,29 +742,39 @@ bdevperf_generate_dif(struct bdevperf_task *task)
 }
 
 static size_t
-bdevperf_fill_iovs(void *addr, size_t length, struct iovec *iovs)
+bdevperf_fill_iovs(void *addr, size_t length, size_t unit_size, struct iovec *iovs)
 {
-	size_t num_iovs;
-	const uint64_t PRP_PAGE_SIZE = 4096;
-	const uint64_t PRP_PAGE_MASK = PRP_PAGE_SIZE - 1;
-	uint64_t page_offset = (uint64_t)addr & PRP_PAGE_MASK;
-	size_t iov_len;
+	/* If IO fits into unit size, create one iov.
+	 * Otherwise we must split but respect page boundary.
+	 * All resulting iovs must be page aligned (except the first one).
+	 */
+	if (length <= (size_t)unit_size) {
+		iovs[0].iov_base = addr;
+		iovs[0].iov_len = length;
+		return 1;
+	} else {
+		size_t num_iovs;
+		const uint64_t PRP_PAGE_SIZE = 4096;
+		const uint64_t PRP_PAGE_MASK = PRP_PAGE_SIZE - 1;
+		uint64_t page_offset = (uint64_t)addr & PRP_PAGE_MASK;
+		size_t iov_len;
 
-	iov_len = spdk_min(length, (size_t)g_io_unit_size - page_offset);
-	iovs[0].iov_base = addr;
-	iovs[0].iov_len = iov_len;
-	addr += iov_len;
-	length -= iov_len;
-	for (num_iovs = 1; length > 0; ++num_iovs) {
-		iov_len = spdk_min(length, (size_t)g_io_unit_size);
-		iovs[num_iovs].iov_base = addr;
-		iovs[num_iovs].iov_len = iov_len;
+		iov_len = spdk_min(length, unit_size - page_offset);
+		iovs[0].iov_base = addr;
+		iovs[0].iov_len = iov_len;
 		addr += iov_len;
 		length -= iov_len;
-	}
+		for (num_iovs = 1; length > 0; ++num_iovs) {
+			iov_len = spdk_min(length, unit_size);
+			iovs[num_iovs].iov_base = addr;
+			iovs[num_iovs].iov_len = iov_len;
+			addr += iov_len;
+			length -= iov_len;
+		}
 
-	assert(length == 0);
-	return num_iovs;
+		assert(length == 0);
+		return num_iovs;
+	}
 }
 
 static void
@@ -792,7 +805,7 @@ bdevperf_submit_task(void *arg)
 			} else if (g_memory_domains) {
 				size_t num_iovs;
 
-				num_iovs = bdevperf_fill_iovs(task->buf, task->job->io_size, task->iovs);
+				num_iovs = bdevperf_fill_iovs(task->buf, task->job->io_size, g_io_unit_size, task->iovs);
 				rc = spdk_bdev_writev_blocks_ext(desc, ch, task->iovs, num_iovs,
 								 task->offset_blocks,
 								 job->io_size_blocks,
@@ -833,7 +846,7 @@ bdevperf_submit_task(void *arg)
 		} else if (g_memory_domains) {
 			size_t num_iovs;
 
-			num_iovs = bdevperf_fill_iovs(task->buf, task->job->io_size, task->iovs);
+			num_iovs = bdevperf_fill_iovs(task->buf, task->job->io_size, g_io_unit_size, task->iovs);
 			rc = spdk_bdev_readv_blocks_ext(desc, ch, task->iovs, num_iovs,
 							task->offset_blocks,
 							job->io_size_blocks,
@@ -1496,6 +1509,19 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 		}
 
 		if (g_memory_domains) {
+			if (g_translate_iov_size != 0) {
+				/* Add 1 more iov for unaligned payload */
+				size_t num_iovs = SPDK_CEIL_DIV(job->buf_size, g_translate_iov_size) + 1;
+
+				task->translate_iovs = malloc(num_iovs * sizeof(struct iovec));
+				if (!task->translate_iovs) {
+					fprintf(stderr, "Failed to allocate translation iovs: num_iovs %lu\n",
+						num_iovs);
+					free(task);
+					return -ENOMEM;
+				}
+			}
+
 			/* Minimum alignment for posix_memalign is sizeof(void *) */
 			alignment = spdk_max(alignment, sizeof(void*));
 			rc = posix_memalign(&task->buf, alignment, job->buf_size);
@@ -1510,6 +1536,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 		}
 		if (!task->buf) {
 			fprintf(stderr, "Cannot allocate buf for task=%p\n", task);
+			free(task->translate_iovs);
 			free(task);
 			return -ENOMEM;
 		}
@@ -1525,6 +1552,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 				} else {
 					spdk_free(task->buf);
 				}
+				free(task->translate_iovs);
 				free(task);
 				return -ENOMEM;
 			}
@@ -2018,6 +2046,25 @@ error:
 	return 1;
 }
 
+static void
+memory_domain_fill_translate_iovs(struct bdevperf_task *task, void *addr, size_t len,
+				  struct spdk_memory_domain_translation_result *result)
+{
+	if (g_translate_iov_size == 0) {
+		result->iov_count = 1;
+		result->iov.iov_base = addr;
+		result->iov.iov_len = len;
+	} else {
+		result->iov_count = bdevperf_fill_iovs(addr, len, g_translate_iov_size,
+						       task->translate_iovs);
+		if (result->iov_count == 1) {
+			result->iov = task->translate_iovs[0];
+		} else {
+			result->iovs = task->translate_iovs;
+		}
+	}
+}
+
 static int
 memory_domain_translate_cb(struct spdk_memory_domain *src_domain,
 			   void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
@@ -2029,6 +2076,7 @@ memory_domain_translate_cb(struct spdk_memory_domain *src_domain,
 	enum spdk_dma_device_type dst_type = spdk_memory_domain_get_dma_device_type(dst_domain);
 
 	assert(src_domain == g_bdevperf_memory_domain);
+	assert(len > 0);
 
 	if (dst_type == SPDK_DMA_DEVICE_TYPE_RDMA) {
 		if (!task->mr) {
@@ -2044,22 +2092,18 @@ memory_domain_translate_cb(struct spdk_memory_domain *src_domain,
 		}
 
 		result->size = sizeof(*result);
-		result->iov_count = 1;
-		result->iov.iov_base = addr;
-		result->iov.iov_len = len;
 		result->dst_domain = dst_domain;
 		result->rdma.lkey = task->mr->lkey;
 		result->rdma.rkey = task->mr->rkey;
+		memory_domain_fill_translate_iovs(task, addr, len, result);
 	} else if (dst_type == SPDK_DMA_DEVICE_TYPE_HOST) {
 		if (dst_domain_ctx->host.host_id != g_host_id) {
 			return -1;
 		}
 
 		result->size = sizeof(*result);
-		result->iov_count = 1;
-		result->iov.iov_base = addr;
-		result->iov.iov_len = len;
 		result->dst_domain = dst_domain;
+		memory_domain_fill_translate_iovs(task, addr, len, result);
 	} else {
 		fprintf(stderr, "Requested translation to unsupported memory domain %d\n",
 			dst_type);
@@ -2279,6 +2323,9 @@ bdevperf_parse_arg(int ch, char *arg)
 		case 'a':
 			g_io_alignment = tmp;
 			break;
+		case 'I':
+			g_translate_iov_size = tmp;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -2312,6 +2359,7 @@ bdevperf_usage(void)
 	printf(" -H <host_id>              host_id to use for host memory domain translation\n");
 	printf(" -O <size>                 IO unit size\n");
 	printf(" -a <alignment>            IO buffer alignment\n");
+	printf(" -I <translation iov size> iov size for memory domain translation\n");
 }
 
 static int
@@ -2429,7 +2477,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:O:a:",
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CF:M:P:S:T:Xj:D:H:O:a:I:",
 				      NULL, bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
