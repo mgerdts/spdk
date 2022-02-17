@@ -1759,14 +1759,14 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 static int
 nvme_rdma_get_host_domain_translation(struct nvme_request *req,
 				      struct nvme_rdma_qpair *rqpair,
-				      struct nvme_rdma_memory_translation_ctx *_ctx)
+				      void *addr, size_t length,
+				      struct spdk_memory_domain_translation_result *dma_translation)
 {
 	struct spdk_nvme_ctrlr *ctrlr = rqpair->qpair.ctrlr;
 	struct nvme_rdma_ctrlr *rctrlr = nvme_rdma_ctrlr(ctrlr);
 	struct spdk_memory_domain *src_domain = req->payload.opts->memory_domain;
 	void *src_domain_io_ctx = req->payload.opts->memory_domain_ctx;
 	struct spdk_memory_domain_translation_ctx ctx;
-	struct spdk_memory_domain_translation_result dma_translation;
 	int rc;
 
 	if (spdk_memory_domain_get_dma_device_type(src_domain) == SPDK_DMA_DEVICE_TYPE_HOST) {
@@ -1789,23 +1789,16 @@ nvme_rdma_get_host_domain_translation(struct nvme_request *req,
 
 	ctx.size = sizeof(struct spdk_memory_domain_translation_ctx);
 	ctx.host.host_id = ctrlr->opts.host_memory_domain_id;
-	dma_translation.size = sizeof(struct spdk_memory_domain_translation_result);
+	dma_translation->size = sizeof(struct spdk_memory_domain_translation_result);
 
 	rc = spdk_memory_domain_translate_data(src_domain, src_domain_io_ctx,
-					       rctrlr->host_memory_domain, &ctx, _ctx->addr,
-					       _ctx->length, &dma_translation);
+					       rctrlr->host_memory_domain, &ctx, addr,
+					       length, dma_translation);
 
 	if (rc) {
 		return rc;
-	} else if (dma_translation.iov_count != 1) {
-		/* @todo: add support for multi-iov translation */
-		SPDK_ERRLOG("Translation to multiple iovs is not supported, iov count %u\n",
-			    dma_translation.iov_count);
-		return -ENOTSUP;
 	}
 
-	_ctx->addr = dma_translation.iov.iov_base;
-	_ctx->length = dma_translation.iov.iov_len;
 	return 0;
 }
 
@@ -1980,24 +1973,32 @@ nvme_rdma_try_build_contig_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
 					    struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct nvme_rdma_memory_translation_ctx ctx = {
-		.addr = req->payload.contig_or_cb_arg + req->payload_offset,
-		.length = req->payload_size
-	};
+	void *addr = req->payload.contig_or_cb_arg + req->payload_offset;
+	size_t length = req->payload_size;
+	struct spdk_memory_domain_translation_result dma_translation;
+	uint32_t i;
 	int rc;
 
-	assert(ctx.length != 0);
+	assert(length != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_CONTIG);
 
-	rc = nvme_rdma_get_host_domain_translation(req, rqpair, &ctx);
+	rc = nvme_rdma_get_host_domain_translation(req, rqpair, addr, length, &dma_translation);
 	if (spdk_unlikely(rc)) {
 		return -1;
 	}
 
-	rc = nvme_rdma_build_sqe_mode_request_append_chunk(rqpair, rdma_req,
-							   ctx.addr, ctx.length);
-	if (rc != 0) {
-		goto cleanup;
+	if (dma_translation.iov_count == 1) {
+		dma_translation.iovs = &dma_translation.iov;
+	}
+
+	for (i = 0; i < dma_translation.iov_count; ++i) {
+		struct iovec *iov = &dma_translation.iovs[i];
+
+		rc = nvme_rdma_build_sqe_mode_request_append_chunk(rqpair, rdma_req,
+								   iov->iov_base, iov->iov_len);
+		if (rc != 0) {
+			goto cleanup;
+		}
 	}
 
 	rc = nvme_rdma_build_sqe_mode_request_finalize(rqpair, rdma_req);
@@ -2025,9 +2026,11 @@ nvme_rdma_try_build_sgl_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
 					 struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct nvme_rdma_memory_translation_ctx ctx;
+	void *addr;
 	uint32_t remaining_size;
 	uint32_t sge_length;
+	struct spdk_memory_domain_translation_result dma_translation;
+	uint32_t i;
 	int rc;
 
 	assert(req->payload_size != 0);
@@ -2038,25 +2041,34 @@ nvme_rdma_try_build_sgl_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
 
 	remaining_size = req->payload_size;
 	do {
-		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &ctx.addr, &sge_length);
+		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &addr, &sge_length);
 		if (rc != 0) {
 			goto cleanup;
 		}
 
 		sge_length = spdk_min(remaining_size, sge_length);
-		ctx.length = sge_length;
-		rc = nvme_rdma_get_host_domain_translation(req, rqpair, &ctx);
+		rc = nvme_rdma_get_host_domain_translation(req, rqpair, addr, sge_length,
+							   &dma_translation);
 		if (spdk_unlikely(rc)) {
 			goto cleanup;
 		}
 
-		rc = nvme_rdma_build_sqe_mode_request_append_chunk(rqpair, rdma_req,
-								   ctx.addr, ctx.length);
-		if (rc != 0) {
-			goto cleanup;
+		if (dma_translation.iov_count == 1) {
+			dma_translation.iovs = &dma_translation.iov;
 		}
 
-		remaining_size -= ctx.length;
+		for (i = 0; i < dma_translation.iov_count; ++i) {
+			struct iovec *iov = &dma_translation.iovs[i];
+
+			rc = nvme_rdma_build_sqe_mode_request_append_chunk(rqpair, rdma_req,
+									   iov->iov_base,
+									   iov->iov_len);
+			if (rc != 0) {
+				goto cleanup;
+			}
+
+			remaining_size -= iov->iov_len;
+		}
 	} while (remaining_size > 0);
 
 	rc = nvme_rdma_build_sqe_mode_request_finalize(rqpair, rdma_req);
