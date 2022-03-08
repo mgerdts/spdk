@@ -16,7 +16,7 @@ function nvme_pmr_persistence() {
 }
 
 if [ $(uname) = Linux ]; then
-	$rootdir/scripts/setup.sh
+	$rootdir/scripts/setup.sh config
 fi
 
 run_test "nvme_pmr_persistence" nvme_pmr_persistence

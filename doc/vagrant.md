@@ -144,7 +144,7 @@ Type 'make' to build.
 vagrant@vagrant:~/spdk_repo/spdk$ make
 <<output trimmed>>
 
-vagrant@vagrant:~/spdk_repo/spdk$ sudo ./scripts/setup.sh
+vagrant@vagrant:~/spdk_repo/spdk$ sudo ./scripts/setup.sh config
 0000:00:0e.0 (80ee 4e56): nvme -> uio_pci_generic
 
 vagrant@vagrant:~/spdk_repo/spdk$ sudo build/examples/hello_world

@@ -55,7 +55,7 @@ for bdf in $(iter_pci_dev_id 8086 $vmd_id); do
 		VMD_ALLOWED+=("$bdf")
 	fi
 done
-PCI_ALLOWED="${VMD_ALLOWED[*]}" $rootdir/scripts/setup.sh
+PCI_ALLOWED="${VMD_ALLOWED[*]}" $rootdir/scripts/setup.sh config
 
 pci_devs=$($SPDK_BIN_DIR/spdk_lspci | grep "NVMe disk behind VMD" | awk '{print $1}')
 
@@ -75,4 +75,4 @@ run_test "vmd_bdev_svc" vmd_bdev_svc
 
 # Re-run setup.sh again so that other tests may continue
 $rootdir/scripts/setup.sh reset
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config

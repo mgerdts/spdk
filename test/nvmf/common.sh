@@ -407,7 +407,7 @@ function nvmftestinit() {
 	prepare_net_devs
 
 	if [ "$TEST_MODE" == "iso" ]; then
-		$rootdir/scripts/setup.sh
+		$rootdir/scripts/setup.sh config
 	fi
 
 	NVMF_TRANSPORT_OPTS="-t $TEST_TRANSPORT"

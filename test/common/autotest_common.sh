@@ -1334,7 +1334,7 @@ function get_first_nvme_bdf() {
 }
 
 function nvme_namespace_revert() {
-	$rootdir/scripts/setup.sh
+	$rootdir/scripts/setup.sh config
 	sleep 1
 	bdfs=$(get_nvme_bdfs)
 

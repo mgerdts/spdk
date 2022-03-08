@@ -12,7 +12,7 @@ if [ -z "$EXTERNAL_MAKE_HUGEMEM" ]; then
 	EXTERNAL_MAKE_HUGEMEM=$HUGEMEM
 fi
 
-sudo HUGEMEM="$EXTERNAL_MAKE_HUGEMEM" $SPDK_DIR/scripts/setup.sh
+sudo HUGEMEM="$EXTERNAL_MAKE_HUGEMEM" $SPDK_DIR/scripts/setup.sh config
 
 if [ -n "$SPDK_RUN_EXTERNAL_DPDK" ]; then
 	WITH_DPDK="--with-dpdk=$SPDK_RUN_EXTERNAL_DPDK"

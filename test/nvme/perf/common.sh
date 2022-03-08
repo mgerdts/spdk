@@ -324,7 +324,7 @@ function preconditioning() {
 	local filename=""
 	local nvme_list
 
-	HUGEMEM=8192 $rootdir/scripts/setup.sh
+	HUGEMEM=8192 $rootdir/scripts/setup.sh config
 	cp $testdir/config.fio.tmp $testdir/config.fio
 	echo "[Preconditioning]" >> $testdir/config.fio
 

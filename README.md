@@ -112,7 +112,7 @@ Details on the Vagrant setup can be found in the
 The following setup is known to work on AWS:
 Image: Ubuntu 18.04
 Before running  `setup.sh`, run `modprobe vfio-pci`
-then: `DRIVER_OVERRIDE=vfio-pci ./setup.sh`
+then: `DRIVER_OVERRIDE=vfio-pci ./setup.sh config`
 
 <a id="advanced"></a>
 ## Advanced Build Options
@@ -213,14 +213,14 @@ SPDK includes a script to automate this process on both Linux and FreeBSD.
 This script should be run as root.
 
 ~~~{.sh}
-sudo scripts/setup.sh
+sudo scripts/setup.sh config
 ~~~
 
 Users may wish to configure a specific memory size. Below is an example of
 configuring 8192MB memory.
 
 ~~~{.sh}
-sudo HUGEMEM=8192 scripts/setup.sh
+sudo HUGEMEM=8192 scripts/setup.sh config
 ~~~
 
 There are a lot of other environment variables that can be set to configure

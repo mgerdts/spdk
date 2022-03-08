@@ -24,7 +24,7 @@ ${SMARTCTL_CMD} -i /dev/${nvme_name}n1
 # logs are not provided by json output
 KERNEL_SMART_ERRLOG=$(${SMARTCTL_CMD} -l error /dev/${nvme_name})
 
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config
 
 $SPDK_BIN_DIR/spdk_tgt -m 0x3 &
 spdk_tgt_pid=$!

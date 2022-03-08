@@ -9,7 +9,7 @@ NVME_CMD="/usr/local/src/nvme-cli/nvme"
 
 rpc_py=$rootdir/scripts/rpc.py
 
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config
 sleep 1
 
 bdfs=$(get_nvme_bdfs)
@@ -34,7 +34,7 @@ done
 
 if [[ "${nvme_name}" == "" ]] || [[ "$oacs_ns_manage" -eq 0 ]]; then
 	echo "No NVMe device supporting Namespace management found"
-	$rootdir/scripts/setup.sh
+	$rootdir/scripts/setup.sh config
 	exit 1
 fi
 
@@ -81,7 +81,7 @@ function clean_up() {
 	$NVME_CMD attach-ns ${nvme_dev} -n ${nsid} -c 0
 	$NVME_CMD reset ${nvme_dev}
 
-	$rootdir/scripts/setup.sh
+	$rootdir/scripts/setup.sh config
 }
 
 function info_print() {
@@ -96,7 +96,7 @@ remove_all_namespaces
 reset_nvme_if_aer_unsupported ${nvme_dev}
 sleep 1
 
-PCI_ALLOWED="${bdf}" $rootdir/scripts/setup.sh
+PCI_ALLOWED="${bdf}" $rootdir/scripts/setup.sh config
 
 $SPDK_BIN_DIR/spdk_tgt -m 0x3 &
 spdk_tgt_pid=$!

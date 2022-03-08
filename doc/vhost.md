@@ -72,7 +72,7 @@ application.  This will allocate 4096MiB (4GiB) of hugepages, enough for the SPD
 vhost target and the virtual machine.
 
 ~~~{.sh}
-HUGEMEM=4096 scripts/setup.sh
+HUGEMEM=4096 scripts/setup.sh config
 ~~~
 
 Next, start the SPDK vhost target application.  The following command will start vhost
@@ -206,7 +206,7 @@ This example uses an NVMe bdev alongside Mallocs. SPDK vhost application is star
 on CPU cores 0 and 1, QEMU on cores 2 and 3.
 
 ~~~{.sh}
-host:~# HUGEMEM=2048 ./scripts/setup.sh
+host:~# HUGEMEM=2048 ./scripts/setup.sh config
 0000:01:00.0 (8086 0953): nvme -> vfio-pci
 ~~~
 

@@ -7,7 +7,7 @@ source $rootdir/test/common/autotest_common.sh
 function insert_device() {
 	ssh root@$ip 'Beetle --SetGpio "$gpio" HIGH'
 	waitforblk $name
-	DRIVER_OVERRIDE=$driver $rootdir/scripts/setup.sh
+	DRIVER_OVERRIDE=$driver $rootdir/scripts/setup.sh config
 }
 
 function remove_device() {

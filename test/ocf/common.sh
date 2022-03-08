@@ -15,5 +15,5 @@ function clear_nvme() {
 		exit 1
 	fi
 	dd if=/dev/zero of=/dev/$name bs=1M count=1000 oflag=direct
-	$rootdir/scripts/setup.sh
+	$rootdir/scripts/setup.sh config
 }

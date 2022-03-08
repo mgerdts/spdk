@@ -30,7 +30,7 @@ function usage() {
 	echo "Usage: $(basename $1) $options"
 	echo
 	echo "$options - as following:"
-	echo "config            Default mode. Allocate hugepages and bind PCI devices."
+	echo "config            Allocate hugepages and bind PCI devices."
 	if [[ $os == Linux ]]; then
 		echo "cleanup           Remove any orphaned files that can be left in the system after SPDK application exit"
 	fi
@@ -732,7 +732,7 @@ CMD=reset cache_pci_bus
 mode=$1
 
 if [ -z "$mode" ]; then
-	mode="config"
+	mode="help"
 fi
 
 : ${HUGEMEM:=2048}

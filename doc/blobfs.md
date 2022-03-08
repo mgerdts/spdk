@@ -48,7 +48,7 @@ By default, the SPDK `setup.sh` script only allocates 2GB.
 The following will allocate 5GB of huge page memory (in addition to binding the NVMe devices to uio/vfio).
 
 ~~~{.sh}
-HUGEMEM=5120 scripts/setup.sh
+HUGEMEM=5120 scripts/setup.sh config
 ~~~
 
 Create an empty SPDK blobfs for testing.

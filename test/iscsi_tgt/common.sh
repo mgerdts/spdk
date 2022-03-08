@@ -101,7 +101,7 @@ function cleanup_veth_interfaces() {
 
 function iscsitestinit() {
 	if [ "$TEST_MODE" == "iso" ]; then
-		$rootdir/scripts/setup.sh
+		$rootdir/scripts/setup.sh config
 		create_veth_interfaces
 	fi
 }

@@ -97,7 +97,7 @@ if [ $(uname) = Linux ]; then
 		mkdir -p /tmp/nvmetest
 		mount /dev/${blkname}p1 /tmp/nvmetest
 		sleep 1
-		$rootdir/scripts/setup.sh
+		$rootdir/scripts/setup.sh config
 		driver=$(basename $(readlink /sys/bus/pci/devices/$bdf/driver))
 		# check that the nvme driver is still loaded against the device
 		if [ "$driver" != "nvme" ]; then
@@ -107,14 +107,14 @@ if [ $(uname) = Linux ]; then
 		rmdir /tmp/nvmetest
 		# write zeroes to the device to blow away the partition table and filesystem
 		dd if=/dev/zero of=/dev/$blkname oflag=direct bs=1M count=1
-		$rootdir/scripts/setup.sh
+		$rootdir/scripts/setup.sh config
 		driver=$(basename $(readlink /sys/bus/pci/devices/$bdf/driver))
 		# check that the nvme driver is not loaded against the device
 		if [ "$driver" = "nvme" ]; then
 			exit 1
 		fi
 	else
-		$rootdir/scripts/setup.sh
+		$rootdir/scripts/setup.sh config
 	fi
 fi
 

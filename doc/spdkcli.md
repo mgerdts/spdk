@@ -17,7 +17,7 @@ Package dependencies at the moment include:
 ## Run SPDK application instance
 
 ~~~{.sh}
-./scripts/setup.sh
+./scripts/setup.sh config
 ./build/bin/vhost -c vhost.json
 ~~~
 

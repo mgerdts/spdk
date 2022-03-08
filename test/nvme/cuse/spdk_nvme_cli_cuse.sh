@@ -50,7 +50,7 @@ ${NVME_CMD} reset $ctrlr > ${KERNEL_OUT}.10
 # Attempting to apply it to a namespace should result in a failure
 ${NVME_CMD} set-feature $ctrlr -n 1 -f 2 -v 0 2> ${KERNEL_OUT}.11 || true
 
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config
 
 $SPDK_BIN_DIR/spdk_tgt -m 0x3 &
 spdk_tgt_pid=$!

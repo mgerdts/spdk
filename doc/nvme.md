@@ -346,7 +346,7 @@ exposed via NVMe-CUSE interface. When closing SPDK application,
 the NVMe-CUSE devices are unregistered.
 
 ~~~{.sh}
-$ sudo scripts/setup.sh
+$ sudo scripts/setup.sh config
 $ sudo modprobe cuse
 $ sudo build/bin/spdk_tgt
 # Continue in another session

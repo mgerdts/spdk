@@ -9,7 +9,7 @@ source $rootdir/test/common/autotest_common.sh
 
 rpc_py=$rootdir/scripts/rpc.py
 
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config
 
 mapfile -t config < <("$rootdir/scripts/gen_nvme.sh")
 # Drop anything from last closing ] so we can inject our own config pieces ...

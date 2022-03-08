@@ -30,7 +30,7 @@ source $rootdir/test/vhost/common/autotest.config
 
 function vhosttestinit() {
 	if [ "$TEST_MODE" == "iso" ]; then
-		$rootdir/scripts/setup.sh
+		$rootdir/scripts/setup.sh config
 	fi
 
 	if [[ -e $VM_IMAGE.gz && ! -e $VM_IMAGE ]]; then

@@ -79,7 +79,7 @@ This script should be run as root. It only needs to be run once on the
 system.
 
 ~~~{.sh}
-sudo scripts/setup.sh
+sudo scripts/setup.sh config
 ~~~
 
 To rebind devices back to the kernel, you can run
@@ -92,7 +92,7 @@ By default, the script allocates 2048MB of hugepages. To change this number,
 specify HUGEMEM (in MB) as follows:
 
 ~~~{.sh}
-sudo HUGEMEM=4096 scripts/setup.sh
+sudo HUGEMEM=4096 scripts/setup.sh config
 ~~~
 
 On Linux machines HUGEMEM will be rounded up to system-default huge page

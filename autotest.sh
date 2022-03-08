@@ -122,7 +122,7 @@ timing_exit cleanup
 
 # set up huge pages
 timing_enter afterboot
-./scripts/setup.sh
+./scripts/setup.sh config
 timing_exit afterboot
 
 # Revert existing OPAL to factory settings that may have been left from earlier failed tests.

@@ -6,7 +6,7 @@ source $rootdir/scripts/common.sh
 source $rootdir/test/common/autotest_common.sh
 
 if [ $(uname) = Linux ]; then
-	$rootdir/scripts/setup.sh
+	$rootdir/scripts/setup.sh config
 fi
 
 run_test "nvme_boot_partition" $testdir/boot_partition/boot_partition

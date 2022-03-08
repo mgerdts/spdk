@@ -27,7 +27,7 @@ timing_enter vhost_fuzz_test
 
 #todo refactor this to use the vhosttestinit function when it becomes available.
 timing_enter setup
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config
 timing_exit setup
 
 "${VHOST_APP[@]}" &> "$output_dir/vhost_fuzz_tgt_output.txt" &

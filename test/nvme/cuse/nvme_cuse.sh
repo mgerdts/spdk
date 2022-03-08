@@ -41,6 +41,6 @@ done
 if [[ "$oacs_ns_manage" -ne 0 ]]; then
 	run_test "nvme_ns_manage_cuse" $testdir/nvme_ns_manage_cuse.sh
 fi
-$rootdir/scripts/setup.sh
+$rootdir/scripts/setup.sh config
 
 rmmod cuse
