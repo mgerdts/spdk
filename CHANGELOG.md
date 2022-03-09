@@ -46,6 +46,10 @@ Added discovery service to bdev_nvme module, which now can connect to a discover
 bdev_nvme will connect to all current and future subsystems in the discovery controller.
 Added `bdev_nvme_start_discovery` and `bdev_nvme_stop_discovery` RPC.
 
+New parameters, `ctrlr_loss_timeout_sec`, `reconnect_delay_sec`, and `fast_io_fail_timeout_sec`, are
+added to the RPC `bdev_nvme_set_options`. They can be overridden if they are given by the RPC
+`bdev_nvme_attach_controller`.
+
 ### dpdk
 
 Updated DPDK submodule to DPDK 21.11.
