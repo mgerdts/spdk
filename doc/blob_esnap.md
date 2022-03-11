@@ -89,7 +89,7 @@ Before creating snap1:
 
 ````
   ,--------.     ,----------.
-  |  blob  |     |  vbdev   |
+  |  blob  |     |   bdev   |
   | blob1  |<----| nvme1n42 |
   |  (rw)  |     |   (ro)   |
   `--------'     `----------'
@@ -100,7 +100,7 @@ After creating snap1:
 
 ````
   ,--------.     ,--------.     ,----------.
-  |  blob  |     |  blob  |     |  vbdev   |
+  |  blob  |     |  blob  |     |   bdev   |
   | blob1  |<----| snap1  |<----| nvme1n42 |
   |  (rw)  |     |  (ro)  |     |   (ro)   |
   `--------'     `--------'     `----------'
@@ -113,7 +113,7 @@ Starting from Figure 3, if blob1 is removed, the chain becomes:
 
 ````
   ,--------.     ,----------.
-  |  blob  |     |  vbdev   |
+  |  blob  |     |   bdev   |
   | snap1  |<----| nvme1n42 |
   |  (ro)  |     |   (ro)   |
   `--------'     `----------'
