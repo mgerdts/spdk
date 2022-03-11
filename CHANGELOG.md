@@ -35,6 +35,10 @@ Added `bdev_aio_rescan` RPC to allow rescanning the size of aio bdev.
 
 Support for AES_XTS was added for MLX5 polled mode driver (pmd).
 
+bdev_crypto_create RPC now requires hexlified 'key' and 'key2' params for all pmd drivers.
+Unhexlifying is performed during RPC command processing and the vbdev crypto module runs on
+binary keys as before.
+
 ### bdev_nvme
 
 Added discovery service to bdev_nvme module, which now can connect to a discovery controller.
