@@ -183,12 +183,12 @@ struct spdk_bs_opts {
 
 ### External Snapshot IO Channel Context
 
-An external snapshot module that implements asynchronous IO most likely needs an IO channel per
-thread. In such a case, the external snapshot module should define `io_channel_get` and
-`io_channel_put` callbacks. The presence of these callbacks will lead to each blobstore IO channel
-that performs IO on via the external snapshot module to `get` and IO channel and store it in a
-per-channel RB tree. As external clones are closed or threads a destroyed, the IO channels will be
-released via the `io_channel_put` callback.
+An external snapshot module that implements asynchronous IO requires an IO channel per thread. In
+such a case, the external snapshot module must define `io_channel_get` and `io_channel_put`
+callbacks. The presence of these callbacks will lead to each blobstore IO channel that performs IO
+on via the external snapshot module to `get` an IO channel and store it in a per-channel RB tree. As
+external clones are closed or threads are destroyed, the IO channels will be released via the
+`io_channel_put` callback.
 
 The existing `struct spdk_bs_channel` is extended by adding an RB tree. It is initialized in
 `bs_channel_create()`.
