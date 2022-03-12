@@ -14,6 +14,10 @@ An *external clone* is a blob that is a clone of an external snapshot.
 Blobstore consumers that use blobstore's external snapshot feature may refer to their objects using
 similar terminology.
 
+The motivation for this feature is to create lvol external clones from arbitrary bdevs. While the
+focus of this document is the blobstore layer, lvols are mentioned to illustrate how blobstore
+changes will be used.
+
 ## Theory of Operation
 
 Much like with regular clones, an external clone may read clusters that are allocated to the cluster
@@ -58,14 +62,40 @@ When an external clone is created, the callee-specific cookie provided in
 This cookie serves as an identifier that must be usable for the life of the blob, including across
 restarts of the SPDK application.
 
+### Opening an External Snapshot {#opening_an_external_snapshot}
+
 As an external snapshot blob is being loaded, the blobstore will call the aforementioned
 `external_bs_dev_create()` function with the blob's external snapshot cookie, the blob, and a
-callback.  See #esnap_spdk_bs_opts for the complete list of arguments.  The
-`external_bs_dev_create()` function should open the implementation-specific device and pass this new
-`back_bs_dev` to the blobstore via the callback. If `external_bs_dev_create()` is unable to open the
-device, it must record information about this blob so that it can retry `spdk_bs_open_blob()` or
-`spdk_bs_open_blob_ext()` when the device becomes available. No memory references to the blob, its
-extended attributes, etc., may be retained after calling the completion callback.
+callback.  See #esnap_spdk_bs_opts for the complete list of arguments.
+
+Implementations of `external_bs_dev_create` should call `spdk_bdev_create_bs_dev_ro()` to open the
+bdev and initialize a `struct spdk_bs_dev`. `spdk_bdev_create_bs_dev_ro()` is similar to
+`spdk_bdev_create_bs_dev_ext()`, except it opens the bdev read-only and establishes a shared
+read-only claim on the bdev.
+
+The lvstore implementation of `external_bs_dev_create` will keep track of external snapshot bdevs
+that fail to open on a watch list. The watch list may or may not be implemented using a list. There
+may be multiple external clones of a single bdev, so each node of the watch list will maintain a
+list of blobs that are awaiting a bdev. As new bdevs are created, vbdev_lvol's `examine_config`
+callback will check the watch list to see if the new bdev matches one that is needed by a blob. If
+it a match is found, `spdk_lvol_open()` is called for each waiting blob. While an lvol is on the
+watch list, its name is reserved - no new lvol can be created with the same name.
+
+### Blobs with Missing External Snapshot
+
+As discussed in the previous section, a blob's external snapshot bdev may not be available when the
+blobstore tries to open it. This may be a transient or persistent problem. In the case of it being a
+persistent problem, it is essential that an external clone with a missing external snapshot can be
+deleted.
+
+External clones in all blobstores can be viewed and deleted with `blobcli`. `blobcli` displays
+internal XATTRs and as such may be used to see which external snapshots are used by blobs. 
+Additionally, it provides an option to delete a blob.
+
+The RPC call `bdev_lvol_get_lvols` will print information about each blob associated with an
+lvstore, regardless of whether there is a functional bdev associated with the blob. This allows an
+administrator to identify lvols with missing external snapshots so that they may be deleted with the
+`bdev_lvol_delete` RPC call.
 
 ### Channels
 
@@ -133,41 +163,6 @@ obtain ranges of unallocated storage, `spdk_bs_blob_decouple_parent()` is equiva
 snapshot, turning it into a thick-provisioned blob. As the inflate or decouple completes,
 `back_bs_dev->destroy()` will be called.
 
-### Opening an External Snapshot {#opening_an_external_snapshot}
-
-When an external clone blob is loaded, it needs to load its external snapshot. To do this, it uses
-the blobstore's `external_bs_dev_create` function that was registered with the blobstore was
-created or loaded.
-
-Implementations of `external_bs_dev_create` should call `spdk_bdev_create_bs_dev_ro()` to open the
-bdev and initialize a `struct spdk_bs_dev`. `spdk_bdev_create_bs_dev_ro()` is similar to
-`spdk_bdev_create_bs_dev_ext()`, except it opens the bdev read-only and establishes a shared
-read-only claim on the bdev.
-
-The lvstore implementation of `external_bs_dev_create` will keep track of external snapshot bdevs
-that fail to open on a watch list. The watch list may or may not be implemented using a list. There
-may be multiple external clones of a single bdev, so each node of the watch list will maintain a
-list of blobs that are awaiting a bdev. As new bdevs are created, vbdev_lvol's `examine_config`
-callback will check the watch list to see if the new bdev matches one that is needed by a blob. If
-it a match is found, `spdk_lvol_open()` is called for each waiting blob. While an lvol is on the
-watch list, its name is reserved - no new lvol can be created with the same name.
-
-### Blobs with Missing External Snapshot
-
-As discussed in the previous section, a blob's external snapshot bdev may not be available when the
-blobstore tries to open it. This may be a transient or persistent problem. In the case of it being a
-persistent problem, it is essential that an external clone with a missing external snapshot can be
-deleted.
-
-The RPC call `bdev_lvol_get_lvols` will print information about each blob associated with an
-lvstore, regardless of whether there is a functional bdev associated with the blob. This allows an
-administrator to identify lvols with missing external snapshots so that they may be deleted with the
-`bdev_lvol_delete` RPC call.
-
-`blobcli` displays internal XATTRs and may be used to debug blobstores that are not open by another
-SPDK application. Additionally, it provides an option to delete a blob. Deleting an lvstore's blob
-with `blobcli` fully deletes a volume.
-
 ## On-Disk Representation {#external_snapshot_on_disk}
 
 ### Blobstore Superblock
@@ -232,11 +227,9 @@ typedef void (*spdk_blob_op_with_dev)(void *cb_arg, struct spdk_bs_dev *bs_dev, 
 
 ### External Snapshot IO Channel Context
 
-An external snapshot device requires an IO channel per thread and as such must define
-`io_channel_get` and `io_channel_put` callbacks. The presence of these callbacks will lead to each
-blobstore IO channel that performs IO on the external snapshot to `get` an IO channel and store it
-in a per-channel RB tree. As external clones are closed or threads are destroyed, the IO channels
-will be released via the `io_channel_put` callback.
+An external snapshot device requires an IO channel per thread per bdev and as such must define
+`io_channel_get` and `io_channel_put` callbacks. As reads occur, a per thread cache of IO channels
+will be maintained so that IO channels for external snapshots may be obtained without taking locks.
 
 The existing `struct spdk_bs_channel` is extended by adding an RB tree. It is initialized in
 `bs_channel_create()`.
