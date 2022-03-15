@@ -179,9 +179,11 @@ A blob that is an external clone has the following characteristics:
 The blobstore does not interpret the value of the internal XATTR, it only passes it and its size to
 `external_bs_dev_create()` which will handle it in an implementation-specific manner.
 
-## Data Structures
+## Blobstore updates
 
-### `spkd_bs_opts` {#esnap_spdk_bs_opts}
+### Data Structures
+
+#### `spdk_bs_opts` {#esnap_spdk_bs_opts}
 
 ```c
 
@@ -225,7 +227,7 @@ The callback function passed to `external_bs_dev_create` is defined as:
 typedef void (*spdk_blob_op_with_dev)(void *cb_arg, struct spdk_bs_dev *bs_dev, int bserrno);
 ```
 
-### External Snapshot IO Channel Context
+#### External Snapshot IO Channel Context
 
 An external snapshot device requires an IO channel per thread per bdev and as such must define
 `io_channel_get` and `io_channel_put` callbacks. As reads occur, a per thread cache of IO channels
