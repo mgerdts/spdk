@@ -181,7 +181,49 @@ The blobstore does not interpret the value of the internal XATTR, it only passes
 
 ## Blobstore updates
 
-### Data Structures
+### Public Interfaces
+
+#### External Clone Creation
+
+```c
+/**
+ * Create a clone of an arbitrary device. This requires that the blobstore was
+ * loaded by spdk_bs_load() with the external_bs_dev_create function pointer
+ * defined. The arbitrary device is referred to as the external snapshot and so
+ * long as this newly created blob remains a clone of it, it may be referred to
+ * as an external clone.
+ *
+ * XXX-mg fix this next paragraph.
+ * Reads beyond esnap_size will not be sent to the external snapshot. If this
+ * offset does not fall on a cluster boundary reads of the blob beyond this
+ * offset to the end of the cluster will return zeroes. Any data written beyond
+ * this size to the end of the cluster will be stored and will be returned on
+ * subsequent reads.
+ *
+ * The memory referenced by cookie, the xattrs structure, and all memory
+ * referenced by the xattrs structure must remain valid until the completion is
+ * called.
+ *
+ * If cloning a blob in the same blobstore, use spdk_bs_create_clone instead.
+ *
+ * \param bs blobstore.
+ * \param cookie A unique identifier for the external snapshot. The data
+ * referenced by cookie will be stored in the blob's metadata and serves as a
+ * primary key for external snapshot opens via esnap_mod->open().
+ * \param cookie_size The size in bytes of the cookie. This value must be no
+ * more than 4058.
+ * \param esnap_size Size in bytes of the external snapshot.
+ * \param xattrs xattrs specified for the clone
+ * \param cb_fn Called when the operation is complete.
+ * \param cb_arg Argument passed to function cb_fn.
+ */
+void spdk_bs_create_external_clone(struct spdk_blob_store *bs,
+				   const void *cookie, size_t cookie_size,
+				   uint64_t esnap_size,
+				   const struct spdk_blob_xattr_opts *xattrs,
+				   spdk_blob_op_with_id_complete_ cb_fn,
+				   void *cb_arg);
+```
 
 #### `spdk_bs_opts` {#esnap_spdk_bs_opts}
 
@@ -227,6 +269,8 @@ The callback function passed to `external_bs_dev_create` is defined as:
 typedef void (*spdk_blob_op_with_dev)(void *cb_arg, struct spdk_bs_dev *bs_dev, int bserrno);
 ```
 
+### Internal interfaces
+
 #### External Snapshot IO Channel Context
 
 An external snapshot device requires an IO channel per thread per bdev and as such must define
@@ -269,48 +313,6 @@ that blob. The external snapshot will be destroyed with `back_bs_dev->destroy()`
 When `bs_channel_destroy()` is called, `back_bs_dev->destroy_channel()` will be called on each
 external snapshot IO channel found in the RB tree of the `struct spdk_bs_channel` that is being
 destroyed.
-
-## Public Blobstore Functions
-
-```c
-/**
- * Create a clone of an arbitrary device. This requires that the blobstore was
- * loaded by spdk_bs_load() with the external_bs_dev_create function pointer
- * defined. The arbitrary device is referred to as the external snapshot and so
- * long as this newly created blob remains a clone of it, it may be referred to
- * as an external clone.
- *
- * XXX-mg fix this next paragraph.
- * Reads beyond esnap_size will not be sent to the external snapshot. If this
- * offset does not fall on a cluster boundary reads of the blob beyond this
- * offset to the end of the cluster will return zeroes. Any data written beyond
- * this size to the end of the cluster will be stored and will be returned on
- * subsequent reads.
- *
- * The memory referenced by cookie, the xattrs structure, and all memory
- * referenced by the xattrs structure must remain valid until the completion is
- * called.
- *
- * If cloning a blob in the same blobstore, use spdk_bs_create_clone instead.
- *
- * \param bs blobstore.
- * \param cookie A unique identifier for the external snapshot. The data
- * referenced by cookie will be stored in the blob's metadata and serves as a
- * primary key for external snapshot opens via esnap_mod->open().
- * \param cookie_size The size in bytes of the cookie. This value must be no
- * more than 4058.
- * \param esnap_size Size in bytes of the external snapshot.
- * \param xattrs xattrs specified for the clone
- * \param cb_fn Called when the operation is complete.
- * \param cb_arg Argument passed to function cb_fn.
- */
-void spdk_bs_create_external_clone(struct spdk_blob_store *bs,
-				   const void *cookie, size_t cookie_size,
-				   uint64_t esnap_size,
-				   const struct spdk_blob_xattr_opts *xattrs,
-				   spdk_blob_op_with_id_complete_ cb_fn,
-				   void *cb_arg);
-```
 
 ## Blob bdev Updates
 
@@ -418,7 +420,11 @@ static void bdev_blob_ro_release(struct spdk_bdev *bdev);
 
 ## Logical Volume Updates
 
-### Create an lvstore
+### Public Interfaces
+
+### Internal Interfaces
+
+#### Create an lvstore
 
 `vbdev_lvs_create()` will set `opts.external_bs_dev_create` to `vbdev_lvs_esnap_open`, which is:
 
@@ -476,53 +482,6 @@ vbdev_lvs_examine_config(struct spdk_bdev *bdev)
 	spdk_bdev_module_examine_done(&g_lvol_if);
 }
 ```
-
-#######################################
-
-### esnap_bdev IO
-
-The first `read`, `readv`, or `readv_ext` on each thread will lead to `esnap_bdev_io_channel_get()`
-to be called. It will look something like:
-
-```c
-static struct spdk_io_channel *
-esnap_bdev_io_channel_get(void *ctx)
-{
-	struct lvs_esnap_dev *esnap_dev = ctx;
-
-	return spdk_bdev_get_io_channel(esnap_dev->bdev_desc);
-}
-```
-
-The IO channel returned from the above function will be passed into `esnap_bdev_read()`, which will
-look something like:
-
-```c
-static void
-esnap_bdev_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
-	       uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
-{
-	struct esnap_dev	*esnap_dev = back_bs_dev_to_esnap_ctx(dev);
-
-	spdk_bdev_read_blocks(ctx->bdev_desc, ch, payload, lba, lba_count,
-			      esnap_bdev_complete, cb_args);
-}
-```
-
-The completion callback is:
-
-```c
-static void
-esnap_bdev_complete(struct spdk_bdev_io *bdev_io, bool success, void *args)
-{
-	struct spdk_bs_dev_cb_args *cb_args = args;
-
-	spdk_bdev_free_io(bdev_io);
-	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, success ? 0 : -EIO);
-}
-```
-
-Being a read-only device, `write` and `writev` callbacks result in `-EPERM` (or `abort()` on debug builds).
 
 ## Example: Logical Volume External Clones
 
