@@ -89,7 +89,7 @@ persistent problem, it is essential that an external clone with a missing extern
 deleted.
 
 External clones in all blobstores can be viewed and deleted with `blobcli`. `blobcli` displays
-internal XATTRs and as such may be used to see which external snapshots are used by blobs. 
+internal XATTRs and as such may be used to see which external snapshots are used by blobs.
 Additionally, it provides an option to delete a blob.
 
 The RPC call `bdev_lvol_get_lvols` will print information about each blob associated with an
@@ -422,9 +422,180 @@ static void bdev_blob_ro_release(struct spdk_bdev *bdev);
 
 ### Public Interfaces
 
+#### Create and open external clone logical volume
+
+A new function, `spdk_lvol_create_external_clone()` is created. It is based on
+`spdk_lvol_create_clone()`.
+
+```c
+/**
+ * Create clone of and arbitrary bdev.
+ *
+ * The named bdev must have a block size that is greater than or equal to the
+ * block size of the lvstore.
+ *
+ * The named bdev must remain read-only for the life of the clone and must not
+ * be resized. Changes to this bdev are likely to impact the content and/or
+ * functionality of external clones.
+ *
+ * If the named bdev does not exist, the clone will not be created and cb_fn()
+ * will be called with -ENOENT.
+ *
+ * \param lvol_store Logical volume store that will contain the clone.
+ * \param cookie Identified to be passed to external_bs_dev_create callback that was
+ * registered with spdk_lvs_load_ext().
+ * \param cookie_len Size of cookie in bytes.
+ * \param esnap_size Size of the external snapshot in bytes.
+ * \param clone_name Name of created clone.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Completion callback custom arguments.
+ */
+void spdk_lvol_create_external_clone(struct spdk_lvol_store *lvol_store,
+				     void *cookie, size_t cookie_len,
+				     uint64_t esnap_size,
+				     const char *clone_name,
+				     spdk_lvol_op_with_handle_complete cb_fn,
+				     void *cb_arg);
+```
+
+Note: A more appropriate error for a missing snapshot would be `-ENODEV`, but this follows the lead
+of `spdk_lvol_create_clone()`, which gets `-ENOENT` from `spdk_bs_open_blob()` while trying to open
+the original blob.
+
+#### Lookup of lvols
+
+An lvol that is missing its external snapshot cannot be found via bdev interfaces, as it will have
+no associated bdev. Public functions are added to allow a pointer to an lvol's opaque
+`struct spdk_lvol` to be found.
+
+```c
+/**
+ * Get an lvstore by its name.
+ *
+ * \param lvs_name The name of the lvstore.
+ * \return 0 on success
+ * \return lvstore on success, NULL on error.
+ */
+struct spdk_lvol_store *spdk_lvol_get_lvs_by_name(const char *lvs_name);
+
+/**
+ * Get an lvstore by its uuid.
+ *
+ * \param lvs_uuid The UUID of the lvstore.
+ * \return lvstore on success, NULL on error.
+ */
+struct spdk_lvol_store *spdk_lvol_get_lvs_by_uuid(const char *lvs_uuid);
+
+/**
+ * Get an lvol by its name
+ *
+ * \param lvs The lvstore containing the volume. If NULL, the volume may be in any lvstore.
+ * \param lvol_name The name of the volume.
+ */
+struct spdk_lvol *spdk_lvol_get_by_name(struct spdk_lvol_store *lvs, const char *lvol_name);
+
+/**
+ * Get an lvol by its UUID.
+ *
+ * \param lvs The lvstore containing the volume.
+ * \param uuid_str The UUID of the volume.
+ * \return lvol on success, NULL on error.
+ */
+struct spdk_lvol *spdk_lvol_get_by_uuid(struct spdk_lvol_store *lvs, const char *uuid_str);
+```
+
+#### Example: Delete a zombie external clone
+
+A zombie external clone is a clone with a missing external snapshot. A zombie may be destroyed with
+the following:
+
+```c
+void
+delete_zombie(const char *lvs_name, const char *lvol_name,
+	      spdk_lvol_op_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_store *lvs;
+	struct spdk_lvol *lvol;
+	int err;
+
+	if ((lvs = spdk_lvol_get_lvs_by_name(lvs_name)) != NULL &&
+	    (lvol = spdk_lvol_get_lvol_by_name(lvs, lvol_name)) != NULL) {
+		spdk_lvol_destroy(lvol, cb_fn, cb_arg);
+		return;
+	}
+	cb_fn(cb_arg, -ENODEV);
+}
+```
+
+#### RPC: bdev_lvol_external_clone
+
+Create a clone of an arbitrary read-only bdev. If the bdev is an lvol in the same lvstore,
+use `bdev_lvol_clone` instead.
+
+##### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+bdev_name               | Required | string      | Name of existing bdev to clone
+clone_name              | Required | string      | Name of logical volume to create
+lvs_uuid                | Optional | string      | UUID of logical volume store to create logical volume on
+lvs_name                | Optional | string      | Name of logical volume store to create logical volume on
+
+Either lvs_uuid or lvs_name may be specified.
+
+##### Example
+
+TODO
+
+#### RPC: bdev_lvol_get_lvols
+
+Get a list of logical volume stores.
+
+##### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+lvs_uuid                | Optional | string      | Limit results to lvols in the lvstore with this UUID
+lvs_name                | Optional | string      | Limit results to lvols in the lvstore with this name
+lvol_uuid               | Optional | string      | Limit results to lvols with this UUID
+lvol_name               | Optional | string      | Limit results to lvols with this name
+
+Either lvs_uuid or lvs_name may be specified, but not both. Either lvol_uuid or lvol_name may be
+specified, but not both.
+
+##### Example
+
+Example request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_lvol_get_lvols",
+  "id": 1,
+  "params": {
+    "lvs_name": "LVS0",
+    "llvol_name": "vol1"
+  }
+}
+```
+
+Example response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+	    XXX-mg add stuff here
+    }
+  ]
+}
+```
+
 ### Internal Interfaces
 
-#### Create an lvstore
+#### Opening External Clones {#esnap_open_lvol_external_clone}
 
 `vbdev_lvs_create()` will set `opts.external_bs_dev_create` to `vbdev_lvs_esnap_open`, which is:
 
@@ -452,7 +623,7 @@ vbdev_lvs_esnap_open(const void *cookie, size_t cookie_sz, struct spdk_blob *blo
 }
 ```
 
-### Watch for missing external snapshots
+#### Watch for missing external snapshots {#esnap_lvol_watch_for_bdev}
 
 See #opening_an_external_snapshot for background.
 
@@ -460,6 +631,14 @@ As new bdevs are added, each bdev module's `examine_config` and `examine_disk` c
 While the  vbev_lvol `examine_disk` callback already exists, checking whether a new bdev is a
 missing external snapshot is best performed in the `examine_config` callback because it does not
 need to perform IO.
+
+To enable external clones, `spdk_bs_load()` needs to be called with:
+
+```c
+	opts.external_bs_dev_create = vbdev_lvs_examine_config;
+```
+
+The implementation of `vbdev_lvs_examine_config()` looks like:
 
 ```c
 static void
@@ -482,185 +661,3 @@ vbdev_lvs_examine_config(struct spdk_bdev *bdev)
 	spdk_bdev_module_examine_done(&g_lvol_if);
 }
 ```
-
-## Example: Logical Volume External Clones
-
-This example is presented to illustrate how a consumer may use the interfaces described above.
-
-### Load the lvstore
-
-Aside from initial creation, an lvstore is usually loaded in response to `vbdev_lvs_examine()`,
-which is invoked via the `struct spdk_bdev_module`'s `examine_disk` callback. `vbdev_lvs_examine()`
-calls `spdk_lvs_load()`, which calls `spdk_bs_load()`. To enable external clones, `spdk_bs_load()`
-needs to be called with:
-
-```c
-	opts.external_bs_dev_create = spdk_esnap_bdev_open;
-```
-
-Since there is no way to pass `vbdev_lvs_esnap_open` to `spdk_lvs_load` a new function is required.
-This will follow the model of other `_ext` functions that take an options structure.
-
-```c
-void
-spdk_lvs_load_ext(struct spdk_bs_dev *bs_dev, struct lvs_load_opts *opts,
-		  spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
-{
-	struct spdk_bs_opts bs_opts = {};
-
-	/* ... */
-
-	bs_opts.external_bs_dev_create = opts.back_bs_dev_create;
-	spdk_bs_load(bs_dev, &opts, lvs_load_cb, req);
-}
-```
-
-The implementation of `struct lvs_load_opts` looks like the following. The comments for these fields
-are elided from this document as they are the same as they are for `struct spdk_bs_opts`.
-
-```c
-struct lvs_load_opts {
-	size_t opts_size;
-	void (*external_bs_dev_create)(const void *cookie, size_t cookie_sz,
-		    struct spdk_blob *blob, spdk_blob_op_with_dev cb, void *cb_arg);
-};
-
-void lvs_load_opts_init(struct lvs_load_opts *opts);
-```
-
-### Load the Logical Volumes
-
-The lvstore is considered opened once `close_super_cb` is called with `lvolerrno` equal to 0.  It is
-at that time that blobs being to be loaded by iteratively calling `load_next_lvol()`.  Prior to
-loading the lvols, the lvstore needs to register with the esnap_bdev module.
-
-```c
-	spdk_esnap_bdev_register(&bs->uuid, lvs_esnap_event, lvs);
-```
-
-When a external snapshot device lookup fails, `lvs_esnap_event()` will be called.  It looks like:
-
-```c
-static void
-lvs_esnap_event(void *ctx, enum spdk_esnap_event_type event, struct spdk_blob *blob)
-{
-	struct spdk_lvol_store *lvs = ctx;
-
-	switch (event) {
-	case SPDK_ESNAP_EVENT_DEV_MISSING:
-		/*
-		 * TODO: Store copies of the blob id and the name and UUID
-		 * XATTRs in an RB tree (by blob id) or three (blob id, name, UUID).
-		 */
-		 break;
-	case SPDK_ESNAP_EVENT_DEV_FOUND:
-		/*
-		 * TODO: look up the blob id in the RB tree and unlink it from
-		 * the tree(s). Call code that is factored out of
-		 * load_next_lvol() to load the lvol then free the node.
-		 */
-		 break;
-	default:
-		break;
-	}
-}
-```
-
-{#esnap_missing_snapshot_delete}
-The name and UUID are stored so that:
-
-- RPC or other calls provide visibility into lvols that could not be opened.
-- The blob ID can be found to delete lvols that have a missing external
-  snapshot.
-- To prevent creating new lvols or existing new ones to have names that will
-  collide with a sick lvol.
-
-### Unload Logical Volume Store
-
-As an lvstore is unloaded, the following will be called.
-
-```
-	spdk_esnap_bdev_register(&bs->uuid);
-```
-
-### Create and open external clone logical volume
-
-A new function, `spdk_lvol_create_external_clone()` is created. It is based on
-`spdk_lvol_create_clone()`.
-
-```c
-/**
- * Create clone of and arbitrary bdev.
- *
- * The named bdev must have a block size that is greater than or equal to the
- * block size of the lvstore.
- *
- * The named bdev must remain read-only for the life of the clone and must not
- * be resized. Changes to this bdev are likely to impact the content and/or
- * functionality of external clones.
- *
- * \param lvol_store Logical volume store that will contain the clone.
- * \param cookie Identified to be passed to external_bs_dev_create callback that was
- * registered with spdk_lvs_load_ext().
- * \param cookie_len Size of cookie in bytes.
- * \param esnap_size Size of the external snapshot in bytes.
- * \param clone_name Name of created clone.
- * \param cb_fn Completion callback.
- * \param cb_arg Completion callback custom arguments.
- */
-void spdk_lvol_create_external_clone(struct spdk_lvol_store *lvol_store,
-				     void *cookie, size_t cookie_len,
-				     uint64_t esnap_size,
-				     const char *clone_name,
-				     spdk_lvol_op_with_handle_complete cb_fn,
-				     void *cb_arg);
-```
-
-Among other things, `spdk_lvol_create_external_clone()` will make a call like:
-
-```c
-	/* TODO: copy SPDK_ESNAP_BLOCK_SIZE_XATTR if needed */
-	spdk_bs_create_external_clone(lvs->blobstore, cookie, cookie_len,
-				      esnap_size, clone_xattrs,
-				      lvol_create_cb, req);
-```
-
-When `lvol_create_cb()` is called, it will call `spdk_bs_open_blob_ext()`, which will lead to
-`blob_load_backing_dev()` to call:
-
-```c
-	/* spdk_esnap_bdev_open("nvme1n42", 9, ...) */
-	blob->bs->external_bs_dev_create(cookie, cookie_len, blob, blob_load_final, ctx);
-```
-
-See #esnap_bdev_module for details on `spdk_esnap_bdev_open()`.
-
-### Delete a logical volume
-
-If a logical volume is healthy no changes are required.
-
-If a logical volume could not load its external snapshot, it will have no bdev attached.
-The existing `spdk_lvol_destroy` can be used. As described in #esnap_lvol_rpc, a corresponding RPC
-interface will exist.
-
-### IO involving the external snapshot
-
-All IO involving the external snapshot is handled by the #esnap_bdev_module.
-
-### Snapshot an external clone
-
-No changes are needed at the lvol layer.
-
-### Inflate or decouple an external clone
-
-No changes are needed at the lvol layer.
-
-### RPC changes {#esanp_lvol_rpc}
-
-The following RPC changes are needed:
-
-- Include external snapshot information in `bdev_get_bdevs` output.
-- Create `bdev_lvol_external_clone`, modeled after `bdev_lvol_clone`
-- Create `lvstore_get_lvols` to list all lvols. This will provide visibility into lvols that lack a
-  corresponding bdev due to a missing external snapshot.
-- Create `lvstore_delete_lvol` to delete an lvol that does not have an attached bdev.
