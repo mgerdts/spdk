@@ -32,7 +32,7 @@ REPEAT=${REPEAT:-1}
 #TGT_TRANSPORT_EXTRA_OPTS="-c 4096"
 #NVME_PERF_EXTRA_OPTS="--io-queue-size 1024"
 #NVME_PERF_EXTRA_OPTS="-T vma -T nvme"
-#BDEV_PERF_EXTRA_OPTS="-L vma -L nvme"
+#BDEV_PERF_EXTRA_OPTS="-L nvme"
 #SSH_EXTRA_OPTS="-t"
 #SOCK_EXTRA_OPTS="--disable-recv-pipe"
 
@@ -255,13 +255,13 @@ function test2() {
 
 # Test with host memory domain and contig payload
 function test3() {
-    BDEV_PERF_EXTRA_OPTS="-D host" basic_test_bdev
+    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host" basic_test_bdev
 }
 
 # Test with host memory domain and fragmented payload
 function test4() {
     IO_SIZES=131072 \
-	    BDEV_PERF_EXTRA_OPTS="-D host -O 16384" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -O 16384" \
 	    basic_test_bdev
 }
 
@@ -269,7 +269,7 @@ function test4() {
 function test5() {
     PERF_TIME=1 \
 	     IO_SIZES=4096 \
-	     BDEV_PERF_EXTRA_OPTS="-D host -H 256" \
+	     BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -H 256" \
 	     basic_test_bdev
 }
 
@@ -277,14 +277,14 @@ function test5() {
 function test6() {
     IO_SIZES=4096 \
 	    NVME_ATTACH_CTRLR_EXTRA_OPTS="--host-memory-domain-id=256" \
-	    BDEV_PERF_EXTRA_OPTS="-D host -H 256" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -H 256" \
 	    basic_test_bdev
 }
 
 # Test with rdma memory domain
 function test7() {
     IO_SIZES=4096 \
-	    BDEV_PERF_EXTRA_OPTS="-D rdma" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D rdma" \
 	    basic_test_bdev
 }
 
@@ -292,7 +292,7 @@ function test7() {
 function test8() {
     PERF_TIME=1 \
 	     IO_SIZES=4096 \
-	     BDEV_PERF_EXTRA_OPTS="-D rdma -H 256" \
+	     BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D rdma -H 256" \
 	     basic_test_bdev
 }
 
@@ -300,7 +300,7 @@ function test8() {
 function test9() {
     IO_SIZES=2097152 \
 	    TGT_TRANSPORT_EXTRA_OPTS="--max-io-size 2097152 --io-unit-size=131072"
-	    BDEV_PERF_EXTRA_OPTS="-D host" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host" \
 	    basic_test_bdev
 }
 
@@ -308,7 +308,7 @@ function test9() {
 function test10() {
     IO_SIZES=2097152 \
 	    TGT_TRANSPORT_EXTRA_OPTS="--max-io-size 2097152 --io-unit-size=131072"
-	    BDEV_PERF_EXTRA_OPTS="-D host -a 4096" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -a 4096" \
 	    basic_test_bdev
 }
 
@@ -316,27 +316,27 @@ function test10() {
 function test11() {
     IO_SIZES=2097152 \
 	    TGT_TRANSPORT_EXTRA_OPTS="--max-io-size 2097152 --io-unit-size=131072"
-	    BDEV_PERF_EXTRA_OPTS="-D host -O 131072 -a 4096" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -O 131072 -a 4096" \
 	    basic_test_bdev
 }
 
 # Test with host memory domain, contig payload and multi-iov translation
 function test12() {
     IO_SIZES=16384 \
-	    BDEV_PERF_EXTRA_OPTS="-D host -I 4096" basic_test_bdev
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -I 4096" basic_test_bdev
 }
 
 # Test with host memory domain, fragmented payload and multi-iov translation
 function test13() {
     IO_SIZES=131072 \
-	    BDEV_PERF_EXTRA_OPTS="-D host -O 16384 -I 4096" \
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D host -O 16384 -I 4096" \
 	    basic_test_bdev
 }
 
 # Test with RDMA memory domain, wrong host ID, contig payload and multi-iov translation
 function test14() {
     IO_SIZES=16384 \
-	    BDEV_PERF_EXTRA_OPTS="-D rdma -H 256 -I 4096" basic_test_bdev
+	    BDEV_PERF_EXTRA_OPTS="$BDEV_PERF_EXTRA_OPTS -D rdma -H 256 -I 4096" basic_test_bdev
 }
 
 function test_ngn_all() {
