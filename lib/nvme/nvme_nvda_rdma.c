@@ -524,6 +524,11 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 		}
 	}
 
+	SPDK_DEBUGLOG(nvme, "Req complete: sqe_mode %d, sct %d, sc %d\n",
+			rdma_req->sqe_mode,
+			rsp->status.sct,
+			rsp->status.sc);
+
 	nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
 	nvme_free_request(req);
 }
@@ -1447,6 +1452,8 @@ nvme_rdma_get_memory_translation(struct nvme_request *req, struct nvme_rdma_qpai
 		_ctx->rkey = dma_translation.rdma.rkey;
 		_ctx->addr = dma_translation.iov.iov_base;
 		_ctx->length = dma_translation.iov.iov_len;
+		SPDK_DEBUGLOG(nvme, "Translated to RDMA memory domain: lkey %u, rkey %u, addr %p, len %lu\n",
+			      _ctx->lkey, _ctx->rkey, _ctx->addr, _ctx->length);
 	} else {
 		rc = spdk_rdma_get_translation(rqpair->mr_map, _ctx->addr, _ctx->length, &rdma_translation);
 		if (spdk_unlikely(rc)) {
@@ -1459,6 +1466,9 @@ nvme_rdma_get_memory_translation(struct nvme_request *req, struct nvme_rdma_qpai
 		} else {
 			_ctx->lkey = _ctx->rkey = (uint32_t)rdma_translation.mr_or_key.key;
 		}
+
+		SPDK_DEBUGLOG(nvme, "Translated to RDMA MR, no memory domains: lkey %u, rkey %u, addr %p, len %lu\n",
+			      _ctx->lkey, _ctx->rkey, _ctx->addr, _ctx->length);
 	}
 
 	return 0;
@@ -1539,6 +1549,8 @@ nvme_rdma_build_contig_inline_request(struct nvme_rdma_qpair *rqpair,
 	 * not get called for controllers with other values. */
 	req->cmd.dptr.sgl1.address = (uint64_t)0;
 
+	SPDK_DEBUGLOG(nvme, "Built contig inline request\n");
+
 	return 0;
 }
 
@@ -1586,6 +1598,8 @@ nvme_rdma_build_contig_request(struct nvme_rdma_qpair *rqpair,
 	req->cmd.dptr.sgl1.keyed.subtype = SPDK_NVME_SGL_SUBTYPE_ADDRESS;
 	req->cmd.dptr.sgl1.keyed.length = (uint32_t)ctx.length;
 	req->cmd.dptr.sgl1.address = (uint64_t)ctx.addr;
+
+	SPDK_DEBUGLOG(nvme, "Built contig request\n");
 
 	return 0;
 }
@@ -1639,6 +1653,9 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 		cmd->sgl[num_sgl_desc].keyed.length = (uint32_t)ctx.length;
 		cmd->sgl[num_sgl_desc].address = (uint64_t)ctx.addr;
 
+		SPDK_DEBUGLOG(nvme, "Add sgl to request: num_sgl %u, addr %p, len %lu\n",
+			      num_sgl_desc, ctx.addr, ctx.length);
+
 		remaining_size -= ctx.length;
 		num_sgl_desc++;
 	} while (remaining_size > 0 && num_sgl_desc < max_num_sgl);
@@ -1646,6 +1663,7 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 
 	/* Should be impossible if we did our sgl checks properly up the stack, but do a sanity check here. */
 	if (remaining_size > 0) {
+		SPDK_ERRLOG("Failed to encode all data: remaining size %u\n", remaining_size);
 		return -1;
 	}
 
@@ -1690,6 +1708,8 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 		req->cmd.dptr.sgl1.unkeyed.length = descriptors_size;
 		req->cmd.dptr.sgl1.address = (uint64_t)0;
 	}
+
+	SPDK_DEBUGLOG(nvme, "Built sgl request: num_sgl %u\n", num_sgl_desc);
 
 	return 0;
 }
@@ -1752,6 +1772,8 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 	 * not get called for controllers with other values. */
 	req->cmd.dptr.sgl1.address = (uint64_t)0;
 
+	SPDK_DEBUGLOG(nvme, "Built sgl inline request\n");
+
 	return 0;
 }
 
@@ -1781,6 +1803,10 @@ nvme_rdma_get_host_domain_translation(struct nvme_request *req,
 			    host_domain_ctx->size >= sizeof(struct spdk_memory_domain_host_ctx) &&
 			    host_domain_ctx->host_id != ctrlr->opts.host_memory_domain_id) {
 				/* Translation is not possible between different hosts */
+				SPDK_DEBUGLOG(nvme, "Translation to HOST domain failed:"
+					      " user_host_id %lu, expected_host_id %lu\n",
+					      host_domain_ctx->host_id,
+					      ctrlr->opts.host_memory_domain_id);
 				return -1;
 			}
 		}
@@ -1795,8 +1821,13 @@ nvme_rdma_get_host_domain_translation(struct nvme_request *req,
 					       length, dma_translation);
 
 	if (rc) {
+		SPDK_DEBUGLOG(nvme, "Translation to HOST domain failed: rc %d, host_id %lu\n",
+			      rc, ctrlr->opts.host_memory_domain_id);
 		return rc;
 	}
+
+	SPDK_DEBUGLOG(nvme, "Translated to HOST memory domain: host_id %lu, iov_count %u\n",
+		      ctrlr->opts.host_memory_domain_id, dma_translation->iov_count);
 
 	return 0;
 }
@@ -2008,6 +2039,7 @@ nvme_rdma_try_build_contig_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
 	return 0;
 
  cleanup:
+	SPDK_DEBUGLOG(nvme, "Failed to build contig PRP request: rc %d\n", rc);
 	if (rdma_req->external_prp_page) {
 		spdk_mempool_put(g_prp_page_pool, rdma_req->prp_list);
 		rdma_req->external_prp_page = false;
@@ -2078,6 +2110,7 @@ nvme_rdma_try_build_sgl_sqe_mode_request(struct nvme_rdma_qpair *rqpair,
 	return 0;
 
  cleanup:
+	SPDK_DEBUGLOG(nvme, "Failed to build sgl PRP request: rc %d\n", rc);
 	if (rdma_req->external_prp_page) {
 		spdk_mempool_put(g_prp_page_pool, rdma_req->prp_list);
 		rdma_req->external_prp_page = false;
@@ -2110,6 +2143,9 @@ nvme_rdma_req_init(struct nvme_rdma_qpair *rqpair, struct nvme_request *req,
 	icd_supported = spdk_nvme_opc_get_data_transfer(req->cmd.opc) == SPDK_NVME_DATA_HOST_TO_CONTROLLER
 			&& req->payload_size <= ctrlr->ioccsz_bytes && ctrlr->icdoff == 0;
 
+	SPDK_DEBUGLOG(nvme, "Req init: icd_supported %d, mem_domain_used %d, payload_type %d, mem_domain_type %d\n",
+		      icd_supported, mem_domains_used, payload_type,
+		      mem_domains_used ? spdk_memory_domain_get_dma_device_type(req->payload.opts->memory_domain) : 0);
 	if (req->payload_size == 0) {
 		rc = nvme_rdma_build_null_request(rdma_req);
 	} else if (payload_type == NVME_PAYLOAD_TYPE_CONTIG) {
