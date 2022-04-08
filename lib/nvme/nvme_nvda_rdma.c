@@ -311,6 +311,7 @@ struct spdk_nvme_rdma_req {
 	uint64_t				last_prp_length;
 	uint64_t				*prp_list;
 	bool					external_prp_page;
+	void					*mkey;
 
 	TAILQ_ENTRY(spdk_nvme_rdma_req)		link;
 };
@@ -348,6 +349,7 @@ static struct nvme_rdma_qpair *nvme_rdma_poll_group_get_qpair_by_id(struct nvme_
 #define PRP_PAGE_POOL_CACHE_SIZE 8
 
 static struct spdk_mempool *g_prp_page_pool;
+static bool g_mkey_supported = true;
 
 static inline void *
 nvme_rdma_calloc(size_t nmemb, size_t size)
@@ -734,6 +736,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	struct spdk_rdma_qp_init_attr	attr = {};
 	struct ibv_device_attr	dev_attr;
 	struct nvme_rdma_ctrlr	*rctrlr;
+	uint16_t		i;
 
 	rc = ibv_query_device(rqpair->cm_id->verbs, &dev_attr);
 	if (rc != 0) {
@@ -768,10 +771,11 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	attr.stats =		rqpair->poller ? &rqpair->poller->stats.rdma_stats : NULL;
 	attr.send_cq		= rqpair->cq;
 	attr.recv_cq		= rqpair->cq;
-	attr.cap.max_send_wr	= rqpair->num_entries; /* SEND operations */
+	attr.cap.max_send_wr	= rqpair->num_entries * 2; /* SEND + REG_UMR operations*/
 	attr.cap.max_recv_wr	= rqpair->num_entries; /* RECV operations */
 	attr.cap.max_send_sge	= spdk_min(NVME_RDMA_DEFAULT_TX_SGE, dev_attr.max_sge);
 	attr.cap.max_recv_sge	= spdk_min(NVME_RDMA_DEFAULT_RX_SGE, dev_attr.max_sge);
+	attr.cap.max_inline_data = 256;
 
 	rqpair->rdma_qp = spdk_rdma_qp_create(rqpair->cm_id, &attr);
 
@@ -794,6 +798,31 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	rctrlr->pd = rqpair->rdma_qp->qp->pd;
 
 	rqpair->cm_id->context = &rqpair->qpair;
+
+	if (g_mkey_supported) {
+		for (i = 0; i < rqpair->num_entries; i++) {
+			struct spdk_nvme_rdma_req *rdma_req = &rqpair->rdma_reqs[i];
+
+			rdma_req->mkey = spdk_rdma_create_mkey(rqpair->rdma_qp->qp->pd);
+			if (!rdma_req->mkey) {
+				if (errno == ENOTSUP) {
+					SPDK_NOTICELOG("Mkey is not supported by RDMA provider\n");
+					g_mkey_supported = false;
+					break;
+				} else {
+					SPDK_ERRLOG("Failed to create mkey: errno %d\n", errno);
+					return -1;
+				}
+			}
+
+			SPDK_DEBUGLOG(nvme, "Created mkey[%d]: qp %p, pd %p, req %p, mkey %p\n",
+				      i, rqpair, rqpair->rdma_qp->qp->pd, rdma_req, rdma_req->mkey);
+		}
+	}
+
+	if (g_mkey_supported) {
+		SPDK_NOTICELOG("Mkey is supported by RDMA provider\n");
+	}
 
 	return 0;
 }
@@ -1047,12 +1076,27 @@ nvme_rdma_unregister_reqs(struct nvme_rdma_qpair *rqpair)
 static void
 nvme_rdma_free_reqs(struct nvme_rdma_qpair *rqpair)
 {
+	uint16_t i;
+
 	if (!rqpair->rdma_reqs) {
 		return;
 	}
 
 	nvme_rdma_free(rqpair->cmds);
 	rqpair->cmds = NULL;
+
+	if (g_mkey_supported) {
+		for (i = 0; i < rqpair->num_entries; i++) {
+			struct spdk_nvme_rdma_req *rdma_req = &rqpair->rdma_reqs[i];
+			int rc;
+
+			rc = spdk_rdma_destroy_mkey(rdma_req->mkey);
+			if (rc) {
+				SPDK_ERRLOG("Failed to destroy mkey %p, rc %d\n",
+					    rdma_req->mkey, rc);
+			}
+		}
+	}
 
 	nvme_rdma_free(rqpair->rdma_reqs);
 	rqpair->rdma_reqs = NULL;
@@ -1748,6 +1792,36 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 		req->cmd.dptr.sgl1.keyed.length = cmd->sgl[0].keyed.length;
 		req->cmd.dptr.sgl1.keyed.key = cmd->sgl[0].keyed.key;
 		req->cmd.dptr.sgl1.address = cmd->sgl[0].address;
+	} else if (g_mkey_supported &&
+		   num_sgl_desc > rqpair->qpair.ctrlr->cdata.nvmf_specific.msdbd) {
+		struct ibv_sge sgl[NVME_RDMA_MAX_SGL_DESCRIPTORS];
+		int i;
+
+		for (i = 0; i < num_sgl_desc; ++i) {
+			sgl[i].addr = cmd->sgl[i].address;
+			sgl[i].length = cmd->sgl[i].keyed.length;
+			sgl[i].lkey = cmd->sgl[i].keyed.key;
+		}
+
+		rc = spdk_rdma_qp_reg_mkey(rqpair->rdma_qp, rdma_req->mkey, num_sgl_desc, sgl);
+		if (rc) {
+			SPDK_ERRLOG("Failed to register mkey: rc %d\n", rc);
+		}
+
+		SPDK_DEBUGLOG(nvme, "Registered mkey: qp %p, req %p, mkey %p, num_sge %d\n",
+			      rqpair, rdma_req, rdma_req->mkey, num_sgl_desc);
+
+		/* The first element of this SGL is pointing at an
+		 * spdk_nvmf_cmd object. For this particular command,
+		 * we only need the first 64 bytes corresponding to
+		 * the NVMe command. */
+		rdma_req->send_sgl[0].length = sizeof(struct spdk_nvme_cmd);
+
+		req->cmd.dptr.sgl1.keyed.type = SPDK_NVME_SGL_TYPE_KEYED_DATA_BLOCK;
+		req->cmd.dptr.sgl1.keyed.subtype = SPDK_NVME_SGL_SUBTYPE_ADDRESS;
+		req->cmd.dptr.sgl1.keyed.length = req->payload_size;
+		req->cmd.dptr.sgl1.keyed.key = spdk_rdma_mkey_get_rkey(rdma_req->mkey);
+		req->cmd.dptr.sgl1.address = 0;
 	} else {
 		/*
 		 * Otherwise, The SGL descriptor embedded in the command must point to the list of
@@ -3136,13 +3210,15 @@ nvme_rdma_ctrlr_get_max_sges(struct spdk_nvme_ctrlr *ctrlr)
 
 	/* Max SGE is limited by capsule size */
 	max_sge = spdk_min(max_sge, max_in_capsule_sge);
-	/* Max SGE may be limited by MSDBD */
-	if (ctrlr->cdata.nvmf_specific.msdbd != 0) {
+	/* Max SGE may be limited by MSDBD if mkey is not supported */
+	if (!g_mkey_supported && ctrlr->cdata.nvmf_specific.msdbd != 0) {
 		max_sge = spdk_min(max_sge, ctrlr->cdata.nvmf_specific.msdbd);
 	}
 
 	/* Max SGE can't be less than 1 */
 	max_sge = spdk_max(1, max_sge);
+
+	SPDK_NOTICELOG("Controller %p, max SGE %u\n", ctrlr, max_sge);
 	return max_sge;
 }
 

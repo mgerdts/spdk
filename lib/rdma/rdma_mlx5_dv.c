@@ -112,6 +112,10 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 		.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,
 		.pd = qp_attr->pd ? qp_attr->pd : cm_id->pd
 	};
+	struct mlx5dv_qp_init_attr mlx5_qp_attr = {
+		.comp_mask = MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS,
+		.send_ops_flags = MLX5DV_QP_EX_WITH_MKEY_CONFIGURE
+	};
 
 	assert(dv_qp_attr.pd);
 
@@ -133,7 +137,7 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 		}
 	}
 
-	qp = mlx5dv_create_qp(cm_id->verbs, &dv_qp_attr, NULL);
+	qp = mlx5dv_create_qp(cm_id->verbs, &dv_qp_attr, &mlx5_qp_attr);
 
 	if (!qp) {
 		SPDK_ERRLOG("Failed to create qpair, errno %s (%d)\n", spdk_strerror(errno), errno);
@@ -332,4 +336,62 @@ spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_w
 	spdk_rdma_qp->stats->send.doorbell_updates++;
 
 	return rc;
+}
+
+void *
+spdk_rdma_create_mkey(struct ibv_pd *pd)
+{
+	struct mlx5dv_mkey_init_attr init_attr = {
+		.pd = pd,
+		.create_flags = MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT,
+		.max_entries = 16
+	};
+
+	return mlx5dv_create_mkey(&init_attr);
+}
+
+int
+spdk_rdma_destroy_mkey(void *mkey)
+{
+	return mlx5dv_destroy_mkey(mkey);
+}
+
+uint32_t
+spdk_rdma_mkey_get_rkey(void *mkey)
+{
+	return ((struct mlx5dv_mkey *)mkey)->rkey;
+}
+
+int
+spdk_rdma_qp_reg_mkey(struct spdk_rdma_qp *spdk_rdma_qp,
+		      void *mkey,
+		      uint16_t num_sge,
+		      const struct ibv_sge *sge)
+{
+	struct spdk_rdma_mlx5_dv_qp *mlx5_qp;
+	struct ibv_qp_ex *qpx;
+	struct mlx5dv_qp_ex *mqpx;
+	struct mlx5dv_mkey_conf_attr mkey_attr = {};
+	bool is_first;
+
+	assert(spdk_rdma_qp);
+	mlx5_qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_rdma_mlx5_dv_qp, common);
+	qpx = mlx5_qp->qpex;
+	mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(mlx5_qp->qpex);
+
+	is_first = spdk_rdma_qp->send_wrs.first == NULL;
+
+	if (is_first) {
+		ibv_wr_start(qpx);
+	}
+
+	qpx->wr_flags = IBV_SEND_INLINE;
+	mlx5dv_wr_mkey_configure(mqpx, mkey, 2, &mkey_attr);
+	mlx5dv_wr_set_mkey_access_flags(mqpx, IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
+	mlx5dv_wr_set_mkey_layout_list(mqpx, num_sge, sge);
+	if (is_first) {
+		return ibv_wr_complete(qpx);
+	}
+
+	return 0;
 }

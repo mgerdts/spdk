@@ -190,3 +190,31 @@ spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_w
 
 	return rc;
 }
+
+void *
+spdk_rdma_create_mkey(struct ibv_pd *pd)
+{
+	errno = ENOTSUP;
+	return NULL;
+}
+
+int
+spdk_rdma_destroy_mkey(void *mkey)
+{
+	return ENOTSUP;
+}
+
+uint32_t
+spdk_rdma_mkey_get_rkey(void *mkey)
+{
+	return 0;
+}
+
+int
+spdk_rdma_qp_reg_mkey(struct spdk_rdma_qp *spdk_rdma_qp,
+		      void *mkey,
+		      uint16_t num_sge,
+		      const struct ibv_sge *sge)
+{
+	return ENOTSUP;
+}

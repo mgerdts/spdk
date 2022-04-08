@@ -21,6 +21,10 @@
 	spdk_rdma_get_memory_domain;
 	spdk_rdma_get_tcp_memory_domain;
 	spdk_rdma_put_memory_domain;
+	spdk_rdma_create_mkey;
+	spdk_rdma_destroy_mkey;
+	spdk_rdma_mkey_get_rkey;
+	spdk_rdma_qp_reg_mkey;
 
 	local: *;
 };
