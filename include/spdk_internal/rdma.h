@@ -359,5 +359,12 @@ spdk_rdma_get_pd(struct ibv_context *context);
  * \param pd Pointer to the Protection Domain
  */
 void spdk_rdma_put_pd(struct ibv_pd *pd);
+void * spdk_rdma_create_mkey(struct ibv_pd *pd);
+int spdk_rdma_destroy_mkey(void *mkey);
+uint32_t spdk_rdma_mkey_get_rkey(void *mkey);
+int spdk_rdma_qp_reg_mkey(struct spdk_rdma_qp *spdk_rdma_qp,
+			  void *mkey,
+			  uint16_t num_sge,
+			  const struct ibv_sge *sge);
 
 #endif /* SPDK_RDMA_H */
