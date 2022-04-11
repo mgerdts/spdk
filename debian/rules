@@ -54,7 +54,7 @@ override_dh_auto_configure:
 		--with-vhost \
 		--without-pmdk \
 		--without-rbd \
-		--with-rdma \
+		--with-rdma=mlx5_dv \
 		--without-vtune \
 		--with-iscsi-initiator \
 		--with-shared \
