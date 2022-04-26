@@ -180,7 +180,8 @@ spdk_sock_request_put(struct spdk_sock *sock, struct spdk_sock_request *req, int
 #endif
 
 	req->internal.offset = 0;
-	req->internal.is_zcopy = 0;
+	req->internal.is_zcopy = false;
+	req->has_memory_domain_data = false;
 
 	closed = sock->flags.closed;
 	sock->cb_cnt++;

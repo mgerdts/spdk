@@ -130,6 +130,7 @@ static struct spdk_sock_impl_opts g_spdk_xlio_sock_impl_opts = {
 	.enable_zerocopy_send_server = true,
 	.enable_zerocopy_send_client = true,
 	.enable_zerocopy_recv = true,
+	.zerocopy_threshold = 4096
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
@@ -958,7 +959,13 @@ _sock_check_zcopy(struct spdk_sock *sock)
 			found = false;
 
 			TAILQ_FOREACH_SAFE(req, &sock->pending_reqs, internal.link, treq) {
-				if (req->internal.offset == idx) {
+				if (!req->internal.is_zcopy) {
+					/* This wasn't a zcopy request. It was just waiting in line to complete */
+					rc = spdk_sock_request_put(sock, req, 0);
+					if (rc < 0) {
+						return rc;
+					}
+				} else if (req->internal.offset == idx) {
 					found = true;
 
 					rc = spdk_sock_request_put(sock, req, 0);
@@ -1299,7 +1306,7 @@ union _mkeys_container {
 
 static inline size_t
 xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *msg,
-		    union _mkeys_container *mkeys_container)
+		    union _mkeys_container *mkeys_container, uint32_t *total)
 {
 	size_t iovcnt = 0;
 	int i;
@@ -1309,6 +1316,10 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 	struct xlio_pd_key *mkeys = NULL;
 	struct spdk_xlio_sock *vsock = __xlio_sock(_sock);
 	bool first_req_mkey;
+	bool has_data = false;
+
+	assert(total != NULL);
+	*total = 0;
 
 	req = TAILQ_FIRST(&_sock->queued_reqs);
 
@@ -1318,7 +1329,7 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 		offset = req->internal.offset;
 
 		if (first_req_mkey == !req->mkeys) {
-			/* mkey setting is different with the first req */
+			/* mkey setting or zcopy threshold is different with the first req */
 			break;
 		}
 
@@ -1348,6 +1359,7 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 
 			iovs[iovcnt].iov_base = SPDK_SOCK_REQUEST_IOV(req, i)->iov_base + offset;
 			iovs[iovcnt].iov_len = SPDK_SOCK_REQUEST_IOV(req, i)->iov_len - offset;
+			*total += (uint32_t)iovs[iovcnt].iov_len;
 			iovcnt++;
 
 			offset = 0;
@@ -1357,6 +1369,9 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 			}
 		}
 
+		if (!has_data) {
+			has_data = req->has_memory_domain_data;
+		}
 		if (iovcnt >= IOV_BATCH_SIZE) {
 			break;
 		}
@@ -1364,7 +1379,7 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 		req = TAILQ_NEXT(req, internal.link);
 	}
 
-	if (mkeys) {
+	if (mkeys && has_data) {
 		msg->msg_controllen = CMSG_SPACE(sizeof(struct xlio_pd_key) * iovcnt);
 		cmsg->cmsg_len = CMSG_LEN(sizeof(struct xlio_pd_key) * iovcnt);
 	} else {
@@ -1390,6 +1405,9 @@ _sock_flush_ext(struct spdk_sock *sock)
 	unsigned int offset;
 	size_t len;
 	union _mkeys_container mkeys_container;
+	bool is_zcopy;
+	uint32_t zerocopy_threshold;
+	uint32_t total;
 
 	/* Can't flush from within a callback or we end up with recursive calls */
 	if (sock->cb_cnt > 0) {
@@ -1400,14 +1418,25 @@ _sock_flush_ext(struct spdk_sock *sock)
 		return 0;
 	}
 
-	if (vsock->zcopy) {
+	iovcnt = xlio_sock_prep_reqs(sock, iovs, &msg, &mkeys_container, &total);
+	if (spdk_unlikely(iovcnt == 0)) {
+		return 0;
+	}
+
+	assert(!(!vsock->zcopy && msg.msg_controllen > 0));
+
+	zerocopy_threshold = g_spdk_xlio_sock_impl_opts.zerocopy_threshold;
+
+	/* Allow zcopy if enabled on socket and either the data needs to be sent,
+	 * which is reported by xlio_sock_prep_reqs() with setting msg.msg_controllen
+	 * or the msg size is bigger than the threshold configured. */
+	if (vsock->zcopy && (msg.msg_controllen || total >= zerocopy_threshold)) {
 		flags = MSG_ZEROCOPY;
 	} else {
 		flags = 0;
 	}
 
-	iovcnt = xlio_sock_prep_reqs(sock, iovs, &msg, &mkeys_container);
-	assert(iovcnt);
+	is_zcopy = (flags & MSG_ZEROCOPY);
 
 	/* Perform the vectored write */
 	msg.msg_iov = iovs;
@@ -1423,18 +1452,24 @@ _sock_flush_ext(struct spdk_sock *sock)
 		return rc;
 	}
 
-	/* Handling overflow case, because we use vsock->sendmsg_idx - 1 for the
-	 * req->internal.offset, so sendmsg_idx should not be zero  */
-	if (spdk_unlikely(vsock->sendmsg_idx == UINT32_MAX)) {
-		vsock->sendmsg_idx = 1;
-	} else {
-		vsock->sendmsg_idx++;
+	if (is_zcopy) {
+		/* Handling overflow case, because we use vsock->sendmsg_idx - 1 for the
+		 * req->internal.offset, so sendmsg_idx should not be zero  */
+		if (spdk_unlikely(vsock->sendmsg_idx == UINT32_MAX)) {
+			vsock->sendmsg_idx = 1;
+		} else {
+			vsock->sendmsg_idx++;
+		}
 	}
 
 	/* Consume the requests that were actually written */
 	req = TAILQ_FIRST(&sock->queued_reqs);
 	while (req) {
 		offset = req->internal.offset;
+
+		/* req->internal.is_zcopy is true when the whole req or part of it is
+		 * sent with zerocopy */
+		req->internal.is_zcopy = is_zcopy;
 
 		for (i = 0; i < req->iovcnt; i++) {
 			/* Advance by the offset first */
@@ -1460,7 +1495,8 @@ _sock_flush_ext(struct spdk_sock *sock)
 		/* Handled a full request. */
 		spdk_sock_request_pend(sock, req);
 
-		if (!vsock->zcopy) {
+		/* Ordering control. */
+		if (!req->internal.is_zcopy && req == TAILQ_FIRST(&sock->pending_reqs)) {
 			/* The sendmsg syscall above isn't currently asynchronous,
 			* so it's already done. */
 			retval = spdk_sock_request_put(sock, req, 0);
@@ -1814,6 +1850,7 @@ xlio_sock_impl_get_opts(struct spdk_sock_impl_opts *opts, size_t *len)
 	GET_FIELD(enable_zerocopy_send_server);
 	GET_FIELD(enable_zerocopy_send_client);
 	GET_FIELD(enable_zerocopy_recv);
+	GET_FIELD(zerocopy_threshold);
 
 #undef GET_FIELD
 #undef FIELD_OK
@@ -1847,6 +1884,7 @@ xlio_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	SET_FIELD(enable_zerocopy_send_server);
 	SET_FIELD(enable_zerocopy_send_client);
 	SET_FIELD(enable_zerocopy_recv);
+	SET_FIELD(zerocopy_threshold);
 
 #undef SET_FIELD
 #undef FIELD_OK

@@ -85,6 +85,7 @@ struct spdk_sock_request {
 		bool				is_zcopy;
 	} internal;
 
+	bool				has_memory_domain_data;
 	uint32_t			*mkeys;
 	int				iovcnt;
 	/* struct iovec			iov[]; */

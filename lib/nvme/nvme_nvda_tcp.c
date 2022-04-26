@@ -903,6 +903,7 @@ nvme_tcp_qpair_capsule_cmd_send(struct nvme_tcp_qpair *tqpair,
 	struct nvme_tcp_pdu *pdu;
 	struct spdk_nvme_tcp_cmd *capsule_cmd;
 	uint32_t plen = 0, alignment;
+	bool has_memory_domain;
 	uint8_t pdo;
 
 	SPDK_DEBUGLOG(nvme, "enter\n");
@@ -959,6 +960,11 @@ end:
 	if (nvme_tcp_fill_mkeys(tqpair, tcp_req, pdu) != 0) {
 		return -1;
 	}
+
+	/* Let socket layer know we have memory domain and data that has to be sent with
+	 * full zcopy. */
+	has_memory_domain = tcp_req->req->payload.opts && tcp_req->req->payload.opts->memory_domain;
+	pdu->sock_req.has_memory_domain_data = has_memory_domain && tcp_req->in_capsule_data;
 	spdk_sock_writev_async(tqpair->sock, &pdu->sock_req);
 
 	return 0;
@@ -1708,6 +1714,7 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 	struct nvme_tcp_pdu *rsp_pdu;
 	struct spdk_nvme_tcp_h2c_data_hdr *h2c_data;
 	uint32_t plen, pdo, alignment;
+	bool has_memory_domain;
 
 	/* Reinit the send_ack and h2c_send_waiting_ack bits */
 	tcp_req->ordering.bits.send_ack = 0;
@@ -1773,6 +1780,9 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 		return;
 	}
 
+	/* Always has domain data if memory domains active. */
+	has_memory_domain = tcp_req->req->payload.opts && tcp_req->req->payload.opts->memory_domain;
+	rsp_pdu->sock_req.has_memory_domain_data = has_memory_domain;
 	spdk_sock_writev_async(tqpair->sock, &rsp_pdu->sock_req);
 }
 
