@@ -207,3 +207,7 @@ CONFIG_IPSEC_MB_DIR=
 
 # Generate Storage Management Agent's protobuf interface
 CONFIG_SMA=n
+
+# Build with libxlio suport.
+CONFIG_XLIO=n
+CONFIG_XLIO_DIR=

@@ -1,8 +1,7 @@
 #
 #  BSD LICENSE
 #
-#  Copyright (c) Intel Corporation. All rights reserved.
-#  Copyright (c) Mellanox Technologies LTD. All rights reserved.
+#  Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -31,42 +30,19 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-SO_VER := 4
+SO_VER := 1
 SO_MINOR := 0
 
-SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_rdma.map)
+LIBNAME = sock_xlio
+C_SRCS = xlio.c
 
-LIBNAME = rdma
-
-C_SRCS = common.c rdma_memory.c
-
-ifeq ($(CONFIG_RDMA_PROV),verbs)
-C_SRCS += rdma_verbs.c
-else ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-C_SRCS += rdma_mlx5_dv.c
-LOCAL_SYS_LIBS += -lmlx5
-else
-$(error Wrong RDMA provider specified: $(CONFIG_RDMA_PROV))
+ifneq ($(strip $(CONFIG_XLIO_DIR)),)
+CFLAGS += -I$(CONFIG_XLIO_DIR)/include
 endif
 
-LOCAL_SYS_LIBS += -libverbs -lrdmacm
-#Attach only if FreeBSD and RDMA is specified with configure
-ifeq ($(OS),FreeBSD)
-# Mellanox - MLX4 HBA Userspace Library
-ifneq ("$(wildcard /usr/lib/libmlx4.*)","")
-LOCAL_SYS_LIBS += -lmlx4
-endif
-# Mellanox - MLX5 HBA Userspace Library
-ifneq ("$(wildcard /usr/lib/libmlx5.*)","")
-LOCAL_SYS_LIBS += -lmlx5
-endif
-# Chelsio HBA Userspace Library
-ifneq ("$(wildcard /usr/lib/libcxgb4.*)","")
-LOCAL_SYS_LIBS += -lcxgb4
-endif
-endif
+SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
 include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk

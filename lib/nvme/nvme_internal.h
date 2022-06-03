@@ -213,6 +213,40 @@ extern pid_t g_spdk_nvme_pid;
 /* This value indicates that a read from a PCIe register is invalid. This can happen when a device is no longer present */
 #define SPDK_NVME_INVALID_REGISTER_VALUE 0xFFFFFFFFu
 
+#define NVME_MAX_ZCOPY_IOVS (128)
+
+struct spdk_nvme_zcopy_io {
+	/**
+	 * Array of iovecs allocated for zcopy
+	 */
+	struct iovec			*iovs;
+
+	/**
+	 * Number of iovecs in iovec array.
+	 */
+	int				iovcnt;
+
+	/**
+	 * Callback for zcopy
+	 */
+	spdk_nvme_cmd_zcopy_cb		zcopy_cb_fn;
+
+	/**
+	 * Whether the buffer should be populated with the real data
+	 */
+	uint8_t				populate : 1;
+
+	/**
+	 * Whether the buffer should be committed back to disk
+	 */
+	uint8_t				commit : 1;
+
+	/**
+	 * True if this request is in the 'start' phase of zcopy. False if in 'end'.
+	 */
+	uint8_t				start : 1;
+};
+
 enum nvme_payload_type {
 	NVME_PAYLOAD_TYPE_INVALID = 0,
 
@@ -221,6 +255,9 @@ enum nvme_payload_type {
 
 	/** nvme_request::u.sgl is valid for this request */
 	NVME_PAYLOAD_TYPE_SGL,
+
+	/** payload for this request is zcopy buffer*/
+	NVME_PAYLOAD_TYPE_ZCOPY,
 };
 
 /** Boot partition write states */
@@ -235,6 +272,11 @@ enum nvme_bp_write_state {
  * Descriptor for a request data payload.
  */
 struct nvme_payload {
+	/**
+	 * If zcopy != NULL, this is a zcopy payload.
+	 */
+	struct spdk_nvme_zcopy_io *zcopy;
+
 	/**
 	 * Functions for retrieving physical addresses for scattered payloads.
 	 */
@@ -276,7 +318,13 @@ struct nvme_payload {
 
 static inline enum nvme_payload_type
 nvme_payload_type(const struct nvme_payload *payload) {
-	return payload->reset_sgl_fn ? NVME_PAYLOAD_TYPE_SGL : NVME_PAYLOAD_TYPE_CONTIG;
+	if (payload->zcopy) {
+		return NVME_PAYLOAD_TYPE_ZCOPY;
+	} else if (payload->reset_sgl_fn) {
+		return NVME_PAYLOAD_TYPE_SGL;
+	} else {
+		return NVME_PAYLOAD_TYPE_CONTIG;
+	}
 }
 
 struct nvme_error_cmd {
@@ -306,6 +354,7 @@ struct nvme_request {
 	 *  request which was split into multiple child requests.
 	 */
 	uint16_t			num_children;
+	uint16_t			num_zcopy_children;
 
 	/**
 	 * Offset in bytes from the beginning of payload for this request.
@@ -330,6 +379,11 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		cb_fn;
 	void				*cb_arg;
 	STAILQ_ENTRY(nvme_request)	stailq;
+
+	/**
+	 * Zcopy information of this request's command.
+	 */
+	struct spdk_nvme_zcopy_io	zcopy;
 
 	struct spdk_nvme_qpair		*qpair;
 
@@ -1260,6 +1314,10 @@ typedef int (*spdk_nvme_parse_ana_log_page_cb)(
 int	nvme_ctrlr_parse_ana_log_page(struct spdk_nvme_ctrlr *ctrlr,
 				      spdk_nvme_parse_ana_log_page_cb cb_fn, void *cb_arg);
 
+int	nvme_transport_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
+static inline int nvme_request_free_children_zcopy(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
+static inline void nvme_free_request(struct nvme_request *req);
+
 #define NVME_INIT_REQUEST(req, _cb_fn, _cb_arg, _payload, _payload_size, _md_size)	\
 	do {						\
 		req->cb_fn = _cb_fn;			\
@@ -1358,6 +1416,67 @@ nvme_complete_request(spdk_nvme_cmd_cb cb_fn, void *cb_arg, struct spdk_nvme_qpa
 
 	if (cb_fn) {
 		cb_fn(cb_arg, cpl);
+	} else if (spdk_unlikely(req->zcopy.zcopy_cb_fn &&
+			         !req->parent &&
+			         nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY)) {
+		/* Warning: If nvme_tcp_req is allocated in nvme_request,
+		 * nvme_complete_request_zcopy should be called rather
+		 * than nvme_complete_request, otherwise, it will cause
+		 * resource leak.
+		 */
+		assert(req->queued == true);
+		req->zcopy.zcopy_cb_fn(cb_arg, cpl, &req->zcopy);
+	}
+}
+
+static inline void
+nvme_complete_request_zcopy(spdk_nvme_cmd_zcopy_cb cb_fn,
+			    void *cb_arg,
+			    struct spdk_nvme_qpair *qpair,
+			    struct nvme_request *req,
+			    struct spdk_nvme_cpl *cpl,
+			    bool parent)
+{
+	struct spdk_nvme_cpl		err_cpl;
+	struct nvme_error_cmd		*cmd;
+
+	/* error injection at completion path,
+	 * only inject for successful completed commands
+	 */
+	if (spdk_unlikely(!TAILQ_EMPTY(&qpair->err_cmd_head) &&
+			  !spdk_nvme_cpl_is_error(cpl))) {
+		TAILQ_FOREACH(cmd, &qpair->err_cmd_head, link) {
+
+			if (cmd->do_not_submit) {
+				continue;
+			}
+
+			if ((cmd->opc == req->cmd.opc) && cmd->err_count) {
+
+				err_cpl = *cpl;
+				err_cpl.status.sct = cmd->status.sct;
+				err_cpl.status.sc = cmd->status.sc;
+
+				cpl = &err_cpl;
+				cmd->err_count--;
+				break;
+			}
+		}
+	}
+
+	if (cb_fn) {
+		cb_fn(cb_arg, cpl, &req->zcopy);
+	}
+
+	if (spdk_unlikely(spdk_nvme_cpl_is_error(cpl))) {
+		if (parent) {
+			nvme_request_free_children_zcopy(qpair, req);
+			req->zcopy.iovs = NULL;
+			req->zcopy.iovcnt = 0;
+			nvme_free_request(req);
+		} else if (!req->queued) {
+			nvme_transport_qpair_free_request(qpair, req);
+		}
 	}
 }
 
@@ -1412,12 +1531,75 @@ nvme_request_remove_child(struct nvme_request *parent, struct nvme_request *chil
 	TAILQ_REMOVE(&parent->children, child, child_tailq);
 }
 
+static inline int
+nvme_request_set_parent_zcopy_iovs(struct nvme_request *req)
+{
+	struct nvme_request *child, *tmp;
+
+	assert(req->num_children != 0);
+
+	TAILQ_FOREACH_SAFE(child, &req->children, child_tailq, tmp) {
+		assert(child->zcopy.iovs != NULL);
+
+		if (!req->zcopy.iovs) {
+			req->zcopy.iovs = child->zcopy.iovs;
+		} else if (req->zcopy.iovcnt + child->zcopy.iovcnt <= NVME_MAX_ZCOPY_IOVS) {
+			memcpy(req->zcopy.iovs + req->zcopy.iovcnt, child->zcopy.iovs,
+			       child->zcopy.iovcnt * sizeof(child->zcopy.iovs[0]));
+		} else {
+			/* todo: copy to prealloc memory to decrease iovcnt */
+			return -ENOMEM;
+		}
+
+		req->zcopy.iovcnt += child->zcopy.iovcnt;
+	}
+
+	return 0;
+}
+
+static inline void
+nvme_cb_complete_child_zcopy(void *child_arg,
+			     const struct spdk_nvme_cpl *cpl,
+			     struct spdk_nvme_zcopy_io *zcopy)
+{
+	struct nvme_request *child = child_arg;
+	struct nvme_request *parent = child->parent;
+
+	assert(nvme_payload_type(&parent->payload) == NVME_PAYLOAD_TYPE_ZCOPY);
+
+	/* zcopy children requests will be removed together
+	 * if all children requests complete successfully*/
+	parent->num_zcopy_children--;
+
+	if (spdk_nvme_cpl_is_error(cpl)) {
+		memcpy(&parent->parent_status, cpl, sizeof(*cpl));
+		nvme_request_remove_child(parent, child);
+	}
+
+	if (parent->num_zcopy_children == 0) {
+		if (spdk_nvme_cpl_is_success(&parent->parent_status)) {
+			int rc = nvme_request_set_parent_zcopy_iovs(parent);
+			if (rc != 0) {
+				parent->parent_status.status.sct = SPDK_NVME_SCT_GENERIC;
+				parent->parent_status.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+			}
+		}
+
+		nvme_complete_request_zcopy(parent->zcopy.zcopy_cb_fn, parent->cb_arg,
+					    parent->qpair, parent, &parent->parent_status, true);
+	}
+}
+
 static inline void
 nvme_cb_complete_child(void *child_arg, const struct spdk_nvme_cpl *cpl)
 {
 	struct nvme_request *child = child_arg;
 	struct nvme_request *parent = child->parent;
 
+	if (nvme_payload_type(&parent->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
+		nvme_cb_complete_child_zcopy(child, cpl, NULL);
+		return;
+	}
 	nvme_request_remove_child(parent, child);
 
 	if (spdk_nvme_cpl_is_error(cpl)) {
@@ -1452,6 +1634,10 @@ nvme_request_add_child(struct nvme_request *parent, struct nvme_request *child)
 	TAILQ_INSERT_TAIL(&parent->children, child, child_tailq);
 	child->parent = parent;
 	child->cb_fn = nvme_cb_complete_child;
+	if (nvme_payload_type(&parent->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
+		parent->num_zcopy_children++;
+		child->zcopy.zcopy_cb_fn = nvme_cb_complete_child_zcopy;
+	}
 	child->cb_arg = child;
 }
 
@@ -1470,6 +1656,30 @@ nvme_request_free_children(struct nvme_request *req)
 		nvme_request_free_children(child);
 		nvme_free_request(child);
 	}
+}
+
+static inline int
+nvme_request_free_children_zcopy(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
+{
+	struct nvme_request *child, *tmp;
+	int ret = 0;
+
+	if (req->num_children == 0) {
+		return -ENOENT;
+	}
+
+	/* free all child nvme_request */
+	TAILQ_FOREACH_SAFE(child, &req->children, child_tailq, tmp) {
+		int rc;
+		assert(child->queued == false);
+		nvme_request_remove_child(req, child);
+		rc = nvme_transport_qpair_free_request(qpair, child);
+		if (rc != 0) {
+			ret = rc;
+		}
+	}
+
+	return ret;
 }
 
 int	nvme_request_check_timeout(struct nvme_request *req, uint16_t cid,

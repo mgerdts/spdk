@@ -131,6 +131,22 @@ nvme_ctrlr_detach_poll_async(struct nvme_ctrlr_detach_ctx *ctx)
 	return rc;
 }
 
+void
+spdk_nvme_zcopy_io_get_iovec(struct spdk_nvme_zcopy_io *zcopy_io, struct iovec **iovs, int *iovcnt)
+{
+	if (zcopy_io == NULL) {
+		return;
+	}
+
+	if (iovs) {
+		*iovs = zcopy_io->iovs;
+	}
+
+	if (iovcnt) {
+		*iovcnt = zcopy_io->iovcnt;
+	}
+}
+
 int
 spdk_nvme_detach(struct spdk_nvme_ctrlr *ctrlr)
 {
