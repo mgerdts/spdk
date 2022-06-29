@@ -684,6 +684,7 @@ spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qp
 		zcopy.zcopy_cb_fn = cb_fn;
 		zcopy.populate = populate;
 		payload.zcopy = &zcopy;
+		payload.opts = NULL;
 		req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, NULL,
 				      cb_arg, SPDK_NVME_OPC_READ, io_flags,
 				      apptag_mask, apptag, false, &rc);
