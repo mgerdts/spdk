@@ -185,8 +185,6 @@ struct nvme_bdev {
 struct nvme_qpair {
 	struct nvme_ctrlr		*ctrlr;
 	struct spdk_nvme_qpair		*qpair;
-	/* Number of zcopy reqs is still using by user application*/
-	uint32_t			outstanding_zcopy_reqs;
 	struct nvme_poll_group		*group;
 	struct nvme_ctrlr_channel	*ctrlr_ch;
 

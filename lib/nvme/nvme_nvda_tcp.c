@@ -174,8 +174,7 @@ struct nvme_tcp_req {
 	struct nvme_tcp_pdu			*pdu;
 	union {
 		struct iovec			iov[NVME_TCP_MAX_SGL_DESCRIPTORS];
-		/* @todo: limiting max number of iovs is not the best option */
-		struct iovec			zcopy_iov[NVME_MAX_ZCOPY_IOVS];
+		struct iovec			*zcopy_iov;
 	};
 	uint32_t				iovcnt;
 	/* Used to hold a value received from subsequent R2T while we are still
@@ -362,12 +361,17 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		tqpair->needs_poll = false;
 	}
 
-	rc = spdk_sock_close(&tqpair->sock);
+	if (qpair->outstanding_zcopy_reqs == 0) {
+		rc = spdk_sock_close(&tqpair->sock);
 
-	if (tqpair->sock != NULL) {
-		SPDK_ERRLOG("tqpair=%p, errno=%d, rc=%d\n", tqpair, errno, rc);
-		/* Set it to NULL manually */
-		tqpair->sock = NULL;
+		if (tqpair->sock != NULL) {
+			SPDK_ERRLOG("tqpair=%p, errno=%d, rc=%d\n", tqpair, errno, rc);
+			/* Set it to NULL manually */
+			tqpair->sock = NULL;
+		}
+	} else {
+		SPDK_NOTICELOG("Cannot close socket for qpair %u because %d zcopy reqs is pending.\n",
+			       qpair->id, qpair->outstanding_zcopy_reqs);
 	}
 
 	/* clear the send_queue */
@@ -741,7 +745,7 @@ nvme_tcp_req_complete_safe(struct nvme_tcp_req *tcp_req)
 
 	TAILQ_REMOVE(&tcp_req->tqpair->outstanding_reqs, tcp_req, link);
 	if (nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
-		nvme_complete_request_zcopy(req->zcopy.zcopy_cb_fn, user_cb_arg, qpair, req, &cpl, false);
+		nvme_complete_request_zcopy(req->zcopy.zcopy_cb_fn, user_cb_arg, qpair, req, &cpl);
 	} else {
 		nvme_tcp_req_put(tcp_req->tqpair, tcp_req);
 		nvme_free_request(tcp_req->req);
@@ -1005,6 +1009,7 @@ nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair,
 		assert(tcp_req->req == req);
 
 		spdk_sock_free_bufs(tqpair->sock, tcp_req->sock_buf);
+		tcp_req->iovcnt = 0;
 		tcp_req->sock_buf = NULL;
 		nvme_tcp_req_put(tcp_req->tqpair, tcp_req);
 	} else {
@@ -1049,7 +1054,7 @@ nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req,
 
 	TAILQ_REMOVE(&tcp_req->tqpair->outstanding_reqs, tcp_req, link);
 	if (nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
-		nvme_complete_request_zcopy(req->zcopy.zcopy_cb_fn, req->cb_arg, req->qpair, req, rsp, false);
+		nvme_complete_request_zcopy(req->zcopy.zcopy_cb_fn, req->cb_arg, req->qpair, req, rsp);
 	} else {
 		nvme_complete_request(req->cb_fn, req->cb_arg, req->qpair, req, rsp);
 		nvme_free_request(req);
@@ -1922,7 +1927,7 @@ nvme_tcp_read_payload_data_zcopy(struct spdk_sock *sock, struct nvme_tcp_pdu *pd
 	int ret = 0;
 
 	if (pdu->data_len > pdu->rw_offset) {
-		size_t i = 0;
+		int rc;
 		size_t len = pdu->data_len - pdu->rw_offset;
 
 		ret = spdk_sock_recv_zcopy(sock, len, &sock_buf);
@@ -1946,24 +1951,58 @@ nvme_tcp_read_payload_data_zcopy(struct spdk_sock *sock, struct nvme_tcp_pdu *pd
 		}
 
 		/* We got all the data. Setup iovs */
-		/* @todo: we use tcp_req.zcopy_iov to store iovs. It is limited in size.
-		 * Check if there is a better way */
-
 		sock_buf = tcp_req->sock_buf;
+
+		assert(tcp_req->req->zcopy.iovcnt == 0);
 		while (sock_buf) {
-			assert(i < SPDK_COUNTOF(tcp_req->zcopy_iov));
-			if (i >= SPDK_COUNTOF(tcp_req->zcopy_iov)) {
-				SPDK_ERRLOG("Not enough zcopy iovs: %lu\n", i);
-				break;
-			}
-			tcp_req->zcopy_iov[i++] = sock_buf->iov;
+			tcp_req->req->zcopy.iovcnt++;
 			sock_buf = sock_buf->next;
 		}
 
-		tcp_req->iovcnt = i;
-		tcp_req->req->zcopy.iovs = tcp_req->zcopy_iov;
-		tcp_req->req->zcopy.iovcnt = tcp_req->iovcnt;
-		SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->iovcnt);
+		if (spdk_unlikely(tcp_req->req->zcopy.iovcnt > NVME_MAX_ZCOPY_IOVS)) {
+			/* fallback memcopy */
+			tcp_req->req->zcopy.iovcnt = 0;
+			rc = spdk_nvme_request_get_zcopy_buffers(tcp_req->req, pdu->data_len);
+			if (rc == 0) {
+				size_t dst_offset = 0;
+
+				tcp_req->zcopy_iov = tcp_req->req->zcopy.iovs;
+				tcp_req->iovcnt = tcp_req->req->zcopy.iovcnt;
+				sock_buf = tcp_req->sock_buf;
+				while (sock_buf) {
+					dst_offset += spdk_copy_iov_with_offset(&sock_buf->iov, 1,
+										tcp_req->req->zcopy.iovs,
+										tcp_req->req->zcopy.iovcnt,
+										dst_offset);
+
+					sock_buf = sock_buf->next;
+				}
+
+				spdk_sock_free_bufs(sock, tcp_req->sock_buf);
+				tcp_req->sock_buf = NULL;
+
+				SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->iovcnt);
+			}
+		} else {
+			rc = spdk_nvme_request_get_zcopy_iovs(&tcp_req->req->zcopy);
+			if (rc == 0) {
+				assert(tcp_req->iovcnt == 0);
+				tcp_req->zcopy_iov = tcp_req->req->zcopy.iovs;
+				sock_buf = tcp_req->sock_buf;
+				while (sock_buf) {
+					tcp_req->zcopy_iov[tcp_req->iovcnt++] = sock_buf->iov;
+					sock_buf = sock_buf->next;
+				}
+				SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->iovcnt);
+			}
+		}
+
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to set zcopy iov\n");
+			spdk_sock_free_bufs(sock, tcp_req->sock_buf);
+			tcp_req->sock_buf = NULL;
+			tcp_req->rsp.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		}
 	}
 
 	if (pdu->ddgst_enable) {
@@ -2775,6 +2814,22 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	num_events = spdk_sock_group_poll(group->sock_group);
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
+		if (qpair->outstanding_zcopy_reqs > 0) {
+			SPDK_DEBUGLOG(nvme, "Cannot destroy qpair %u because %d zcopy reqs is pending.\n",
+				      qpair->id, qpair->outstanding_zcopy_reqs);
+			continue;
+		}
+
+		tqpair = nvme_tcp_qpair(qpair);
+		if (tqpair->sock != NULL) {
+			int rc = spdk_sock_close(&tqpair->sock);
+			if (tqpair->sock != NULL) {
+				SPDK_ERRLOG("tqpair=%p, errno=%d, rc=%d\n", tqpair, errno, rc);
+				/* Set it to NULL manually */
+				tqpair->sock = NULL;
+			}
+		}
+
 		disconnected_qpair_cb(qpair, tgroup->group->ctx);
 	}
 

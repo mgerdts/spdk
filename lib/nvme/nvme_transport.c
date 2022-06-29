@@ -133,6 +133,15 @@ struct spdk_nvme_ctrlr *nvme_transport_ctrlr_construct(const struct spdk_nvme_tr
 
 	ctrlr = transport->ops.ctrlr_construct(trid, opts, devhandle);
 
+	if (ctrlr && (ctrlr->flags & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED)) {
+		int rc;
+		rc = spdk_nvme_init_zcopy_resource();
+		if (rc) {
+			nvme_transport_ctrlr_destruct(ctrlr);
+			ctrlr = NULL;
+		}
+	}
+
 	return ctrlr;
 }
 
@@ -156,6 +165,11 @@ nvme_transport_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
 	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
 
 	assert(transport != NULL);
+
+	if (ctrlr->flags & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED) {
+		spdk_nvme_free_zcopy_resource();
+	}
+
 	return transport->ops.ctrlr_destruct(ctrlr);
 }
 

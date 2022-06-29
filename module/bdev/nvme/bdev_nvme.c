@@ -1224,12 +1224,6 @@ bdev_nvme_disconnected_qpair_cb(struct spdk_nvme_qpair *qpair, void *poll_group_
 		return;
 	}
 
-	if (nvme_qpair->outstanding_zcopy_reqs > 0) {
-		SPDK_NOTICELOG("cannot destroy qpair %p because %d zcopy reqs is pending.\n",
-			       qpair, nvme_qpair->outstanding_zcopy_reqs);
-		return;
-	}
-
 	if (nvme_qpair->qpair != NULL) {
 		spdk_nvme_ctrlr_free_io_qpair(nvme_qpair->qpair);
 		nvme_qpair->qpair = NULL;
@@ -5585,10 +5579,6 @@ bdev_nvme_readv_zcopy_start_done(void *ref,
 	bdev_io->u.bdev.iovcnt = iovcnt;
 	bio->zcopy_io = zcopy_io;
 
-	if (spdk_nvme_cpl_is_success(cpl)) {
-		bio->io_path->qpair->outstanding_zcopy_reqs++;
-	}
-
 	spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
 }
 
@@ -6050,9 +6040,6 @@ bdev_nvme_readv_zcopy_end(struct nvme_bdev_io *bio)
 	int rc;
 	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
 	bool commit = bdev_io->u.bdev.zcopy.commit;
-
-	assert(bio->io_path->qpair->outstanding_zcopy_reqs > 0);
-	bio->io_path->qpair->outstanding_zcopy_reqs--;
 
 	rc = spdk_nvme_ns_cmd_zcopy_end(bdev_nvme_readv_zcopy_end_done,
 					bio, commit, bio->zcopy_io);

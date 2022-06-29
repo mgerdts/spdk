@@ -625,7 +625,7 @@ spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 					   struct nvme_request,
 					   zcopy);
 		struct spdk_nvme_cpl cpl;
-		int rc;
+		int rc = 0;
 		struct spdk_nvme_qpair *qpair;
 
 		assert(req != NULL);
@@ -634,11 +634,16 @@ spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 
 		assert(qpair != NULL);
 
+		assert(qpair->outstanding_zcopy_reqs > 0);
+		qpair->outstanding_zcopy_reqs--;
+
 		/* For Zcopy read, just need to free zcopy buffer here */
-		if (req->num_children > 0){
-			rc = nvme_request_free_children_zcopy(qpair, req);
-			req->zcopy.iovs = NULL;
-			req->zcopy.iovcnt = 0;
+		spdk_nvme_request_free_zcopy(req);
+		if (req->is_parent){
+			if (req->num_children > 0) {
+				rc = nvme_request_free_children_zcopy(qpair, req);
+			}
+			req->is_parent = false;
 			nvme_free_request(req);
 		} else {
 			rc = nvme_transport_qpair_free_request(qpair, req);

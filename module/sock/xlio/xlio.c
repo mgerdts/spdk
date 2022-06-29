@@ -269,7 +269,7 @@ spdk_xlio_get_api(void)
 	struct xlio_api_t *api_ptr = NULL;
 	socklen_t len = sizeof(api_ptr);
 
-	int err = g_xlio_ops.getsockopt(-1, SOL_SOCKET, SO_XLIO_GET_API, &api_ptr, &len);
+	int err = g_xlio_ops.getsockopt(-2, SOL_SOCKET, SO_XLIO_GET_API, &api_ptr, &len);
 	if (err < 0) {
 		return NULL;
 	}
@@ -718,6 +718,22 @@ retry:
 				/* error */
 				continue;
 			}
+		}
+
+		if (opts->ack_timeout) {
+#if defined(__linux__)
+			int to;
+
+			to = opts->ack_timeout;
+			rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &to, sizeof(to));
+			if (rc != 0) {
+				g_xlio_ops.close(fd);
+				/* error */
+				continue;
+			}
+#else
+			SPDK_WARNLOG("TCP_USER_TIMEOUT is not supported.\n");
+#endif
 		}
 
 		if (type == SPDK_SOCK_CREATE_LISTEN) {
