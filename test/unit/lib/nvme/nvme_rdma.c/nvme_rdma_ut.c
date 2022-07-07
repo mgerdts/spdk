@@ -623,20 +623,50 @@ static void
 test_nvme_rdma_poller_create(void)
 {
 	struct nvme_rdma_poll_group	group = {};
-	struct ibv_context *contexts = (struct ibv_context *)0xDEADBEEF;
+	struct ibv_context context = {
+		.device = (struct ibv_device *)0xDEADBEEF
+	};
+	struct ibv_context context_2 = {
+		.device = (struct ibv_device *)0xBAADBEEF
+	};
+	struct nvme_rdma_poller *poller_1, *poller_2, *poller_3;
 
 	/* Case: calloc and ibv not need to fail test */
 	STAILQ_INIT(&group.pollers);
-	group.num_pollers = 1;
-	int rc = nvme_rdma_poller_create(&group, contexts);
 
-	CU_ASSERT(rc == 0);
-	CU_ASSERT(group.num_pollers = 2);
-	CU_ASSERT(&group.pollers != NULL);
-	CU_ASSERT(group.pollers.stqh_first->device == contexts);
-	CU_ASSERT(group.pollers.stqh_first->cq == (struct ibv_cq *)0xFEEDBEEF);
-	CU_ASSERT(group.pollers.stqh_first->current_num_wc == DEFAULT_NVME_RDMA_CQ_SIZE);
-	CU_ASSERT(group.pollers.stqh_first->required_num_wc == 0);
+	poller_1 = nvme_rdma_poll_group_get_poller(&group, &context);
+	SPDK_CU_ASSERT_FATAL(poller_1 != NULL);
+	CU_ASSERT(group.num_pollers == 1);
+	CU_ASSERT(STAILQ_FIRST(&group.pollers) == poller_1);
+	CU_ASSERT(poller_1->refcnt == 1);
+	CU_ASSERT(poller_1->device == &context);
+	CU_ASSERT(poller_1->cq == (struct ibv_cq *)0xFEEDBEEF);
+	CU_ASSERT(poller_1->current_num_wc == DEFAULT_NVME_RDMA_CQ_SIZE);
+	CU_ASSERT(poller_1->required_num_wc == 0);
+
+	poller_2 = nvme_rdma_poll_group_get_poller(&group, &context_2);
+	SPDK_CU_ASSERT_FATAL(poller_2 != NULL);
+	CU_ASSERT(group.num_pollers == 2);
+	CU_ASSERT(STAILQ_FIRST(&group.pollers) == poller_2);
+	CU_ASSERT(poller_2->refcnt == 1);
+	CU_ASSERT(poller_2->device == &context_2);
+
+	poller_3 = nvme_rdma_poll_group_get_poller(&group, &context);
+	SPDK_CU_ASSERT_FATAL(poller_3 != NULL);
+	CU_ASSERT(poller_3 == poller_1);
+	CU_ASSERT(group.num_pollers == 2);
+	CU_ASSERT(poller_3->refcnt == 2);
+
+	nvme_rdma_poll_group_put_poller(&group, poller_2);
+	CU_ASSERT(group.num_pollers == 1);
+
+	nvme_rdma_poll_group_put_poller(&group, poller_1);
+	CU_ASSERT(group.num_pollers == 1);
+	CU_ASSERT(poller_3->refcnt == 1);
+
+	nvme_rdma_poll_group_put_poller(&group, poller_3);
+	CU_ASSERT(STAILQ_EMPTY(&group.pollers));
+	CU_ASSERT(group.num_pollers == 0);
 
 	nvme_rdma_poll_group_free_pollers(&group);
 }
