@@ -3,7 +3,7 @@
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -87,7 +87,7 @@ nvme_fabric_prop_set_cmd_sync(struct spdk_nvme_ctrlr *ctrlr,
 		return rc;
 	}
 
-	if (nvme_wait_for_completion(ctrlr->adminq, status)) {
+	if (nvme_wait_for_completion_robust_lock(ctrlr->adminq, status, &ctrlr->ctrlr_lock)) {
 		if (!status->timed_out) {
 			free(status);
 		}
@@ -173,7 +173,7 @@ nvme_fabric_prop_get_cmd_sync(struct spdk_nvme_ctrlr *ctrlr,
 		return rc;
 	}
 
-	if (nvme_wait_for_completion(ctrlr->adminq, status)) {
+	if (nvme_wait_for_completion_robust_lock(ctrlr->adminq, status, &ctrlr->ctrlr_lock)) {
 		if (!status->timed_out) {
 			free(status);
 		}
