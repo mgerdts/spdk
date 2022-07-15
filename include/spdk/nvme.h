@@ -4066,6 +4066,7 @@ struct spdk_nvme_transport_ops {
 					struct spdk_memory_domain **domains,
 					int array_size);
 
+	int (*ctrlr_ready)(struct spdk_nvme_ctrlr *ctrlr);
 	int (*qpair_free_request)(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 };
 
