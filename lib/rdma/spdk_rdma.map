@@ -21,6 +21,8 @@
 	spdk_rdma_get_memory_domain;
 	spdk_rdma_get_tcp_memory_domain;
 	spdk_rdma_put_memory_domain;
+	spdk_rdma_get_pd;
+	spdk_rdma_put_pd;
 
 	local: *;
 };

@@ -344,4 +344,20 @@ struct spdk_rdma_memory_domain * spdk_rdma_get_tcp_memory_domain(struct ibv_pd *
  */
 void spdk_rdma_put_memory_domain(struct spdk_rdma_memory_domain *domain);
 
+/**
+ * Get a Protection Domain for an RDMA device context.
+ *
+ * \param context RDMA device context
+ * \return Pointer to the allocated Protection Domain
+ */
+struct ibv_pd *
+spdk_rdma_get_pd(struct ibv_context *context);
+
+/**
+ * Return a Protection Domain.
+ *
+ * \param pd Pointer to the Protection Domain
+ */
+void spdk_rdma_put_pd(struct ibv_pd *pd);
+
 #endif /* SPDK_RDMA_H */
