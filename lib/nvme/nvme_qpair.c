@@ -783,6 +783,8 @@ spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 	 */
 	if (ret > 0) {
 		nvme_qpair_resubmit_requests(qpair, ret);
+	} else {
+		_nvme_qpair_complete_abort_queued_reqs(qpair);
 	}
 
 	/* Complete any pending register operations */
