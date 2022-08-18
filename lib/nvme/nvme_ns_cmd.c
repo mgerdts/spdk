@@ -656,8 +656,8 @@ spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
 		} else {
 			cpl.status.sc = SPDK_NVME_SC_SUCCESS;
 			cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+			cb_fn(cb_arg, &cpl, NULL);
 		}
-		cb_fn(cb_arg, &cpl, NULL);
 
 		return rc;
 	}

@@ -256,9 +256,14 @@ struct spdk_nvme_zcopy_io {
 	uint8_t				start : 1;
 
 	/**
-	 * True if iovs is allocated from pool. False if iovs is malloced.
+	 * True if iovs is allocated from pool.
 	 */
 	uint8_t				iovs_from_pool : 1;
+
+	/**
+	 * True if iovs is allocated by malloc.
+	 */
+	uint8_t				iovs_from_malloc : 1;
 
 	/**
 	 * True if the buffer is allocated from mem pool
@@ -1519,6 +1524,10 @@ nvme_complete_request_zcopy(spdk_nvme_cmd_zcopy_cb cb_fn,
 	}
 
 	if (cb_fn) {
+		if (!req->parent && spdk_nvme_cpl_is_success(cpl)) {
+			qpair->outstanding_zcopy_reqs++;
+		}
+
 		cb_fn(cb_arg, cpl, &req->zcopy);
 	}
 
@@ -1532,8 +1541,6 @@ nvme_complete_request_zcopy(spdk_nvme_cmd_zcopy_cb cb_fn,
 			spdk_nvme_request_free_zcopy(req);
 			nvme_transport_qpair_free_request(qpair, req);
 		}
-	} else if (!req->parent) {
-		qpair->outstanding_zcopy_reqs++;
 	}
 }
 

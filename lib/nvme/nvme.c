@@ -331,6 +331,7 @@ spdk_nvme_request_get_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
 			zcopy->iovcnt = 0;
 			return -ENOMEM;
 		}
+		zcopy->iovs_from_malloc = true;
 	}
 
 	return 0;
@@ -340,21 +341,23 @@ spdk_nvme_request_get_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
 int
 spdk_nvme_request_put_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
 {
-	if (!zcopy->iovs || zcopy->iovcnt == 0) {
-		return -ENOENT;
-	}
+	assert(zcopy->iovs != NULL);
+	assert(zcopy->iovcnt > 0);
 
-	if (!zcopy->iovs_from_pool) {
+	if (zcopy->iovs_from_malloc) {
+		zcopy->iovs_from_malloc = false;
 		free(zcopy->iovs);
-	} else if (zcopy->iovcnt <= g_zcopy_pool_opts.zcopy_small_iov_num) {
-		spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_small_pool, zcopy->iovs);
-	} else {
-		spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_large_pool, zcopy->iovs);
+	} else if (zcopy->iovs_from_pool) {
+		zcopy->iovs_from_pool = false;
+		if (zcopy->iovcnt <= g_zcopy_pool_opts.zcopy_small_iov_num) {
+			spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_small_pool, zcopy->iovs);
+		} else {
+			spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_large_pool, zcopy->iovs);
+		}
 	}
 
 	zcopy->iovs = NULL;
 	zcopy->iovcnt = 0;
-	zcopy->iovs_from_pool = false;
 
 	return 0;
 }
