@@ -1164,10 +1164,8 @@ test_nvme_rdma_memory_domain(void)
 	/* Counters below are used to check the number of created/destroyed rdma_dma_device objects.
 	 * Since other unit tests may create dma_devices, we can't just check that the queue is empty or not */
 	uint32_t dma_dev_count_start = 0, dma_dev_count = 0, dma_dev_count_end = 0;
-	TAILQ_HEAD(, spdk_rdma_memory_domain) memory_domains = TAILQ_HEAD_INITIALIZER(
-				memory_domains);
 
-	TAILQ_FOREACH(domain_tmp, &memory_domains, link) {
+	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
 		dma_dev_count_start++;
 	}
 
@@ -1195,7 +1193,7 @@ test_nvme_rdma_memory_domain(void)
 	CU_ASSERT(domain_2->pd == pd_2);
 	CU_ASSERT(domain_2->ref == 1);
 
-	TAILQ_FOREACH(domain_tmp, &memory_domains, link) {
+	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
 		dma_dev_count++;
 	}
 	CU_ASSERT(dma_dev_count == dma_dev_count_start + 2);
@@ -1208,7 +1206,7 @@ test_nvme_rdma_memory_domain(void)
 	spdk_rdma_put_memory_domain(domain_1);
 	spdk_rdma_put_memory_domain(domain_2);
 
-	TAILQ_FOREACH(domain_tmp, &memory_domains, link) {
+	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
 		dma_dev_count_end++;
 	}
 	CU_ASSERT(dma_dev_count_start == dma_dev_count_end);

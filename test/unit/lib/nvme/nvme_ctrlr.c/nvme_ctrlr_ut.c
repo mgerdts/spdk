@@ -2487,8 +2487,8 @@ test_nvme_ctrlr_init_set_nvmf_ioccsz(void)
 	CU_ASSERT(nvme_ctrlr_process_init(&ctrlr) == 0);
 	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_IDENTIFY_NS);
 
-	CU_ASSERT(ctrlr.ioccsz_bytes == 0);
-	CU_ASSERT(ctrlr.icdoff == 0);
+	CU_ASSERT(ctrlr.ioccsz_bytes == 4096);
+	CU_ASSERT(ctrlr.icdoff == 1);
 
 	nvme_ctrlr_destruct(&ctrlr);
 
