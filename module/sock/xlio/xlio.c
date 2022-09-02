@@ -883,10 +883,24 @@ xlio_sock_accept(struct spdk_sock *_sock)
 	return &new_sock->base;
 }
 
+static void xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet);
+
 static int
 xlio_sock_close(struct spdk_sock *_sock)
 {
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
+
+	while (!STAILQ_EMPTY(&sock->received_packets)) {
+		struct xlio_sock_packet *packet = STAILQ_FIRST(&sock->received_packets);
+
+		STAILQ_REMOVE_HEAD(&sock->received_packets, link);
+		if (--packet->refs == 0) {
+			xlio_sock_free_packet(sock, packet);
+		} else {
+			SPDK_ERRLOG("Socket close: received packet with non zero refs %u, fd %d\n",
+				    packet->refs, sock->fd);
+		}
+	}
 
 	assert(TAILQ_EMPTY(&_sock->pending_reqs));
 
