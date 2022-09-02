@@ -1039,9 +1039,9 @@ xlio_sock_recvfrom_zcopy(struct spdk_xlio_sock *sock)
 
 	ret = g_xlio_api->recvfrom_zcopy(sock->fd, sock->xlio_packets_buf,
 					sizeof(sock->xlio_packets_buf), &flags, NULL, NULL);
-	if (ret < 0) {
-		if (spdk_unlikely(errno != EAGAIN && errno != EWOULDBLOCK)) {
-			SPDK_ERRLOG("recvfrom_zcopy failed, errno %d\n", errno);
+	if (ret <= 0) {
+		if (spdk_unlikely(ret == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))) {
+			SPDK_ERRLOG("recvfrom_zcopy failed, ret %d, errno %d\n", ret, errno);
 		}
 
 		return ret;
