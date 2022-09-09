@@ -193,12 +193,8 @@ The blobstore does not interpret the value of the internal XATTR, it only passes
  * long as this newly created blob remains a clone of it, it may be referred to
  * as an external clone.
  *
- * XXX-mg fix this next paragraph.
- * Reads beyond esnap_size will not be sent to the external snapshot. If this
- * offset does not fall on a cluster boundary reads of the blob beyond this
- * offset to the end of the cluster will return zeroes. Any data written beyond
- * this size to the end of the cluster will be stored and will be returned on
- * subsequent reads.
+ * If the size of the external clone does not align with the blobstore's cluster
+ * size, the clone is grown to end on cluster boundary.
  *
  * The memory referenced by cookie, the xattrs structure, and all memory
  * referenced by the xattrs structure must remain valid until the completion is
@@ -212,14 +208,12 @@ The blobstore does not interpret the value of the internal XATTR, it only passes
  * primary key for external snapshot opens via esnap_mod->open().
  * \param cookie_size The size in bytes of the cookie. This value must be no
  * more than 4058.
- * \param esnap_size Size in bytes of the external snapshot.
  * \param xattrs xattrs specified for the clone
  * \param cb_fn Called when the operation is complete.
  * \param cb_arg Argument passed to function cb_fn.
  */
 void spdk_bs_create_external_clone(struct spdk_blob_store *bs,
 				   const void *cookie, size_t cookie_size,
-				   uint64_t esnap_size,
 				   const struct spdk_blob_xattr_opts *xattrs,
 				   spdk_blob_op_with_id_complete_ cb_fn,
 				   void *cb_arg);
@@ -321,7 +315,7 @@ The blob bdev module will be updated as follows:
 - `spdk_bdev_create_bs_dev_ro()` is added to be used when opening an external snapshot.
 - Shared read-only claims are implemented and used by `spdk_bdev_create_bs_dev_ro()`. Shared
   read-only claims are automatically released through the `destroy()` callback of `struct
-  spdk_bs_dev`s returned from `spdk-bdev_create_bs_dev_ro()`.
+  spdk_bs_dev`s returned from `spdk_bdev_create_bs_dev_ro()`.
 
 ### Public interface
 
