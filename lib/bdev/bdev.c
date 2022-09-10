@@ -459,14 +459,34 @@ bdev_get_by_name(const char *bdev_name)
 	return NULL;
 }
 
+int lock_line;
+
+#define LOCK(mtx) { \
+	int result = pthread_mutex_lock(mtx); \
+	if (result != 0) { \
+		SPDK_ERRLOG("lock failed: %s last locked at %d\n", strerror(result), lock_line); \
+		abort(); \
+	} else { \
+		lock_line = __LINE__; \
+	} \
+}
+
+#define UNLOCK(mtx) { \
+	int result = pthread_mutex_unlock(mtx); \
+	if (result != 0) { \
+		SPDK_ERRLOG("unlock failed: %s\n", strerror(result)); \
+		abort(); \
+	} \
+}
+
 struct spdk_bdev *
 spdk_bdev_get_by_name(const char *bdev_name)
 {
 	struct spdk_bdev *bdev;
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	bdev = bdev_get_by_name(bdev_name);
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	return bdev;
 }
@@ -1361,7 +1381,7 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 		}
 	}
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 
 	TAILQ_FOREACH(bdev, &g_bdev_mgr.bdevs, internal.link) {
 		if (bdev->fn_table->write_config_json) {
@@ -1371,7 +1391,7 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 		bdev_qos_config_json(bdev, w);
 	}
 
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	/* This has to be last RPC in array to make sure all bdevs finished examine */
 	spdk_json_write_object_begin(w);
@@ -1564,6 +1584,7 @@ spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 	int cache_size;
 	int rc = 0;
 	char mempool_name[32];
+	pthread_mutexattr_t attr;
 
 	assert(cb_fn != NULL);
 
@@ -1572,6 +1593,15 @@ spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 
 	spdk_notify_type_register("bdev_register");
 	spdk_notify_type_register("bdev_unregister");
+
+	/* See "XXX-mg this leads to a recursive mutex acquire" elsewhere in this file */
+	if (pthread_mutexattr_init(&attr) != 0 ||
+	    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0 ||
+	    pthread_mutex_init(&g_bdev_mgr.mutex, &attr) != 0) {
+		SPDK_ERRLOG("initialize mutex failed\n");
+		bdev_init_complete(-1);
+		return;
+	}
 
 	snprintf(mempool_name, sizeof(mempool_name), "bdev_io_%d", getpid());
 
@@ -3611,9 +3641,9 @@ bdev_name_add(struct spdk_bdev_name *bdev_name, struct spdk_bdev *bdev, const ch
 
 	bdev_name->bdev = bdev;
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	tmp = RB_INSERT(bdev_name_tree, &g_bdev_mgr.bdev_names, bdev_name);
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	if (tmp != NULL) {
 		SPDK_ERRLOG("Bdev name %s already exists\n", name);
@@ -3634,9 +3664,9 @@ bdev_name_del_unsafe(struct spdk_bdev_name *bdev_name)
 static void
 bdev_name_del(struct spdk_bdev_name *bdev_name)
 {
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	bdev_name_del_unsafe(bdev_name);
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 }
 
 int
@@ -6346,7 +6376,7 @@ bdev_unregister(struct spdk_io_channel_iter *i, int status)
 	struct spdk_bdev *bdev = spdk_io_channel_iter_get_ctx(i);
 	int rc;
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	pthread_mutex_lock(&bdev->internal.mutex);
 	/*
 	 * Set the status to REMOVING after completing to abort channels. Otherwise,
@@ -6356,7 +6386,7 @@ bdev_unregister(struct spdk_io_channel_iter *i, int status)
 	bdev->internal.status = SPDK_BDEV_STATUS_REMOVING;
 	rc = bdev_unregister_unsafe(bdev);
 	pthread_mutex_unlock(&bdev->internal.mutex);
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	if (rc == 0) {
 		spdk_io_device_unregister(__bdev_to_io_dev(bdev), bdev_destroy_cb);
@@ -6379,10 +6409,10 @@ spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn, void
 		return;
 	}
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	if (bdev->internal.status == SPDK_BDEV_STATUS_UNREGISTERING ||
 	    bdev->internal.status == SPDK_BDEV_STATUS_REMOVING) {
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
+		UNLOCK(&g_bdev_mgr.mutex);
 		if (cb_fn) {
 			cb_fn(cb_arg, -EBUSY);
 		}
@@ -6394,7 +6424,7 @@ spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn, void
 	bdev->internal.unregister_cb = cb_fn;
 	bdev->internal.unregister_ctx = cb_arg;
 	pthread_mutex_unlock(&bdev->internal.mutex);
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	spdk_bdev_set_qd_sampling_period(bdev, 0);
 
@@ -6556,19 +6586,31 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 		return -EINVAL;
 	}
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 
 	bdev = bdev_get_by_name(bdev_name);
 
 	if (bdev == NULL) {
 		SPDK_NOTICELOG("Currently unable to find bdev with name: %s\n", bdev_name);
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
+		UNLOCK(&g_bdev_mgr.mutex);
 		return -ENODEV;
 	}
 
+	/* XXX-mg this leads to a recursive mutex acquire:
+	 * (gdb) where
+	 * #0  0x00007fdbcfc7937f in raise () from /lib64/libc.so.6
+	 * #1  0x00007fdbcfc63db5 in abort () from /lib64/libc.so.6
+	 * #2  0x00000000005612bb in spdk_bdev_get_by_name (bdev_name=0x1706ac0 "Malloc0") at bdev.c:490
+	 * #3  0x0000000000426dfb in vbdev_lvol_get_memory_domains (ctx=0x1707f90, domains=0x0, array_size=0) at vbdev_lvol.c:948
+	 * #4  0x00000000005730e1 in spdk_bdev_get_memory_domains (bdev=0x1709e30, domains=0x0, array_size=0) at bdev.c:7820
+	 * #5  0x000000000056fb6f in bdev_desc_alloc (bdev=0x1709e30, event_cb=0x576a8c <bdev_part_base_event_cb>, event_ctx=0x170a430, _desc=0x7ffeb88c2920)
+	 *     at bdev.c:6553
+	 * #6  0x000000000056fea1 in spdk_bdev_open_ext (bdev_name=0x1707fa8 "ea0dce67-ec3e-4b28-a4ba-75388e762f51", write=false,
+	 *     event_cb=0x576a8c <bdev_part_base_event_cb>, event_ctx=0x170a430, _desc=0x170a438) at bdev.c:6601
+	 */
 	rc = bdev_desc_alloc(bdev, event_cb, event_ctx, &desc);
 	if (rc != 0) {
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
+		UNLOCK(&g_bdev_mgr.mutex);
 		return rc;
 	}
 
@@ -6580,7 +6622,7 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 
 	*_desc = desc;
 
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	return rc;
 }
@@ -6641,11 +6683,11 @@ spdk_bdev_close(struct spdk_bdev_desc *desc)
 
 	spdk_poller_unregister(&desc->io_timeout_poller);
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 
 	bdev_close(bdev, desc);
 
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 }
 
 static void
@@ -6737,7 +6779,7 @@ spdk_for_each_bdev(void *ctx, spdk_for_each_bdev_fn fn)
 
 	assert(fn != NULL);
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	bdev = spdk_bdev_first();
 	while (bdev != NULL) {
 		rc = bdev_desc_alloc(bdev, _tmp_bdev_event_cb, NULL, &desc);
@@ -6749,11 +6791,11 @@ spdk_for_each_bdev(void *ctx, spdk_for_each_bdev_fn fn)
 			bdev_desc_free(desc);
 			break;
 		}
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
+		UNLOCK(&g_bdev_mgr.mutex);
 
 		rc = fn(ctx, bdev);
 
-		pthread_mutex_lock(&g_bdev_mgr.mutex);
+		LOCK(&g_bdev_mgr.mutex);
 		tmp = spdk_bdev_next(bdev);
 		bdev_close(bdev, desc);
 		if (rc != 0) {
@@ -6761,7 +6803,7 @@ spdk_for_each_bdev(void *ctx, spdk_for_each_bdev_fn fn)
 		}
 		bdev = tmp;
 	}
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	return rc;
 }
@@ -6775,7 +6817,7 @@ spdk_for_each_bdev_leaf(void *ctx, spdk_for_each_bdev_fn fn)
 
 	assert(fn != NULL);
 
-	pthread_mutex_lock(&g_bdev_mgr.mutex);
+	LOCK(&g_bdev_mgr.mutex);
 	bdev = spdk_bdev_first_leaf();
 	while (bdev != NULL) {
 		rc = bdev_desc_alloc(bdev, _tmp_bdev_event_cb, NULL, &desc);
@@ -6787,11 +6829,11 @@ spdk_for_each_bdev_leaf(void *ctx, spdk_for_each_bdev_fn fn)
 			bdev_desc_free(desc);
 			break;
 		}
-		pthread_mutex_unlock(&g_bdev_mgr.mutex);
+		UNLOCK(&g_bdev_mgr.mutex);
 
 		rc = fn(ctx, bdev);
 
-		pthread_mutex_lock(&g_bdev_mgr.mutex);
+		LOCK(&g_bdev_mgr.mutex);
 		tmp = spdk_bdev_next_leaf(bdev);
 		bdev_close(bdev, desc);
 		if (rc != 0) {
@@ -6799,7 +6841,7 @@ spdk_for_each_bdev_leaf(void *ctx, spdk_for_each_bdev_fn fn)
 		}
 		bdev = tmp;
 	}
-	pthread_mutex_unlock(&g_bdev_mgr.mutex);
+	UNLOCK(&g_bdev_mgr.mutex);
 
 	return rc;
 }
