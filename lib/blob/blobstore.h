@@ -187,6 +187,12 @@ struct spdk_blob_store {
 	bool				clean;
 };
 
+struct bs_esnap_channel {
+	RB_ENTRY(bs_esnap_channel)	node;
+	spdk_blob_id			blob_id;
+	struct spdk_io_channel		*channel;
+};
+
 struct spdk_bs_channel {
 	struct spdk_bs_request_set	*req_mem;
 	TAILQ_HEAD(, spdk_bs_request_set) reqs;
@@ -201,7 +207,17 @@ struct spdk_bs_channel {
 
 	TAILQ_HEAD(, spdk_bs_request_set) need_cluster_alloc;
 	TAILQ_HEAD(, spdk_bs_request_set) queued_io;
+
+	/*
+	 * External snapshots require a channel per thread per external bdev.
+	 * The tree is populated lazily as blob IOs are handled by the
+	 * back_bs_dev. When this channel is destroyed, all the channels in the
+	 * tree are destroyed.
+	 */
+	RB_HEAD(bs_esnap_channel_tree, bs_esnap_channel) esnap_channels;
 };
+
+RB_PROTOTYPE(bs_esnap_channel_tree, bs_esnap_channel, node, esnap_channel_compare)
 
 /** operation type */
 enum spdk_blob_op_type {
