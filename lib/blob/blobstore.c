@@ -3166,6 +3166,7 @@ bs_channel_create(void *io_device, void *ctx_buf)
 
 	TAILQ_INIT(&channel->need_cluster_alloc);
 	TAILQ_INIT(&channel->queued_io);
+	RB_INIT(&channel->esnap_channels);
 
 	return 0;
 }
@@ -3175,6 +3176,7 @@ bs_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_bs_channel *channel = ctx_buf;
 	spdk_bs_user_op_t *op;
+	struct bs_esnap_channel *esnap_channel, *esnap_channel_tmp;
 
 	while (!TAILQ_EMPTY(&channel->need_cluster_alloc)) {
 		op = TAILQ_FIRST(&channel->need_cluster_alloc);
@@ -3186,6 +3188,13 @@ bs_channel_destroy(void *io_device, void *ctx_buf)
 		op = TAILQ_FIRST(&channel->queued_io);
 		TAILQ_REMOVE(&channel->queued_io, op, link);
 		bs_user_op_abort(op, -EIO);
+	}
+
+	RB_FOREACH_SAFE(esnap_channel, bs_esnap_channel_tree, &channel->esnap_channels,
+			esnap_channel_tmp) {
+		RB_REMOVE(bs_esnap_channel_tree, &channel->esnap_channels, esnap_channel);
+		spdk_put_io_channel(esnap_channel->channel);
+		free(esnap_channel);
 	}
 
 	free(channel->req_mem);
