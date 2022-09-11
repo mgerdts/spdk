@@ -1374,7 +1374,7 @@ blob_load_backing_dev(void *cb_arg)
 		SPDK_INFOLOG(blob, "Creating external snapshot device\n");
 
 		/* Use an existing bdev for unallocated blocks */
-		blob_create_esnap_dev(blob, uuid_str, blob_esnap_load_done, ctx);
+		blob_create_esnap_dev(blob->bs, blob, uuid_str, blob_esnap_load_done, ctx);
 		return;
 	}
 
@@ -3166,7 +3166,7 @@ bs_channel_create(void *io_device, void *ctx_buf)
 
 	TAILQ_INIT(&channel->need_cluster_alloc);
 	TAILQ_INIT(&channel->queued_io);
-	RB_INIT(&channel->esnap_channels);
+	RB_INIT(&channel->esnap_channels.tree);
 
 	return 0;
 }
@@ -3176,7 +3176,6 @@ bs_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_bs_channel *channel = ctx_buf;
 	spdk_bs_user_op_t *op;
-	struct bs_esnap_channel *esnap_channel, *esnap_channel_tmp;
 
 	while (!TAILQ_EMPTY(&channel->need_cluster_alloc)) {
 		op = TAILQ_FIRST(&channel->need_cluster_alloc);
@@ -3190,16 +3189,17 @@ bs_channel_destroy(void *io_device, void *ctx_buf)
 		bs_user_op_abort(op, -EIO);
 	}
 
-	RB_FOREACH_SAFE(esnap_channel, bs_esnap_channel_tree, &channel->esnap_channels,
-			esnap_channel_tmp) {
-		RB_REMOVE(bs_esnap_channel_tree, &channel->esnap_channels, esnap_channel);
-		spdk_put_io_channel(esnap_channel->channel);
-		free(esnap_channel);
-	}
+	spdk_bs_esnap_destroy_channels(&channel->esnap_channels);
 
 	free(channel->req_mem);
 	spdk_free(channel->new_cluster_page);
 	channel->dev->destroy_channel(channel->dev, channel->dev_channel);
+}
+
+struct spdk_esnap_channels *
+spdk_esnap_channels_get(struct spdk_bs_channel *bs_channel)
+{
+	return &bs_channel->esnap_channels;
 }
 
 static void

@@ -1,0 +1,8 @@
+{
+	global:
+
+	# public functions
+	blob_create_esnap_dev;
+
+	local: *;
+};

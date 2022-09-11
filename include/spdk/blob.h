@@ -60,6 +60,7 @@ enum bs_clear_method {
 };
 
 struct spdk_blob_store;
+struct spdk_bs_channel;
 struct spdk_io_channel;
 struct spdk_blob;
 struct spdk_xattr_names;
@@ -124,6 +125,7 @@ struct spdk_bs_dev_cb_args {
 	void			*cb_arg;
 };
 
+/* XXX-mg needed? */
 struct esnap_ctx;
 
 /**
@@ -1024,6 +1026,15 @@ struct spdk_bs_type spdk_bs_get_bstype(struct spdk_blob_store *bs);
  * \param bstype Type label to set.
  */
 void spdk_bs_set_bstype(struct spdk_blob_store *bs, struct spdk_bs_type bstype);
+
+/**
+ * Get the structure containing the tree of external snapshot channels.
+ *
+ * \param bs_channel The blobstore channel for the current thread.
+ *
+ * \return Structure containing the channels tree.
+ */
+struct spdk_esnap_channels *spdk_esnap_channels_get(struct spdk_bs_channel *bs_channel);
 
 #ifdef __cplusplus
 }

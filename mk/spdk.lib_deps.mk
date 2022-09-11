@@ -82,9 +82,10 @@ BDEV_DEPS_THREAD = $(BDEV_DEPS) thread
 
 # module/blob
 DEPDIRS-blob_bdev := log thread bdev
+DEPDIRS-blob_esnap := log thread bdev
 
 # module/blobfs
-DEPDIRS-blobfs_bdev := $(BDEV_DEPS_THREAD) blob_bdev blobfs
+DEPDIRS-blobfs_bdev := $(BDEV_DEPS_THREAD) blob_bdev blob_esnap blobfs
 ifeq ($(CONFIG_FUSE),y)
 DEPDIRS-blobfs_bdev += event
 endif
@@ -115,7 +116,7 @@ endif
 DEPDIRS-bdev_gpt := bdev json log thread util
 
 DEPDIRS-bdev_error := $(BDEV_DEPS)
-DEPDIRS-bdev_lvol := $(BDEV_DEPS) lvol blob blob_bdev
+DEPDIRS-bdev_lvol := $(BDEV_DEPS) lvol blob blob_bdev blob_esnap
 DEPDIRS-bdev_rpc := $(BDEV_DEPS)
 DEPDIRS-bdev_split := $(BDEV_DEPS)
 

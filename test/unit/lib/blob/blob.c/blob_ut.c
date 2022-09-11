@@ -9,6 +9,7 @@
 #include "spdk_cunit.h"
 #include "spdk/blob.h"
 #include "spdk/string.h"
+#include "spdk/bdev_module.h"
 
 #include "common/lib/ut_multithread.c"
 #include "../bs_dev_common.c"
@@ -16,7 +17,7 @@
 #include "thread/thread.c"
 #include "blob/blobstore.c"
 #include "blob/request.c"
-#include "blob/esnap.c"
+#include "../module/blob/esnap/blob_esnap.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
 #include "../bs_bdev_malloc.c"

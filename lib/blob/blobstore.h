@@ -12,6 +12,7 @@
 #include "spdk/queue.h"
 #include "spdk/util.h"
 #include "spdk/tree.h"
+#include "spdk/blob_esnap.h"
 
 #include "request.h"
 
@@ -187,12 +188,6 @@ struct spdk_blob_store {
 	bool				clean;
 };
 
-struct bs_esnap_channel {
-	RB_ENTRY(bs_esnap_channel)	node;
-	spdk_blob_id			blob_id;
-	struct spdk_io_channel		*channel;
-};
-
 struct spdk_bs_channel {
 	struct spdk_bs_request_set	*req_mem;
 	TAILQ_HEAD(, spdk_bs_request_set) reqs;
@@ -208,16 +203,8 @@ struct spdk_bs_channel {
 	TAILQ_HEAD(, spdk_bs_request_set) need_cluster_alloc;
 	TAILQ_HEAD(, spdk_bs_request_set) queued_io;
 
-	/*
-	 * External snapshots require a channel per thread per external bdev.
-	 * The tree is populated lazily as blob IOs are handled by the
-	 * back_bs_dev. When this channel is destroyed, all the channels in the
-	 * tree are destroyed.
-	 */
-	RB_HEAD(bs_esnap_channel_tree, bs_esnap_channel) esnap_channels;
+	struct spdk_esnap_channels	esnap_channels;
 };
-
-RB_PROTOTYPE(bs_esnap_channel_tree, bs_esnap_channel, node, esnap_channel_compare)
 
 /** operation type */
 enum spdk_blob_op_type {
@@ -434,12 +421,6 @@ struct spdk_bs_dev *bs_create_zeroes_dev(void);
 struct spdk_blob_load_ctx;
 
 struct spdk_bs_dev *bs_create_blob_bs_dev(struct spdk_blob *blob);
-
-typedef void(*blob_back_bs_dev_load_done_t)(struct spdk_blob_load_ctx *load_ctx,
-		struct spdk_bs_dev *dev, int bserrno);
-void blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
-			   blob_back_bs_dev_load_done_t load_cb,
-			   struct spdk_blob_load_ctx *load_cb_arg);
 
 /* Unit Conversions
  *

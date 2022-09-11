@@ -2,18 +2,12 @@
  *   Copyright (c) 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
-#include "spdk/bdev_module.h"
-#include "spdk/env.h"
 #include "spdk/stdinc.h"
-#include "spdk/blob.h"
-#include "spdk/bdev.h"
-#include "spdk/thread.h"
-#include "spdk/log.h"
+
+#include "spdk/blob_esnap.h"
 #include "spdk/likely.h"
 
 #include "spdk_internal/event.h"
-
-#include "blobstore.h"
 
 struct esnap_ctx {
 	/* back_bs_dev must be first: see back_bs_dev_to_esnap_ctx() */
@@ -26,6 +20,7 @@ struct esnap_ctx {
 	struct spdk_thread	*thread;
 	char			*uuid;
 	struct spdk_blob	*blob;
+	struct spdk_blob_store	*bs;
 };
 
 struct esnap_create_ctx {
@@ -66,20 +61,19 @@ esnap_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 }
 
 static void
-esnap_destroy_channels(struct spdk_io_channel_iter *i)
+esnap_destroy_one_channel(struct spdk_io_channel_iter *i)
 {
 	struct esnap_ctx	*esnap_ctx = spdk_io_channel_iter_get_ctx(i);
 	struct spdk_io_channel	*channel = spdk_io_channel_iter_get_channel(i);;
 	struct spdk_bs_channel	*bs_channel = spdk_io_channel_get_ctx(channel);
+	struct spdk_esnap_channels *esnap_channels = spdk_esnap_channels_get(bs_channel);
 	struct bs_esnap_channel	*esnap_channel;
 	struct bs_esnap_channel	find = {};
 
-	find.blob_id = esnap_ctx->blob->id;
-	esnap_channel = RB_FIND(bs_esnap_channel_tree,
-				&bs_channel->esnap_channels, &find);
+	find.blob_id = spdk_blob_get_id(esnap_ctx->blob);
+	esnap_channel = RB_FIND(bs_esnap_channel_tree, &esnap_channels->tree, &find);
 	if (esnap_channel != NULL) {
-		RB_REMOVE(bs_esnap_channel_tree, &bs_channel->esnap_channels,
-			  esnap_channel);
+		RB_REMOVE(bs_esnap_channel_tree, &esnap_channels->tree, esnap_channel);
 		spdk_put_io_channel(esnap_channel->channel);
 		free(esnap_channel);
 	}
@@ -92,8 +86,21 @@ esnap_destroy(struct spdk_bs_dev *dev)
 {
 	struct esnap_ctx *ctx = back_bs_dev_to_esnap_ctx(dev);
 
-	spdk_for_each_channel(ctx->blob->bs, esnap_destroy_channels, ctx,
-			      esnap_destroy_channels_done);
+	spdk_for_each_channel(ctx->bs, esnap_destroy_one_channel,
+			      ctx, esnap_destroy_channels_done);
+}
+
+void
+spdk_bs_esnap_destroy_channels(struct spdk_esnap_channels *esnap_channels)
+{
+	struct bs_esnap_channel *esnap_channel, *esnap_channel_tmp;
+
+	RB_FOREACH_SAFE(esnap_channel, bs_esnap_channel_tree, &esnap_channels->tree,
+			esnap_channel_tmp) {
+		RB_REMOVE(bs_esnap_channel_tree, &esnap_channels->tree, esnap_channel);
+		spdk_put_io_channel(esnap_channel->channel);
+		free(esnap_channel);
+	}
 }
 
 static void
@@ -109,30 +116,31 @@ static inline struct spdk_io_channel *
 get_io_channel(struct spdk_io_channel *ch, struct esnap_ctx *ctx)
 {
 	struct spdk_bs_channel	*bs_channel = spdk_io_channel_get_ctx(ch);
+	struct spdk_esnap_channels *esnap_channels = spdk_esnap_channels_get(bs_channel);
 	struct bs_esnap_channel	find = {};
 	struct bs_esnap_channel	*esnap_channel;
 
-	find.blob_id = ctx->blob->id;
-	esnap_channel = RB_FIND(bs_esnap_channel_tree, &bs_channel->esnap_channels, &find);
-	if (esnap_channel != NULL) {
+	find.blob_id = spdk_blob_get_id(ctx->blob);
+	esnap_channel = RB_FIND(bs_esnap_channel_tree, &esnap_channels->tree, &find);
+	if (spdk_likely(esnap_channel != NULL)) {
 		return esnap_channel->channel;
 	}
 
 	esnap_channel = calloc(1, sizeof(*esnap_channel));
 	if (esnap_channel == NULL) {
 		SPDK_NOTICELOG("blob 0x%" PRIx64 " channel allocation failed: no memory\n",
-			       ctx->blob->id);
+			       find.blob_id);
 		return NULL;
 	}
 	esnap_channel->channel = spdk_bdev_get_io_channel(ctx->bdev_desc);
 	if (esnap_channel->channel == NULL) {
 		SPDK_NOTICELOG("blob 0x%" PRIx64 " back channel allocation failed\n",
-			       ctx->blob->id);
+			       find.blob_id);
 		free(esnap_channel);
 		return NULL;
 	}
-	esnap_channel->blob_id = ctx->blob->id;
-	RB_INSERT(bs_esnap_channel_tree, &bs_channel->esnap_channels, esnap_channel);
+	esnap_channel->blob_id = find.blob_id;
+	RB_INSERT(bs_esnap_channel_tree, &esnap_channels->tree, esnap_channel);
 
 	return esnap_channel->channel;
 }
@@ -244,7 +252,7 @@ esnap_is_zeroes(struct spdk_bs_dev *dev, uint64_t lba, uint64_t lba_count)
 }
 
 static struct esnap_ctx *
-esnap_ctx_alloc(struct spdk_blob *blob, const char *uuid_str)
+esnap_ctx_alloc(struct spdk_blob_store *bs, struct spdk_blob *blob, const char *uuid_str)
 {
 	struct esnap_ctx	*ctx;
 	struct spdk_bs_dev	*back_bs_dev;
@@ -262,6 +270,7 @@ esnap_ctx_alloc(struct spdk_blob *blob, const char *uuid_str)
 
 	ctx->thread = spdk_get_thread();
 	ctx->blob = blob;
+	ctx->bs = bs;
 	ctx->uuid = strdup(uuid_str);
 	if (ctx->uuid == NULL) {
 		free(ctx);
@@ -314,7 +323,7 @@ esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 		 * when the blob is unloaded and the destroy callback is called.
 		 */
 		SPDK_NOTICELOG("Blob 0x%" PRIx64 " external shapshot bdev %s removed\n",
-			       ctx->blob->id, bdev->name);
+			       spdk_blob_get_id(ctx->blob), spdk_bdev_get_name(bdev));
 		break;
 	default:
 		SPDK_NOTICELOG("Unsupported event %d\n", type);
@@ -327,12 +336,12 @@ esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
  * and bdev_desc members of esnap_ctx are updated.
  */
 void
-blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
-		      blob_back_bs_dev_load_done_t load_cb,
+blob_create_esnap_dev(struct spdk_blob_store *bs, struct spdk_blob *blob,
+		      const char *uuid_str, blob_back_bs_dev_load_done_t load_cb,
 		      struct spdk_blob_load_ctx *load_cb_arg)
 {
 	struct esnap_create_ctx	*create_ctx;
-	uint32_t		io_unit_size = blob->bs->io_unit_size;
+	uint32_t		io_unit_size = spdk_bs_get_io_unit_size(bs);
 	struct spdk_bdev	*bdev;
 	struct spdk_bs_dev	*back_bs_dev;
 	struct esnap_ctx	*esnap_ctx;
@@ -352,7 +361,7 @@ blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
 	create_ctx->load_cb = load_cb;
 	create_ctx->load_arg = load_cb_arg;
 
-	esnap_ctx = esnap_ctx_alloc(blob, uuid_str);
+	esnap_ctx = esnap_ctx_alloc(bs, blob, uuid_str);
 	if (esnap_ctx == NULL) {
 		esnap_open_done(create_ctx, NULL, -ENOMEM);
 		return;
@@ -379,7 +388,7 @@ blob_create_esnap_dev(struct spdk_blob *blob, const char *uuid_str,
 	if (back_bs_dev->blocklen > io_unit_size) {
 		SPDK_ERRLOG("External snapshot device %s block size %" PRIu32
 			    " larger than blobstore io_unit_size %" PRIu32 "\n",
-			    bdev->name, back_bs_dev->blocklen, io_unit_size);
+			    spdk_bdev_get_name(bdev), back_bs_dev->blocklen, io_unit_size);
 		esnap_ctx_free(esnap_ctx);
 		esnap_open_done(create_ctx, NULL, -EINVAL);
 		return;

@@ -64,6 +64,7 @@
 	spdk_xattr_names_free;
 	spdk_bs_get_bstype;
 	spdk_bs_set_bstype;
+	spdk_esnap_channels_get;
 
 	local: *;
 };
