@@ -3,6 +3,8 @@
 
 	# public functions
 	blob_create_esnap_dev;
+	spdk_bs_esnap_init_channels;
+	spdk_bs_esnap_destroy_channels;
 
 	local: *;
 };

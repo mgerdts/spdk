@@ -37,4 +37,5 @@ DEFINE_STUB_V(blob_create_esnap_dev,
 	      (struct spdk_blob_store *bs, struct spdk_blob *blob,
 	       const char *uuid_str, blob_back_bs_dev_load_done_t load_cb,
 	       struct spdk_blob_load_ctx *load_cb_arg));
+DEFINE_STUB_V(spdk_bs_esnap_init_channels, (struct spdk_esnap_channels *esnap_channels));
 DEFINE_STUB_V(spdk_bs_esnap_destroy_channels, (struct spdk_esnap_channels *esnap_channels));

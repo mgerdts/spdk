@@ -67,6 +67,7 @@ void blob_create_esnap_dev(struct spdk_blob_store *bs, struct spdk_blob *blob,
 /**
  * XXX-mg document, add init
  */
+void spdk_bs_esnap_init_channels(struct spdk_esnap_channels *esnap_channels);
 void spdk_bs_esnap_destroy_channels(struct spdk_esnap_channels *esnap_channels);
 #ifdef __cplusplus
 }

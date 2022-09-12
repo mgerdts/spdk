@@ -3166,7 +3166,8 @@ bs_channel_create(void *io_device, void *ctx_buf)
 
 	TAILQ_INIT(&channel->need_cluster_alloc);
 	TAILQ_INIT(&channel->queued_io);
-	RB_INIT(&channel->esnap_channels.tree);
+
+	spdk_bs_esnap_init_channels(&channel->esnap_channels);
 
 	return 0;
 }

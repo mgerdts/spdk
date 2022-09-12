@@ -91,6 +91,11 @@ esnap_destroy(struct spdk_bs_dev *dev)
 }
 
 void
+spdk_bs_esnap_init_channels(struct spdk_esnap_channels *esnap_channels)
+{
+	RB_INIT(&esnap_channels->tree);
+}
+void
 spdk_bs_esnap_destroy_channels(struct spdk_esnap_channels *esnap_channels)
 {
 	struct bs_esnap_channel *esnap_channel, *esnap_channel_tmp;
