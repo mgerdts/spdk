@@ -8,6 +8,8 @@
 #include "spdk/likely.h"
 
 #include "spdk_internal/event.h"
+#define __SPDK_BDEV_MODULE_ONLY
+#include "spdk/bdev_module.h"
 
 struct esnap_ctx {
 	/* back_bs_dev must be first: see back_bs_dev_to_esnap_ctx() */
@@ -30,6 +32,7 @@ struct esnap_create_ctx {
 };
 
 static void esnap_ctx_free(struct esnap_ctx *ctx);
+static int esnap_unclaim_bdev(struct spdk_bdev *bdev);
 
 static struct esnap_ctx *
 back_bs_dev_to_esnap_ctx(struct spdk_bs_dev *bs_dev)
@@ -54,6 +57,7 @@ esnap_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 	struct spdk_bdev_desc	*desc = esnap_ctx->bdev_desc;
 
 	if (desc != NULL) {
+		esnap_unclaim_bdev(esnap_ctx->bdev);
 		spdk_bdev_close(desc);
 	}
 
@@ -256,6 +260,111 @@ esnap_is_zeroes(struct spdk_bs_dev *dev, uint64_t lba, uint64_t lba_count)
 	return false;
 }
 
+/*
+ * Claims
+ *
+ * Every esnap bdev is claimed by a fake "esnap" bdev module while it is open
+ * for reads.  A single read-only claim is taken on the bdev and that claim is
+ * reference counted for all blobs across all blobstores that use it.
+ */
+struct esnap_claim {
+	RB_ENTRY(esnap_claim)	entry;
+	struct spdk_bdev	*bdev;
+	uint32_t		refs;
+};
+
+static int
+esnap_claim_compare(struct esnap_claim *c1, struct esnap_claim *c2)
+{
+	return (c1->bdev < c2->bdev ? -1 : c1->bdev > c2->bdev);
+}
+
+RB_HEAD(esnap_claim_tree, esnap_claim) esnap_claims = RB_INITIALIZER(&esnap_claims);
+RB_GENERATE_STATIC(esnap_claim_tree, esnap_claim, entry, esnap_claim_compare)
+
+struct spdk_bdev_module esnap_module = {
+	.name = "esnap"
+};
+
+pthread_mutex_t claim_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int
+esnap_claim_bdev(struct spdk_bdev *bdev)
+{
+	struct esnap_claim	find = { .bdev = bdev };
+	struct esnap_claim	*claim, *existing;
+	int rc;
+
+	pthread_mutex_lock(&claim_mutex);
+
+	/* Typical case: increment claim count by one. */
+	claim = RB_FIND(esnap_claim_tree, &esnap_claims, &find);
+	if (spdk_likely(claim != NULL)) {
+		claim->refs++;
+		pthread_mutex_unlock(&claim_mutex);
+		return 0;
+	}
+
+	/* Need a new claim. Drop lock across memory allocation. */
+	pthread_mutex_unlock(&claim_mutex);
+	claim = calloc(1, sizeof(*claim));
+	if (claim == NULL) {
+		return -ENOMEM;
+	}
+	claim->bdev = bdev;
+	claim->refs = 1;
+
+	/* Try to add the claim with the lock held. We may have lost a race. */
+	pthread_mutex_lock(&claim_mutex);
+	existing = RB_INSERT(esnap_claim_tree, &esnap_claims, claim);
+	if (existing == NULL) {
+		rc = spdk_bdev_module_claim_bdev(bdev, NULL, &esnap_module);
+		if (rc != 0) {
+			RB_REMOVE(esnap_claim_tree, &esnap_claims, claim);
+			pthread_mutex_unlock(&claim_mutex);
+			free(claim);
+			SPDK_ERRLOG("could not claim bdev %s: %d\n",
+				    spdk_bdev_get_name(bdev), rc);
+			return rc;
+		}
+
+		pthread_mutex_unlock(&claim_mutex);
+		return 0;
+	}
+
+	/* We lost the race. Increment the claim taken by someone else. */
+	existing->refs++;
+	pthread_mutex_unlock(&claim_mutex);
+	free(claim);
+
+	return 0;
+}
+
+static int
+esnap_unclaim_bdev(struct spdk_bdev *bdev)
+{
+	struct esnap_claim	find = { .bdev = bdev };
+	struct esnap_claim	*claim;
+
+	pthread_mutex_lock(&claim_mutex);
+	claim = RB_FIND(esnap_claim_tree, &esnap_claims, &find);
+	if (claim == NULL) {
+		pthread_mutex_unlock(&claim_mutex);
+		SPDK_ERRLOG("Missing claim for bdev %s", spdk_bdev_get_name(bdev));
+		return -ENODEV;
+	}
+	if (claim->refs == 1) {
+		RB_REMOVE(esnap_claim_tree, &esnap_claims, claim);
+		spdk_bdev_module_release_bdev(bdev);
+		pthread_mutex_unlock(&claim_mutex);
+		free(claim);
+		return 0;
+	}
+	claim->refs--;
+	pthread_mutex_unlock(&claim_mutex);
+	return 0;
+}
+
 static struct esnap_ctx *
 esnap_ctx_alloc(struct spdk_blob_store *bs, struct spdk_blob *blob, const char *uuid_str)
 {
@@ -396,6 +505,13 @@ blob_create_esnap_dev(struct spdk_blob_store *bs, struct spdk_blob *blob,
 			    spdk_bdev_get_name(bdev), back_bs_dev->blocklen, io_unit_size);
 		esnap_ctx_free(esnap_ctx);
 		esnap_open_done(create_ctx, NULL, -EINVAL);
+		return;
+	}
+
+	rc = esnap_claim_bdev(bdev);
+	if (rc != 0) {
+		esnap_ctx_free(esnap_ctx);
+		esnap_open_done(create_ctx, NULL, rc);
 		return;
 	}
 
