@@ -309,6 +309,7 @@ spdk_bs_bdev_claim(struct spdk_bs_dev *bs_dev, struct spdk_bdev_module *module)
 	struct blob_bdev *blob_bdev = (struct blob_bdev *)bs_dev;
 	int rc;
 
+	/* Do not pass bdev_desc as that will upgrade a desc opened for ro to rw. */
 	rc = spdk_bdev_module_claim_bdev(blob_bdev->bdev, NULL, module);
 	if (rc != 0) {
 		SPDK_ERRLOG("could not claim bs dev\n");
@@ -387,9 +388,9 @@ blob_bdev_init(struct blob_bdev *b, struct spdk_bdev_desc *desc)
 	b->bs_dev.is_zeroes = bdev_blob_is_zeroes;
 }
 
-int
-spdk_bdev_create_bs_dev_ext(const char *bdev_name, spdk_bdev_event_cb_t event_cb,
-			    void *event_ctx, struct spdk_bs_dev **_bs_dev)
+static int
+blob_bdev_create_bs_dev_ext_rw(const char *bdev_name, spdk_bdev_event_cb_t event_cb,
+			       void *event_ctx, struct spdk_bs_dev **_bs_dev, bool write)
 {
 	struct blob_bdev *b;
 	struct spdk_bdev_desc *desc;
@@ -402,7 +403,7 @@ spdk_bdev_create_bs_dev_ext(const char *bdev_name, spdk_bdev_event_cb_t event_cb
 		return -ENOMEM;
 	}
 
-	rc = spdk_bdev_open_ext(bdev_name, true, event_cb, event_ctx, &desc);
+	rc = spdk_bdev_open_ext(bdev_name, write, event_cb, event_ctx, &desc);
 	if (rc != 0) {
 		free(b);
 		return rc;
@@ -413,4 +414,18 @@ spdk_bdev_create_bs_dev_ext(const char *bdev_name, spdk_bdev_event_cb_t event_cb
 	*_bs_dev = &b->bs_dev;
 
 	return 0;
+}
+
+int
+spdk_bdev_create_bs_dev_ext(const char *bdev_name, spdk_bdev_event_cb_t event_cb,
+			    void *event_ctx, struct spdk_bs_dev **_bs_dev)
+{
+	return blob_bdev_create_bs_dev_ext_rw(bdev_name, event_cb, event_ctx, _bs_dev, true);
+}
+
+int
+spdk_bdev_create_bs_dev_ro(const char *bdev_name, spdk_bdev_event_cb_t event_cb,
+			   void *event_ctx, struct spdk_bs_dev **_bs_dev)
+{
+	return blob_bdev_create_bs_dev_ext_rw(bdev_name, event_cb, event_ctx, _bs_dev, false);
 }

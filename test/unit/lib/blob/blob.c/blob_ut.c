@@ -12,8 +12,10 @@
 
 #include "common/lib/ut_multithread.c"
 #include "../bs_dev_common.c"
+#include "../bs_bdev_malloc.c"
 #include "blob/blobstore.c"
 #include "blob/request.c"
+#include "../module/blob/bdev/blob_bdev.c"
 #include "blob/zeroes.c"
 #include "blob/blob_bs_dev.c"
 
@@ -7393,6 +7395,243 @@ blob_seek_io_unit(void)
 }
 
 static void
+bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
+{
+	enum spdk_bdev_event_type *typep = event_ctx;
+
+	*typep = type;
+}
+
+static void
+save_errno_cb(void *arg, int err)
+{
+	int *errp = arg;
+
+	*errp = err;
+}
+
+static void
+bs_dev_cpl(struct spdk_io_channel *channel, void *arg, int bserrno)
+{
+	int *errp = arg;
+
+	*errp = bserrno;
+}
+
+static void
+bdev_io_cpl(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+{
+	int *errp = cb_arg;
+
+	*errp = success ? 0 : -EIO;
+	spdk_bdev_free_io(bdev_io);
+}
+
+static void
+blob_bdev_rw(void)
+{
+	struct spdk_bdev	*bdev = NULL;
+	struct spdk_bdev_desc	*desc = NULL;
+	struct spdk_bs_dev	*bs_dev = NULL;
+	struct spdk_bdev_module	module1 = { .name = "module1" };
+	struct blob_bdev	*blob_bdev;
+	struct spdk_io_channel	*ch;
+	struct spdk_bs_dev_cb_args cb_args = { 0 };
+	int			rc;
+	enum spdk_bdev_event_type	event = 0xbad;
+	char			buf[1024];
+	int			cberrno;
+
+	/* Create the back bdev */
+	rc = create_malloc_disk(&bdev, NULL, NULL, 2048, 512, 512);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	SPDK_CU_ASSERT_FATAL(bdev != NULL);
+
+	/* Scribble on the bdev */
+	rc = spdk_bdev_open_ext(bdev->name, true, bdev_event_cb, &event, &desc);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	poll_threads();
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	ch = spdk_bdev_get_io_channel(desc);
+	SPDK_CU_ASSERT_FATAL(ch != NULL);
+	memset(buf, '*', sizeof(buf));
+	cberrno = 0xbad;
+	rc = spdk_bdev_write(desc, ch, buf, 0, sizeof(buf), bdev_io_cpl, &cberrno);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+	spdk_put_io_channel(ch);
+	ch = NULL;
+	spdk_bdev_close(desc);
+	desc = NULL;
+
+	/* Create a read-write bs_dev */
+	rc = spdk_bdev_create_bs_dev_ext(bdev->name, bdev_event_cb, &event, &bs_dev);
+	CU_ASSERT(rc == 0);
+	blob_bdev = (struct blob_bdev *)bs_dev;
+	CU_ASSERT(blob_bdev->desc->write)
+	CU_ASSERT(bs_dev != NULL);
+
+	/* Get a channel for performing IO */
+	ch = bs_dev->create_channel(bs_dev);
+	SPDK_CU_ASSERT_FATAL(ch != NULL);
+	cb_args.cb_fn = bs_dev_cpl;
+	cb_args.channel = ch;
+	cb_args.cb_arg = &cberrno;
+
+	/* Reads from the bs_dev should succeed */
+	memset(buf, '!', sizeof(buf));
+	cberrno = 0xbad;
+	bs_dev->read(bs_dev, ch, buf, 0, 1, &cb_args);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+	CU_ASSERT(buf[0] == '*');
+	CU_ASSERT(buf[512] == '!');
+
+	/* Writes to the bs_dev should succeed */
+	memset(buf, '#', sizeof(buf));
+	cberrno = 0xbad;
+	bs_dev->write(bs_dev, ch, buf, 1, 1, &cb_args);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+
+	/* Verify only block 1 was written */
+	memset(buf, '!', sizeof(buf));
+	cberrno = 0xbad;
+	bs_dev->read(bs_dev, ch, buf, 0, 2, &cb_args);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+	CU_ASSERT(buf[0] == '*');
+	CU_ASSERT(buf[512] == '#');
+
+	/* Claiming should work without changing whether it is writable */
+	CU_ASSERT(blob_bdev->desc->write)
+	rc = spdk_bs_bdev_claim(bs_dev, &module1);
+	CU_ASSERT(rc == 0);
+
+	/* Claiming when already claimed should fail. */
+	rc = spdk_bs_bdev_claim(bs_dev, &module1);
+	CU_ASSERT(rc == -EPERM);
+	CU_ASSERT(blob_bdev->desc->write)
+
+	/* Clean up */
+	bs_dev->destroy_channel(bs_dev, ch);
+	bs_dev->destroy(bs_dev);
+	cberrno = 0xbad;
+	delete_malloc_disk(bdev->name, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+}
+
+static void
+blob_bdev_ro(void)
+{
+	struct spdk_bdev	*bdev = NULL;
+	struct spdk_bdev_desc	*desc = NULL;
+	struct spdk_bs_dev	*bs_dev = NULL;
+	struct spdk_bdev_module	module1 = { .name = "module1" };
+	struct blob_bdev	*blob_bdev;
+	struct spdk_io_channel	*ch;
+	struct spdk_bs_dev_cb_args cb_args = { 0 };
+	int			rc;
+	enum spdk_bdev_event_type	event = 0xbad;
+	char			buf[1024];
+	int			cberrno;
+
+	/* Create the back bdev */
+	rc = create_malloc_disk(&bdev, NULL, NULL, 2048, 512, 512);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	SPDK_CU_ASSERT_FATAL(bdev != NULL);
+
+	/* Scribble on the bdev */
+	rc = spdk_bdev_open_ext(bdev->name, true, bdev_event_cb, &event, &desc);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	poll_threads();
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	ch = spdk_bdev_get_io_channel(desc);
+	SPDK_CU_ASSERT_FATAL(ch != NULL);
+	memset(buf, '*', sizeof(buf));
+	cberrno = 0xbad;
+	rc = spdk_bdev_write(desc, ch, buf, 0, sizeof(buf), bdev_io_cpl, &cberrno);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+	spdk_put_io_channel(ch);
+	ch = NULL;
+	spdk_bdev_close(desc);
+	desc = NULL;
+
+	/* Create a read-only bs_dev */
+	rc = spdk_bdev_create_bs_dev_ro(bdev->name, bdev_event_cb, &event, &bs_dev);
+	CU_ASSERT(rc == 0);
+	blob_bdev = (struct blob_bdev *)bs_dev;
+	CU_ASSERT(!blob_bdev->desc->write)
+	CU_ASSERT(bs_dev != NULL);
+
+	/* Get a channel for performing IO */
+	ch = bs_dev->create_channel(bs_dev);
+	SPDK_CU_ASSERT_FATAL(ch != NULL);
+	cb_args.cb_fn = bs_dev_cpl;
+	cb_args.channel = ch;
+	cb_args.cb_arg = &cberrno;
+
+	/* Reads from the bs_dev should succeed */
+	memset(buf, '!', sizeof(buf));
+	cberrno = 0xbad;
+	bs_dev->read(bs_dev, ch, buf, 0, 1, &cb_args);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+	CU_ASSERT(buf[0] == '*');
+	CU_ASSERT(buf[512] == '!');
+
+	/* Writes to the bs_dev should fail */
+	memset(buf, '#', sizeof(buf));
+	cberrno = 0xbad;
+	bs_dev->write(bs_dev, ch, buf, 1, 1, &cb_args);
+	poll_threads();
+	CU_ASSERT(cberrno == -EBADF);
+
+	/* Verify nothing was written */
+	memset(buf, '!', sizeof(buf));
+	cberrno = 0xbad;
+	bs_dev->read(bs_dev, ch, buf, 0, 2, &cb_args);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+	CU_ASSERT(buf[0] == '*');
+	CU_ASSERT(buf[512] == '*');
+
+	/* Claiming should work without changing whether it is writable */
+	CU_ASSERT(!blob_bdev->desc->write)
+	rc = spdk_bs_bdev_claim(bs_dev, &module1);
+	CU_ASSERT(rc == 0);
+
+	/* Claiming when already claimed should fail. */
+	rc = spdk_bs_bdev_claim(bs_dev, &module1);
+	CU_ASSERT(rc == -EPERM);
+	CU_ASSERT(!blob_bdev->desc->write)
+
+	/* Clean up */
+	bs_dev->destroy_channel(bs_dev, ch);
+	bs_dev->destroy(bs_dev);
+	cberrno = 0xbad;
+	delete_malloc_disk(bdev->name, save_errno_cb, &cberrno);
+	poll_threads();
+	CU_ASSERT(cberrno == 0);
+}
+
+static void
+bdev_init_cb(void *arg, int rc)
+{
+	assert(rc == 0);
+}
+
+static void
+bdev_fini_cb(void *arg)
+{
+	return;
+}
+
+static void
 suite_bs_setup(void)
 {
 	struct spdk_bs_dev *dev;
@@ -7568,9 +7807,16 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_persist_test);
 	CU_ADD_TEST(suite_bs, blob_decouple_snapshot);
 	CU_ADD_TEST(suite_bs, blob_seek_io_unit);
+	CU_ADD_TEST(suite, blob_bdev_rw);
+	CU_ADD_TEST(suite, blob_bdev_ro);
 
+	allocate_cores(1);
 	allocate_threads(2);
 	set_thread(0);
+
+	init_accel();
+	spdk_bdev_initialize(bdev_init_cb, NULL);
+	poll_threads();
 
 	g_dev_buffer = calloc(1, DEV_BUFFER_SIZE);
 
@@ -7585,7 +7831,11 @@ main(int argc, char **argv)
 
 	free(g_dev_buffer);
 
+	spdk_bdev_finish(bdev_fini_cb, NULL);
+	poll_threads();
+	fini_accel();
 	free_threads();
+	free_cores();
 
 	return num_failures;
 }
