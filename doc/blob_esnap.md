@@ -22,10 +22,11 @@ changes will be used.
 
 Much like with regular clones, an external clone may read clusters that are allocated to the cluster
 or read from the snapshot from which the clone is created. This is done using various callbacks
-referenced by `blob->back_bs_dev`. Unlike regular clones, external clones have an external snapshot
-device which uses storage that is not managed by the blobstore.
+referenced by `blob->back_bs_dev`. With regular clones, the `back_bs_dev` references a read-only
+snapshot blob in the same blobstore. With external clones, `back_bs_dev` references an arbitrary
+bdev.
 
-For example, the following diagram illustrates blob1 with an external snapshot named nvme1n1.
+For example, the following diagram illustrates blob1 with an external snapshot named nvme1n42.
 
 ```text
 ,------------------------- SPDK ------------------------.
@@ -68,42 +69,40 @@ As an external snapshot blob is being loaded, the blobstore will call the aforem
 `external_bs_dev_create()` function with the blob's external snapshot cookie, the blob, and a
 callback.  See #esnap_spdk_bs_opts for the complete list of arguments.
 
-Implementations of `external_bs_dev_create` should call `spdk_bdev_create_bs_dev_ro()` to open the
-bdev and initialize a `struct spdk_bs_dev`. `spdk_bdev_create_bs_dev_ro()` is similar to
-`spdk_bdev_create_bs_dev_ext()`, except it opens the bdev read-only and establishes a shared
-read-only claim on the bdev.
+The `external_bs_dev_create()` function will create a `struct spdk_bs_dev` object which it will pass
+to the blobstore via a callback that was passed to `external_bs_dev_create()`.  In the happy path,
+the `read`, `readv`, and `readv_ext` `spdk_bs_dev` functions will be able to immediately perform
+reads from the external snapshot bdev. If the external snapshot bdev cannot be opened,
+`external_bs_dev_create()` may still succeed, registering an `spdk_bs_dev` that is operating in a
+degraded mode.
 
-The lvstore implementation of `external_bs_dev_create` will keep track of external snapshot bdevs
-that fail to open on a watch list. The watch list may or may not be implemented using a list. There
-may be multiple external clones of a single bdev, so each node of the watch list will maintain a
-list of blobs that are awaiting a bdev. As new bdevs are created, vbdev_lvol's `examine_config`
-callback will check the watch list to see if the new bdev matches one that is needed by a blob. If
-it a match is found, `spdk_lvol_open()` is called for each waiting blob. While an lvol is on the
-watch list, its name is reserved - no new lvol can be created with the same name.
+The degraded mode serves multiple purposes:
 
-### Blobs with Missing External Snapshot
+- External clone blobs can be opened so that IO that is not dependent on the external snapshot
+  device can be serviced.
+- bdevs that depend upon the external clone blob to be opened, which reserves their name and UUID in
+  the global namespaces.
+- Visibility of bdevs dependent on external clone blobs allows extant interfaces to view and manage
+  (e.g. remove) these bdevs.
 
-As discussed in the previous section, a blob's external snapshot bdev may not be available when the
-blobstore tries to open it. This may be a transient or persistent problem. In the case of it being a
-persistent problem, it is essential that an external clone with a missing external snapshot can be
-deleted.
+### lvstore Handling of Blobs with Missing External Snapshot
 
-External clones in all blobstores can be viewed and deleted with `blobcli`. `blobcli` displays
-internal XATTRs and as such may be used to see which external snapshots are used by blobs.
-Additionally, it provides an option to delete a blob.
+The lvstore implementation of `external_bs_dev_create` will allow external clones to be opened in a
+degraded mode and will keep track of external snapshot bdevs that fail to open. As new bdevs are
+created, `vbdev_lvol`'s `examine_config` callback will determine if the new bdev matches one that is
+needed by one or more lvols. If so, the bdev will be opened for each dependent lvol, allowing the
+associated `spdk_bs_dev` to service future reads.
 
-The RPC call `bdev_lvol_get_lvols` will print information about each blob associated with an
-lvstore, regardless of whether there is a functional bdev associated with the blob. This allows an
-administrator to identify lvols with missing external snapshots so that they may be deleted with the
-`bdev_lvol_delete` RPC call.
+While an external clone lvol bdev does not have its external snapshot bdev opened, it the driver
+specific information returned by the `bdev_get_bdevs` RPC call will show `external_clone: true` and
+`degraded: true`.
 
 ### Channels
 
-As is the case with all blobstore devices, the external snapshot's `back_bs_dev` must define
-`create_channel` and `destroy_channel`.  The channel passed to the other functions defined in
-`back_bs_dev` will be a channel obtained by calling `back_bs_dev->create_channel()`. These
-`back_bs_dev` IO channels will be stored in an RB tree that is indexed by `blob->id` and rooted in
-each `struct spdk_bs_channel`.
+As always, there is one channel per thread that performs IO. The channel used to perform IO on the
+bdev that backs the blobstore is different from the channel used to perform IO on the various
+external snapshot devices. Thus, each blobstore channel must keep track of a channel per esnap
+device.
 
 ### Snapshots and Clones
 
@@ -111,9 +110,9 @@ An external clone may be snapshotted, just as any other blob may be snapshotted.
 other blobs, when a snapshot is created the blob that is being snapshotted becomes the leaf node (a
 clone of the snapshot) and the newly created snapshot sits between the snapshotted blob and the
 external snapshot. As with other snapshots, a snapshot of an external snapshot may be cloned,
-inflated (XXX-mg verify), and deleted. The following illustrates the creation of a snapshot (snap1)
-of an external clone (blob1) which starts out as an external snapshot of nvme1n42. That is followed
-by illustrations of deleting snap1 and blob1.
+inflated, and deleted. The following illustrates the creation of a snapshot (snap1) of an external
+clone (blob1) which starts out as an external snapshot of nvme1n42. That is followed by an
+illustrations of deleting snap1 and blob1.
 
 Before creating snap1:
 
@@ -185,41 +184,30 @@ The blobstore does not interpret the value of the internal XATTR, it only passes
 
 #### External Clone Creation
 
+Clones of external snapshots are created by setting `external_snapshot_cookie` and
+`external_snapshot_cookie_len` in `struct spdk_blob_opts` while calling `spdk_bs_create_blob_ext()`.
+
 ```c
-/**
- * Create a clone of an arbitrary device. This requires that the blobstore was
- * loaded by spdk_bs_load() with the external_bs_dev_create function pointer
- * defined. The arbitrary device is referred to as the external snapshot and so
- * long as this newly created blob remains a clone of it, it may be referred to
- * as an external clone.
- *
- * If the size of the external clone does not align with the blobstore's cluster
- * size, the clone is grown to end on cluster boundary.
- *
- * The memory referenced by cookie, the xattrs structure, and all memory
- * referenced by the xattrs structure must remain valid until the completion is
- * called.
- *
- * If cloning a blob in the same blobstore, use spdk_bs_create_clone instead.
- *
- * \param bs blobstore.
- * \param cookie A unique identifier for the external snapshot. The data
- * referenced by cookie will be stored in the blob's metadata and serves as a
- * primary key for external snapshot opens via esnap_mod->open().
- * \param cookie_size The size in bytes of the cookie. This value must be no
- * more than 4058.
- * \param xattrs xattrs specified for the clone
- * \param cb_fn Called when the operation is complete.
- * \param cb_arg Argument passed to function cb_fn.
- */
-void spdk_bs_create_external_clone(struct spdk_blob_store *bs,
-				   const void *cookie, size_t cookie_size,
-				   const struct spdk_blob_xattr_opts *xattrs,
-				   spdk_blob_op_with_id_complete_ cb_fn,
-				   void *cb_arg);
+struct spdk_blob_opts {
+	...
+        /**
+	 * If set, pass this cookie to bs->external_bs_dev_create() while creating an external
+	 * clone. The value passed in this option will be stored in the blobstore and used to find
+	 * this same bdev when the blob is loaded.
+         */
+        void *external_snapshot_cookie;
+
+	/**
+	 * The size of external_snapshot_cookie, in bytes.
+	 */
+	uint32_t external_snapshot_cookie_len;
+};
 ```
 
-#### `spdk_bs_opts` {#esnap_spdk_bs_opts}
+#### Blobstore load {#esnap_spdk_bs_opts}
+
+As a blobstore is being loaded or create, `external_bs_dev_create` must be set on any blobstore that
+is to be used with external snapshots.
 
 ```c
 
@@ -234,7 +222,7 @@ struct spdk_bs_opts {
 	 *
 	 * Open the external snapshot device. On success, calls:
 	 *
-	 *    cb(cb_arg, back_bs_dev, 0);
+	 *    cb(cb_arg, esnap_bs_dev, 0);
 	 *
 	 * On failure, calls:
 	 *
@@ -246,7 +234,7 @@ struct spdk_bs_opts {
 	 * may be dereferenced.
 	 */
 	void (*external_bs_dev_create)(const void *cookie, size_t cookie_sz,
-		    struct spdk_blob *blob, spdk_blob_op_with_dev cb, void *cb_arg);
+		    struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg);
 };
 ```
 
@@ -260,7 +248,7 @@ The callback function passed to `external_bs_dev_create` is defined as:
  * \param bs_dev Blobstore device.
  * \param bserrno 0 if it completed successfully, or negative errno if it failed.
  */
-typedef void (*spdk_blob_op_with_dev)(void *cb_arg, struct spdk_bs_dev *bs_dev, int bserrno);
+typedef void (*spdk_blob_op_with_bs_dev)(void *cb_arg, struct spdk_bs_dev *bs_dev, int bserrno);
 ```
 
 ### Internal interfaces
@@ -273,6 +261,8 @@ will be maintained so that IO channels for external snapshots may be obtained wi
 
 The existing `struct spdk_bs_channel` is extended by adding an RB tree. It is initialized in
 `bs_channel_create()`.
+
+XXX-mg Maybe a splay tree would be better: it is optimized for quick access of recently used items.
 
 ```c
 struct spdk_bs_channel {
@@ -293,12 +283,12 @@ struct bs_esnap_channel {
 ```
 
 Reads from an external snapshot device come only through `blob_request_submit_op_single()` or
-`blob_request_submit_rw_iov()`, which will call new functions `bs_batch_read_esnap_dev()` and
-`bs_sequence_readv_esnap_dev()`, respectively. They will each call `bs_esnap_io_channel_from_ctx()`
-to obtain a channel. `bs_esnap_io_channel_from_ctx()` will search `channel->esnap_channels` is
-searched for a channel to use for the external snapshot bdev. If there is no channel
-`back_bs_dev->io_channel_get` is used to get an IO channel which is then added to the
-`channel->esnap_channels` tree.
+`blob_request_submit_rw_iov()`. In each case, the channel that will be used while reading from the
+external snapshot is found via `set->channel`, where `set` is a `struct bs_request_set` (aka
+`bs_sequence_t`, `spdk_bs_batch_t`).  In each case, the `set` is used to for a single read operation
+that is constrained to a range that falls within a blobstore cluster boundary.  Thus, it will be
+safe to simply update `set->channel` to reference the appropriate esnap channel prior to passing it
+to the esnap `read`, `readv`, or `readvext` method.
 
 When a blob is closed, the blobstore will use `spdk_for_each_channel()` to cause
 `back_bs_dev->destroy_channel()` to be called on each external snapshot IO channel associated with
@@ -351,11 +341,12 @@ int spdk_bdev_create_bs_dev_ro(const char *bdev_name, spdk_bdev_event_cb_t event
  * Each successful call must be paired with a call to spdk_bdev_blob_ro_release().
  *
  * \param bdev The bdev to claim.
+ * \param module The bdev module making the claim.
  * \return 0 on success
  * \return -ENOMEM if out of memory
  * \return other non-zero return value from spdk_bdev_module_claim_bdev().
  */
-int spdk_bdev_blob_ro_claim(struct spdk_bdev *bdev);
+int spdk_bdev_blob_ro_claim(struct spdk_bdev *bdev, struct spdk_bdev_module *module);
 
 /**
  * Release a shared read-only claim
@@ -374,34 +365,11 @@ The implementation details in this section are internal to bdev_blob.
 The same external snapshot may be used by multiple external clone blobs in one or more blobstores.
 The bdev layer allows each bdev to be claimed once by one bdev module at a time. The first time that
 a bdev is opened for an external snapshot, a read-only claim is established via a call to
-`spdk_bdev_module_claim_bdev(bdev, NULL, &blob_bdev_if)`.
-
-To support shared read-only claims, blob bdev will get a minimal `struct spdk_bdev_module` that can
-be passed to `spdk_bdev_module_claim_bdev()`.
-
-```c
-static int
-blob_bdev_init(void) {
-	return 0;
-}
-
-static struct spdk_bdev_module blob_bdev_if = {
-	name = "blob",
-	module_init = blob_bdev_init,
-};
-```
+`spdk_bdev_module_claim_bdev()` using the module passed to `spdk_bdev_blob_ro_claim()`..
 
 Read-only claims for bdevs for all blobstores are tracked in an RB tree. Each node of the tree
 contains the bdev's UUID and the number of shared claims. When the number of claims drops to 0, the
 tree node is removed.
-
-```c
-struct bdev_blob_ro_claim_node {
-	struct spdk_uuid	uuid;
-	uint32_t		count;
-	RB_ENTRY(bdev_blob_ro_claim) node;
-};
-```
 
 Shared read-only claims are taken with `bdev_blob_ro_claim()`. This may fail due to memory
 allocation for the first claim on a bdev or for any of the reasons that
@@ -456,69 +424,25 @@ Note: A more appropriate error for a missing snapshot would be `-ENODEV`, but th
 of `spdk_lvol_create_clone()`, which gets `-ENOENT` from `spdk_bs_open_blob()` while trying to open
 the original blob.
 
+As part of the initial implementation, the size of the external snapshot bdev must be evenly
+divisible by the blobstore's cluster size.
+
 #### Lookup of lvols
 
-An lvol that is missing its external snapshot cannot be found via bdev interfaces, as it will have
-no associated bdev. Public functions are added to allow a pointer to an lvol's opaque
-`struct spdk_lvol` to be found.
+An lvol that is missing its external snapshot is known as a degraded external clone.  It is found
+the same way that any other lvol is found. When viewed through the `bdev_get_bdevs` RPC call, the
+`lvol` `driver_specific` data will resemble:
 
-```c
-/**
- * Get an lvstore by its name.
- *
- * \param lvs_name The name of the lvstore.
- * \return 0 on success
- * \return lvstore on success, NULL on error.
- */
-struct spdk_lvol_store *spdk_lvol_get_lvs_by_name(const char *lvs_name);
-
-/**
- * Get an lvstore by its uuid.
- *
- * \param lvs_uuid The UUID of the lvstore.
- * \return lvstore on success, NULL on error.
- */
-struct spdk_lvol_store *spdk_lvol_get_lvs_by_uuid(const char *lvs_uuid);
-
-/**
- * Get an lvol by its name
- *
- * \param lvs The lvstore containing the volume. If NULL, the volume may be in any lvstore.
- * \param lvol_name The name of the volume.
- */
-struct spdk_lvol *spdk_lvol_get_by_name(struct spdk_lvol_store *lvs, const char *lvol_name);
-
-/**
- * Get an lvol by its UUID.
- *
- * \param lvs The lvstore containing the volume.
- * \param uuid_str The UUID of the volume.
- * \return lvol on success, NULL on error.
- */
-struct spdk_lvol *spdk_lvol_get_by_uuid(struct spdk_lvol_store *lvs, const char *uuid_str);
-```
-
-#### Example: Delete a zombie external clone
-
-A zombie external clone is a clone with a missing external snapshot. A zombie may be destroyed with
-the following:
-
-```c
-void
-delete_zombie(const char *lvs_name, const char *lvol_name,
-	      spdk_lvol_op_complete cb_fn, void *cb_arg)
-{
-	struct spdk_lvol_store *lvs;
-	struct spdk_lvol *lvol;
-	int err;
-
-	if ((lvs = spdk_lvol_get_lvs_by_name(lvs_name)) != NULL &&
-	    (lvol = spdk_lvol_get_lvol_by_name(lvs, lvol_name)) != NULL) {
-		spdk_lvol_destroy(lvol, cb_fn, cb_arg);
-		return;
-	}
-	cb_fn(cb_arg, -ENODEV);
-}
+```json
+    "driver_specific": {
+      "lvol": {
+	...
+        "clone": false,
+        "external_clone": true,
+	"external_clone_degraded": true,
+	"external_snapshot_name": "some_name_or_uuid"
+      }
+    }
 ```
 
 #### RPC: bdev_lvol_external_clone
@@ -540,118 +464,3 @@ Either lvs_uuid or lvs_name may be specified.
 ##### Example
 
 TODO
-
-#### RPC: bdev_lvol_get_lvols
-
-Get a list of logical volume stores.
-
-##### Parameters
-
-Name                    | Optional | Type        | Description
------------------------ | -------- | ----------- | -----------
-lvs_uuid                | Optional | string      | Limit results to lvols in the lvstore with this UUID
-lvs_name                | Optional | string      | Limit results to lvols in the lvstore with this name
-lvol_uuid               | Optional | string      | Limit results to lvols with this UUID
-lvol_name               | Optional | string      | Limit results to lvols with this name
-
-Either lvs_uuid or lvs_name may be specified, but not both. Either lvol_uuid or lvol_name may be
-specified, but not both.
-
-##### Example
-
-Example request:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "bdev_lvol_get_lvols",
-  "id": 1,
-  "params": {
-    "lvs_name": "LVS0",
-    "llvol_name": "vol1"
-  }
-}
-```
-
-Example response:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": [
-    {
-	    XXX-mg add stuff here
-    }
-  ]
-}
-```
-
-### Internal Interfaces
-
-#### Opening External Clones {#esnap_open_lvol_external_clone}
-
-`vbdev_lvs_create()` will set `opts.external_bs_dev_create` to `vbdev_lvs_esnap_open`, which is:
-
-```c
-static void
-vbdev_lvs_esnap_open(const void *cookie, size_t cookie_sz, struct spdk_blob *blob,
-		     spdk_blob_op_with_dev cb, void *cb_arg)
-{
-	const char *name = cookie;
-
-	/* Verify name[cookie_sz - 1] == '\0' */
-
-	/* Simple case: the open succeeds and the external clone is just about ready. */
-	rc = spdk_bdev_create_bs_dev_ro(name, ..., &bs_dev);
-	if (rc == 0) {
-		cb(cb_arg, bs_dev, 0);
-		return;
-	}
-
-	if (rc == -ENODEV) {
-		/* bdev not currently present. Add it to the watch list. */
-	}
-
-	cb(cb_arg, NULL, rc);
-}
-```
-
-#### Watch for missing external snapshots {#esnap_lvol_watch_for_bdev}
-
-See #opening_an_external_snapshot for background.
-
-As new bdevs are added, each bdev module's `examine_config` and `examine_disk` callback is called.
-While the  vbev_lvol `examine_disk` callback already exists, checking whether a new bdev is a
-missing external snapshot is best performed in the `examine_config` callback because it does not
-need to perform IO.
-
-To enable external clones, `spdk_bs_load()` needs to be called with:
-
-```c
-	opts.external_bs_dev_create = vbdev_lvs_examine_config;
-```
-
-The implementation of `vbdev_lvs_examine_config()` looks like:
-
-```c
-static void
-vbdev_lvs_examine_config(struct spdk_bdev *bdev)
-{
-	/* Look for bdev in wait list and remove if found */
-
-	/*
-	 * Iterate through blobs waiting on this bdev:
-	 * - Call spdk_bdev_blob_ro_claim(bdev)
-	 * - Call spdk_lvol_open() with a callback that calls
-	 *   spdk_bdev_blob_ro_release().
-	 */
-
-	/*
-	 * If there were any waiters, a shared claim has been established and
-	 * the count will not drop to 0 until the blobs that are just starting
-	 * to open are eventually closed.
-	 */
-	spdk_bdev_module_examine_done(&g_lvol_if);
-}
-```
