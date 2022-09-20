@@ -35,6 +35,21 @@ int spdk_bdev_create_bs_dev_ext(const char *bdev_name, spdk_bdev_event_cb_t even
 				void *event_ctx, struct spdk_bs_dev **bs_dev);
 
 /**
+ * Create a read-only blobstore block device from a bdev.
+ *
+ * This is typically done as part of opening an external snapshot. On successful
+ * return, the bdev is open read-only.
+ *
+ * \param bdev_name The bdev to use.
+ * \param event_cb Called when the bdev triggers asynchronous event.
+ * \param event_ctx Argument passed to function event_cb.
+ * \param bs_dev Output parameter for a pointer to the blobstore block device.
+ * \return 0 if operation is successful, or suitable errno value otherwise.
+ */
+int spdk_bdev_create_bs_dev_ro(const char *bdev_name, spdk_bdev_event_cb_t event_cb,
+			       void *event_ctx, struct spdk_bs_dev **bs_dev);
+
+/**
  * Claim the bdev module for the given blobstore.
  *
  * \param bs_dev Blobstore block device.
