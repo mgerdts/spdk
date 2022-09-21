@@ -40,6 +40,12 @@ static int blob_remove_xattr(struct spdk_blob *blob, const char *name, bool inte
 static void blob_write_extent_page(struct spdk_blob *blob, uint32_t extent, uint64_t cluster_num,
 				   struct spdk_blob_md_page *page, spdk_blob_op_complete cb_fn, void *cb_arg);
 
+static inline bool
+blob_is_external_clone(const struct spdk_blob *blob)
+{
+	return !!(blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT);
+}
+
 static int
 blob_id_cmp(struct spdk_blob *blob1, struct spdk_blob *blob2)
 {
@@ -1330,6 +1336,38 @@ blob_load_snapshot_cpl(void *cb_arg, struct spdk_blob *snapshot, int bserrno)
 static void blob_update_clear_method(struct spdk_blob *blob);
 
 static void
+blob_esnap_load_done(void *arg, struct spdk_bs_dev *dev, int bserrno)
+{
+	struct spdk_blob_load_ctx *ctx = arg;
+	struct spdk_blob	*blob = ctx->blob;
+
+	assert(blob->back_bs_dev == NULL);
+
+	if (bserrno == 0) {
+		SPDK_DEBUGLOG(blob_esnap, "blob 0x%" PRIx64 ": loaded back_bs_dev\n", blob->id);
+		assert(dev != NULL);
+		if (blob->bs->io_unit_size < dev->blocklen) {
+			SPDK_NOTICELOG("blob 0x%" PRIx64 " external snapshot device block size %u "
+				       "is not compatible with blobstore block size %u\n",
+				       blob->id, dev->blocklen, blob->bs->io_unit_size);
+			dev->destroy(dev);
+			bserrno = -EINVAL;
+		} else {
+			blob->back_bs_dev = dev;
+			blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
+		}
+	} else if (dev != NULL) {
+		SPDK_DEBUGLOG(blob_esnap, "blob 0x%" PRIx64 ": loaded back_bs_dev "
+			      "but destroying due to error %d\n", blob->id, bserrno);
+		dev->destroy(dev);
+	} else {
+		SPDK_DEBUGLOG(blob_esnap, "blob 0x%" PRIx64 ": failed to load back_bs_dev "
+			      "with error %d\n", blob->id, bserrno);
+	}
+	blob_load_final(ctx, bserrno);
+}
+
+static void
 blob_load_backing_dev(void *cb_arg)
 {
 	struct spdk_blob_load_ctx	*ctx = cb_arg;
@@ -1337,6 +1375,20 @@ blob_load_backing_dev(void *cb_arg)
 	const void			*value;
 	size_t				len;
 	int				rc;
+
+	if (spdk_blob_is_external_clone(blob)) {
+		if (blob->bs->external_bs_dev_create == NULL) {
+			SPDK_NOTICELOG("blob 0x%" PRIx64 " is an external clone but the blobstore "
+				       "was opened without support for external clones\n",
+				       blob->id);
+			blob_load_final(ctx, -ENOTSUP);
+			return;
+		}
+
+		SPDK_INFOLOG(blob, "Creating external snapshot device\n");
+		blob->bs->external_bs_dev_create(blob, blob_esnap_load_done, ctx);
+		return;
+	}
 
 	if (spdk_blob_is_thin_provisioned(blob)) {
 		rc = blob_get_xattr_value(blob, BLOB_SNAPSHOT, &value, &len, true);
@@ -3193,7 +3245,8 @@ bs_blob_list_add(struct spdk_blob *blob)
 	assert(blob != NULL);
 
 	snapshot_id = blob->parent_id;
-	if (snapshot_id == SPDK_BLOBID_INVALID) {
+	if (snapshot_id == SPDK_BLOBID_INVALID ||
+	    snapshot_id == SPDK_BLOBID_EXTERNAL_SNAPSHOT) {
 		return 0;
 	}
 
@@ -3316,6 +3369,7 @@ spdk_bs_opts_init(struct spdk_bs_opts *opts, size_t opts_size)
 	SET_FIELD(iter_cb_fn, NULL);
 	SET_FIELD(iter_cb_arg, NULL);
 	SET_FIELD(force_recover, false);
+	SET_FIELD(external_bs_dev_create, NULL);
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -3443,6 +3497,7 @@ bs_alloc(struct spdk_bs_dev *dev, struct spdk_bs_opts *opts, struct spdk_blob_st
 	bs->max_channel_ops = opts->max_channel_ops;
 	bs->super_blob = SPDK_BLOBID_INVALID;
 	memcpy(&bs->bstype, &opts->bstype, sizeof(opts->bstype));
+	bs->external_bs_dev_create = opts->external_bs_dev_create;
 
 	/* The metadata is assumed to be at least 1 page */
 	bs->used_md_pages = spdk_bit_array_create(1);
@@ -4517,12 +4572,13 @@ bs_opts_copy(struct spdk_bs_opts *src, struct spdk_bs_opts *dst)
 	SET_FIELD(iter_cb_fn);
 	SET_FIELD(iter_cb_arg);
 	SET_FIELD(force_recover);
+	SET_FIELD(external_bs_dev_create);
 
 	dst->opts_size = src->opts_size;
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 72, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 80, "Incorrect size");
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -5375,6 +5431,13 @@ spdk_bs_unload(struct spdk_blob_store *bs, spdk_bs_op_complete cb_fn, void *cb_a
 
 	if (!RB_EMPTY(&bs->open_blobs)) {
 		SPDK_ERRLOG("Blobstore still has open blobs\n");
+
+		struct spdk_blob *blob, *blob_tmp;
+		RB_FOREACH_SAFE(blob, spdk_blob_tree, &bs->open_blobs, blob_tmp) {
+			SPDK_DEBUGLOG(blob, "blob 0x%" PRIx64 " still open with %" PRIu32 " refs\n",
+				      blob->id, blob->open_ref);
+		}
+
 		cb_fn(cb_arg, -EBUSY);
 		return;
 	}
@@ -5685,12 +5748,14 @@ blob_opts_copy(const struct spdk_blob_opts *src, struct spdk_blob_opts *dst)
 	}
 
 	SET_FIELD(use_extent_table);
+	SET_FIELD(external_snapshot_cookie);
+	SET_FIELD(external_snapshot_cookie_len);
 
 	dst->opts_size = src->opts_size;
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_opts) == 64, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_opts) == 80, "Incorrect size");
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -5771,6 +5836,21 @@ bs_create_blob(struct spdk_blob_store *bs,
 	}
 
 	blob_set_clear_method(blob, opts_local.clear_method);
+
+	if (opts_local.external_snapshot_cookie != NULL) {
+		blob_set_thin_provision(blob);
+		blob->invalid_flags |= SPDK_BLOB_EXTERNAL_SNAPSHOT;
+		rc = blob_set_xattr(blob, BLOB_EXTERNAL_SNAPSHOT_COOKIE,
+				    opts_local.external_snapshot_cookie,
+				    opts_local.external_snapshot_cookie_len, true);
+		if (rc != 0) {
+			blob_free(blob);
+			spdk_bit_array_clear(bs->used_blobids, page_idx);
+			bs_release_md_page(bs, page_idx);
+			cb_fn(cb_arg, 0, rc);
+			return;
+		}
+	}
 
 	rc = blob_resize(blob, opts_local.num_clusters);
 	if (rc < 0) {
@@ -8018,6 +8098,13 @@ spdk_blob_is_thin_provisioned(struct spdk_blob *blob)
 	return !!(blob->invalid_flags & SPDK_BLOB_THIN_PROV);
 }
 
+bool
+spdk_blob_is_external_clone(const struct spdk_blob *blob)
+{
+	assert(blob != NULL);
+	return !!(blob->invalid_flags & SPDK_BLOB_EXTERNAL_SNAPSHOT);
+}
+
 static void
 blob_update_clear_method(struct spdk_blob *blob)
 {
@@ -8334,4 +8421,15 @@ spdk_bs_grow(struct spdk_bs_dev *dev, struct spdk_bs_opts *o,
 			     bs_grow_load_super_cpl, ctx);
 }
 
+int
+spdk_blob_get_external_cookie(struct spdk_blob *blob, const void **cookie, size_t *len)
+{
+	if (!blob_is_external_clone(blob)) {
+		return -EINVAL;
+	}
+
+	return blob_get_xattr_value(blob, BLOB_EXTERNAL_SNAPSHOT_COOKIE, cookie, len, true);
+}
+
 SPDK_LOG_REGISTER_COMPONENT(blob)
+SPDK_LOG_REGISTER_COMPONENT(blob_esnap)
