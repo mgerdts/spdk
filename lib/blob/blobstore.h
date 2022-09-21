@@ -185,6 +185,9 @@ struct spdk_blob_store {
 	TAILQ_HEAD(, spdk_blob_list)	snapshots;
 
 	bool				clean;
+
+	void (*external_bs_dev_create)(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
+				       void *cb_arg);
 };
 
 struct spdk_bs_channel {
@@ -218,6 +221,7 @@ enum spdk_blob_op_type {
 #define BLOB_SNAPSHOT "SNAP"
 #define SNAPSHOT_IN_PROGRESS "SNAPTMP"
 #define SNAPSHOT_PENDING_REMOVAL "SNAPRM"
+#define BLOB_EXTERNAL_SNAPSHOT_COOKIE "EXTSNAP"
 
 struct spdk_blob_bs_dev {
 	struct spdk_bs_dev bs_dev;
@@ -312,10 +316,12 @@ struct spdk_blob_md_descriptor_extent_page {
 	uint32_t	cluster_idx[0];
 };
 
-#define SPDK_BLOB_THIN_PROV (1ULL << 0)
-#define SPDK_BLOB_INTERNAL_XATTR (1ULL << 1)
-#define SPDK_BLOB_EXTENT_TABLE (1ULL << 2)
-#define SPDK_BLOB_INVALID_FLAGS_MASK	(SPDK_BLOB_THIN_PROV | SPDK_BLOB_INTERNAL_XATTR | SPDK_BLOB_EXTENT_TABLE)
+#define SPDK_BLOB_THIN_PROV		(1ULL << 0)
+#define SPDK_BLOB_INTERNAL_XATTR	(1ULL << 1)
+#define SPDK_BLOB_EXTENT_TABLE		(1ULL << 2)
+#define SPDK_BLOB_EXTERNAL_SNAPSHOT	(1ULL << 3)
+#define SPDK_BLOB_INVALID_FLAGS_MASK	(SPDK_BLOB_THIN_PROV | SPDK_BLOB_INTERNAL_XATTR | \
+					 SPDK_BLOB_EXTENT_TABLE | SPDK_BLOB_EXTERNAL_SNAPSHOT)
 
 #define SPDK_BLOB_READ_ONLY (1ULL << 0)
 #define SPDK_BLOB_DATA_RO_FLAGS_MASK	SPDK_BLOB_READ_ONLY
