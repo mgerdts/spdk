@@ -72,9 +72,9 @@ bs_sequence_completion(struct spdk_io_channel *channel, void *cb_arg, int bserrn
 	set->u.sequence.cb_fn((spdk_bs_sequence_t *)set, set->u.sequence.cb_arg, bserrno);
 }
 
-spdk_bs_sequence_t *
-bs_sequence_start(struct spdk_io_channel *_channel,
-		  struct spdk_bs_cpl *cpl)
+static inline spdk_bs_sequence_t *
+bs_sequence_start_chan(struct spdk_io_channel *_channel, struct spdk_bs_cpl *cpl,
+		       struct spdk_io_channel *back_channel)
 {
 	struct spdk_bs_channel		*channel;
 	struct spdk_bs_request_set	*set;
@@ -90,7 +90,7 @@ bs_sequence_start(struct spdk_io_channel *_channel,
 	set->cpl = *cpl;
 	set->bserrno = 0;
 	set->channel = channel;
-	set->back_channel = _channel;
+	set->back_channel = back_channel;
 
 	set->cb_args.cb_fn = bs_sequence_completion;
 	set->cb_args.cb_arg = set;
@@ -98,6 +98,29 @@ bs_sequence_start(struct spdk_io_channel *_channel,
 	set->ext_io_opts = NULL;
 
 	return (spdk_bs_sequence_t *)set;
+}
+
+/* Use for all reads can be satisfied by the bdev under the blobstore */
+spdk_bs_sequence_t *
+bs_sequence_start(struct spdk_io_channel *_channel, struct spdk_bs_cpl *cpl)
+{
+	return bs_sequence_start_chan(_channel, cpl, _channel);
+}
+
+/* Use when reading from an external snapshot */
+spdk_bs_sequence_t *
+bs_sequence_start_external(struct spdk_io_channel *_channel, struct spdk_bs_cpl *cpl,
+			   struct spdk_blob *blob)
+{
+	struct spdk_io_channel	*esnap_ch = _channel;
+
+	if (spdk_blob_is_external_clone(blob)) {
+		esnap_ch = blob_esnap_get_io_channel(_channel, blob);
+		if (esnap_ch == NULL) {
+			return NULL;
+		}
+	}
+	return bs_sequence_start_chan(_channel, cpl, esnap_ch);
 }
 
 void
@@ -277,11 +300,18 @@ bs_batch_completion(struct spdk_io_channel *_channel,
 }
 
 spdk_bs_batch_t *
-bs_batch_open(struct spdk_io_channel *_channel,
-	      struct spdk_bs_cpl *cpl)
+bs_batch_open(struct spdk_io_channel *_channel, struct spdk_bs_cpl *cpl, struct spdk_blob *blob)
 {
 	struct spdk_bs_channel		*channel;
 	struct spdk_bs_request_set	*set;
+	struct spdk_io_channel		*back_channel = _channel;
+
+	if (spdk_blob_is_external_clone(blob)) {
+		back_channel = blob_esnap_get_io_channel(_channel, blob);
+		if (back_channel == NULL) {
+			return NULL;
+		}
+	}
 
 	channel = spdk_io_channel_get_ctx(_channel);
 	assert(channel != NULL);
@@ -294,7 +324,7 @@ bs_batch_open(struct spdk_io_channel *_channel,
 	set->cpl = *cpl;
 	set->bserrno = 0;
 	set->channel = channel;
-	set->back_channel = _channel;
+	set->back_channel = back_channel;
 
 	set->u.batch.cb_fn = NULL;
 	set->u.batch.cb_arg = NULL;
