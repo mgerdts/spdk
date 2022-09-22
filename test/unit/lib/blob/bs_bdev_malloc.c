@@ -2,6 +2,8 @@
  *   Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+/* XXX-mg: with the mocked up bs_dev in blob.c/esnap_dev.c, this file can be deleted. */
+
 #include "spdk/bdev_module.h"
 #include "bdev/malloc/bdev_malloc.c"
 #include "bdev/bdev.c"
