@@ -172,13 +172,77 @@ function test_esnap_compare_with_lvol_bdev() {
 	check_leftover_devices
 }
 
+function test_esnap_reload() {
+	local bs_dev esnap_dev
+	local block_size=512
+	local esnap_size_mb=1
+	local lvs_cluster_size=$(( 16 * 1024 ))
+	local lvs_uuid eclone_uuid snap_uuid clone_uuid uuid
+	local aio_bdev=test_esnap_reload_aio0
+
+	# Create the lvstore on an aio device. Can't use malloc because we need to remove
+	# the device and re-add it to trigger an lvstore unload and then load.
+	rm -f $testdir/aio_bdev_0
+	truncate -s "${AIO_SIZE_MB}M" $testdir/aio_bdev_0
+	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
+	lvs_uuid=$(rpc_cmd bdev_lvol_create_lvstore -c "$lvs_cluster_size" "$bs_dev" lvs_test)
+
+	# Create a bdev that will be the external snapshot
+	esnap_dev=$(rpc_cmd bdev_malloc_create "$esnap_size_mb" "$block_size")
+	eclone_uuid=$(rpc_cmd bdev_lvol_clone_bdev lvs_test "$esnap_dev" "eclone1")
+
+	# Unload the lvstore
+	rpc_cmd bdev_aio_delete "$aio_bdev"
+	NOT rpc_cmd bdev_lvol_get_lvstores -l lvs_test
+
+	# Load the lvstore, expect to see eclone1 again
+	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
+	lvs_uuid=$(rpc_cmd bdev_lvol_get_lvstores -l lvs_test)
+	uuid=$(rpc_cmd bdev_get_bdevs -b lvs_test/eclone1 | jq -r '.[] | .name')
+	test "$uuid"  == "$eclone_uuid"
+
+	# Create a snapshot of the eclone, reload, and verify all is there.
+	snap_uuid=$(rpc_cmd bdev_lvol_snapshot "$eclone_uuid" snap1)
+	rpc_cmd bdev_aio_delete "$aio_bdev"
+	NOT rpc_cmd bdev_lvol_get_lvstores -l lvs_test
+	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
+	lvs_uuid=$(rpc_cmd bdev_lvol_get_lvstores -l lvs_test)
+	uuid=$(rpc_cmd bdev_get_bdevs -b lvs_test/eclone1 | jq -r '.[] | .name')
+	test "$uuid"  == "$eclone_uuid"
+	uuid=$(rpc_cmd bdev_get_bdevs -b lvs_test/snap1 | jq -r '.[] | .name')
+	test "$uuid"  == "$snap_uuid"
+
+	rpc_cmd bdev_get_bdevs > /tmp/bdevs.0
+	# Create a clone of the snapshot, reload, and verify all is there.
+	clone_uuid=$(rpc_cmd bdev_lvol_clone "$snap_uuid" clone1)
+	rpc_cmd bdev_get_bdevs > /tmp/bdevs.1
+	rpc_cmd bdev_aio_delete "$aio_bdev"
+	NOT rpc_cmd bdev_lvol_get_lvstores -l lvs_test
+	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
+	lvs_uuid=$(rpc_cmd bdev_lvol_get_lvstores -l lvs_test)
+	uuid=$(rpc_cmd bdev_get_bdevs -b lvs_test/eclone1 | jq -r '.[] | .name')
+	test "$uuid"  == "$eclone_uuid"
+	uuid=$(rpc_cmd bdev_get_bdevs -b lvs_test/snap1 | jq -r '.[] | .name')
+	test "$uuid"  == "$snap_uuid"
+	uuid=$(rpc_cmd bdev_get_bdevs -b lvs_test/clone1 | jq -r '.[] | .name')
+	test "$uuid"  == "$clone_uuid"
+
+	rpc_cmd bdev_lvol_delete "$clone_uuid"
+	rpc_cmd bdev_lvol_delete "$snap_uuid"
+	rpc_cmd bdev_lvol_delete "$eclone_uuid"
+	rpc_cmd bdev_aio_delete "$aio_bdev"
+	rpc_cmd bdev_malloc_delete "$esnap_dev"
+}
+
 $SPDK_BIN_DIR/spdk_tgt &
 spdk_pid=$!
-trap 'killprocess "$spdk_pid"; exit 1' SIGINT SIGTERM EXIT
+trap 'killprocess "$spdk_pid"; rm -f "$testdir/aio_bdev_0"; exit 1' SIGINT SIGTERM EXIT
 waitforlisten $spdk_pid
 modprobe nbd
 
 run_test "test_esnap_compare_with_lvol_bdev" test_esnap_compare_with_lvol_bdev
+run_test "test_esnap_reload" test_esnap_reload
 
 trap - SIGINT SIGTERM EXIT
 killprocess $spdk_pid
+rm -f "$testdir/aio_bdev_0"
