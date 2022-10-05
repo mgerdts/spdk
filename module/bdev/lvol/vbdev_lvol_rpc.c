@@ -551,7 +551,7 @@ rpc_bdev_lvol_clone(struct spdk_jsonrpc_request *request,
 
 	lvol = vbdev_lvol_get_from_bdev(bdev);
 	if (req.snapshot_name != NULL) {
-		/* Clone a non-lvol bdev */
+		/* Normal lvol clone */
 		if (lvol == NULL) {
 			SPDK_ERRLOG("lvol does not exist\n");
 			spdk_jsonrpc_send_error_response(request, -ENODEV, spdk_strerror(ENODEV));

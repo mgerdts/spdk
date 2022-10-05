@@ -8741,6 +8741,15 @@ blob_esnap_destroy_bs_dev_channels(struct spdk_blob *blob, spdk_blob_op_with_han
 		return;
 	}
 
+	if (blob->back_bs_dev == NULL) {
+		/* XXX-mg test/lvol/exteranl_snapshot.sh:231 triggers this while deleting the
+		 * snapshot during cleanup. It makes me think the destroy() is happening on the
+		 * first close and it should defer to the last. */
+		SPDK_NOTICELOG("blob 0x%" PRIx64 ": no external snapshot device\n", blob->id);
+		cb_fn(cb_arg, blob, 0);
+		return;
+	}
+
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, blob, -ENOMEM);
