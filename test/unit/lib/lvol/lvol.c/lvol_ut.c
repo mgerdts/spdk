@@ -33,6 +33,7 @@ DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *name), NULL)
 DEFINE_STUB(spdk_bdev_create_bs_dev_ro, int,
 	    (const char *bdev_name, spdk_bdev_event_cb_t event_cb, void *event_ctx,
 	     struct spdk_bs_dev **bs_dev), -ENOTSUP);
+DEFINE_STUB(spdk_blob_is_external_clone, bool, (const struct spdk_blob *blob), false);
 
 const char *uuid = "828d9766-ae50-11e7-bd8d-001e67edf350";
 
@@ -2408,6 +2409,7 @@ lvol_esnap_degraded(void)
 	struct spdk_bs_dev	*bs_dev;
 	struct spdk_io_channel	*ch;
 	struct spdk_bs_dev_cb_args cb_args;
+	struct spdk_lvs_missing	*missing;
 	char			buf[512];
 	struct iovec		iov = { 0 };
 	struct spdk_blob_ext_io_opts io_opts = { 0 };
@@ -2470,7 +2472,7 @@ lvol_esnap_degraded(void)
 	bs_dev->destroy_channel(bs_dev, ch);
 	bs_dev->destroy(bs_dev);
 
-	/* The bs->external_dev_create() callback creates a degraded device. */
+	/* The bs->external_dev_create() callback adds the device to the missing list. */
 	ut_spdk_bdev_create_bs_dev_ro = -ENODEV;
 	g_spdk_blob_get_external_cookie_errno = 0;
 	g_spdk_blob_get_external_cookie = "oreo";
@@ -2478,9 +2480,13 @@ lvol_esnap_degraded(void)
 	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
 	CU_ASSERT(cb_res.err == 0);
 	SPDK_CU_ASSERT_FATAL(cb_res.data != NULL);
-	ddev = cb_res.data;
-	CU_ASSERT(ddev->lvol == lvol);
-	bs_dev = &ddev->bs_dev;
+	missing = _RB_ROOT(&lvs->missing_esnaps);
+	SPDK_CU_ASSERT_FATAL(missing != NULL);
+	CU_ASSERT(lvol->missing == missing);
+	CU_ASSERT(TAILQ_FIRST(&missing->lvols) == lvol);
+	lvs_esnap_missing_remove(lvol);
+	CU_ASSERT(RB_EMPTY(&lvs->missing_esnaps));
+	bs_dev = cb_res.data;
 	bs_dev->destroy(bs_dev);
 
 	lvol_free(lvol);
