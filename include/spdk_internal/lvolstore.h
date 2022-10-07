@@ -10,6 +10,7 @@
 #include "spdk/blob.h"
 #include "spdk/lvol.h"
 #include "spdk/queue.h"
+#include "spdk/tree.h"
 #include "spdk/uuid.h"
 
 /* Default size of blobstore cluster */
@@ -39,6 +40,7 @@ struct spdk_lvol_req {
 	spdk_lvol_op_complete   cb_fn;
 	void                    *cb_arg;
 	struct spdk_lvol	*lvol;
+	struct spdk_lvol	*oldlvol;
 	size_t			sz;
 	struct spdk_io_channel	*channel;
 	char			name[SPDK_LVOL_NAME_MAX];
@@ -66,6 +68,8 @@ struct spdk_lvol_with_handle_req {
 	struct spdk_lvol		*origlvol;
 };
 
+struct spdk_lvs_missing;
+
 struct spdk_lvol_store {
 	struct spdk_bs_dev		*bs_dev;
 	struct spdk_blob_store		*blobstore;
@@ -82,6 +86,9 @@ struct spdk_lvol_store {
 	TAILQ_ENTRY(spdk_lvol_store)	link;
 	char				name[SPDK_LVS_NAME_MAX];
 	char				new_name[SPDK_LVS_NAME_MAX];
+	RB_HEAD(missing_esnap_tree, spdk_lvs_missing)	missing_esnaps;
+	pthread_mutex_t			missing_lock;
+	struct spdk_thread		*thread;
 };
 
 struct spdk_lvol {
@@ -97,7 +104,9 @@ struct spdk_lvol {
 	int				ref_count;
 	bool				action_in_progress;
 	enum blob_clear_method		clear_method;
-	TAILQ_ENTRY(spdk_lvol) link;
+	TAILQ_ENTRY(spdk_lvol)		link;
+	struct spdk_lvs_missing		*missing;
+	TAILQ_ENTRY(spdk_lvol)		missing_link;
 };
 
 struct lvol_store_bdev *vbdev_lvol_store_first(void);
