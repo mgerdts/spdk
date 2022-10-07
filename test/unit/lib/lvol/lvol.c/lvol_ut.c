@@ -33,6 +33,7 @@ DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *name), NULL)
 DEFINE_STUB(spdk_bdev_create_bs_dev_ro, int,
 	    (const char *bdev_name, spdk_bdev_event_cb_t event_cb, void *event_ctx,
 	     struct spdk_bs_dev **bs_dev), -ENOTSUP);
+DEFINE_STUB(spdk_blob_is_external_clone, bool, (const struct spdk_blob *blob), false);
 
 const char *uuid = "828d9766-ae50-11e7-bd8d-001e67edf350";
 
