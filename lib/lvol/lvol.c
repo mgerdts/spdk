@@ -21,7 +21,8 @@ SPDK_LOG_REGISTER_COMPONENT(lvol)
 static TAILQ_HEAD(, spdk_lvol_store) g_lvol_stores = TAILQ_HEAD_INITIALIZER(g_lvol_stores);
 static pthread_mutex_t g_lvol_stores_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static void lvs_esnap_dev_create(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg);
+static void lvs_esnap_dev_create(void *ctx, struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
+				 void *cb_arg);
 
 static int
 add_lvs_to_list(struct spdk_lvol_store *lvs)
@@ -1622,7 +1623,8 @@ lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, 
 }
 
 static void
-lvs_esnap_dev_create(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg)
+lvs_esnap_dev_create(void *bs_ctx, struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
+		     void *cb_arg)
 {
 	struct spdk_bs_dev	*bs_dev = NULL;
 	const void		*cookie = NULL;

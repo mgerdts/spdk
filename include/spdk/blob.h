@@ -144,12 +144,14 @@ typedef void (*spdk_blob_op_with_bs_dev)(void *cb_arg, struct spdk_bs_dev *bs_de
  * spdk_blob_get_external_cookie(), spdk_blob_get_id(), etc. After calling cb(), it is
  * not safe to reference blob or any memory references obtained from these functions.
  *
+ * \param ctx Context provided by the blobstore consumer via external_ctx member of struct
+ * spdk_bs_opts.
  * \param blob The blob that needs its external snapshot device.
  * \param cb Callback to register blobostore device or error.
  * \param cb_arg Opaque argument to pass with cb.
  */
-typedef void (*spdk_bs_external_dev_create)(struct spdk_blob *blob,
-					    spdk_blob_op_with_bs_dev cb, void *cb_arg);
+typedef void (*spdk_bs_external_dev_create)(void *ctx, struct spdk_blob *blob,
+		spdk_blob_op_with_bs_dev cb, void *cb_arg);
 
 struct spdk_bs_dev_cb_args {
 	spdk_bs_dev_cpl		cb_fn;
@@ -283,8 +285,13 @@ struct spdk_bs_opts {
 	 * External snapshot creation callback to register with the blobstore.
 	 */
 	spdk_bs_external_dev_create external_bs_dev_create;
+
+	/**
+	 * Context to pass with external_bs_dev_create.
+	 */
+	void *external_ctx;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 80, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 88, "Incorrect size");
 
 /**
  * Initialize a spdk_bs_opts structure to the default blobstore option values.
