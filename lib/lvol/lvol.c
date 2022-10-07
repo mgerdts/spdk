@@ -9,6 +9,7 @@
 #include "spdk/string.h"
 #include "spdk/thread.h"
 #include "spdk/blob_bdev.h"
+#include "spdk/tree.h"
 #include "spdk/util.h"
 
 /* Default blob channel opts for lvol */
@@ -23,8 +24,11 @@ static pthread_mutex_t g_lvol_stores_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 				 spdk_blob_op_with_bs_dev cb, void *cb_arg);
-static int lvs_esnap_dev_create_degraded(struct spdk_lvol_store *lvs, struct spdk_blob *blob,
-		const char *name, struct spdk_bs_dev **bs_dev);
+static int lvs_esnap_dev_create_degraded(struct spdk_lvol_store *lvs, struct spdk_lvol *lvol,
+		struct spdk_blob *blob, const char *name, struct spdk_bs_dev **bs_dev);
+static struct spdk_lvol *lvs_get_lvol_by_blob_id(struct spdk_lvol_store *lvs, spdk_blob_id blob_id);
+static void lvs_esnap_missing_remove(struct spdk_lvol *lvol);
+static void lvs_esnap_missing_swap(struct spdk_lvol *lvol1, struct spdk_lvol *lvol2);
 
 static int
 add_lvs_to_list(struct spdk_lvol_store *lvs)
@@ -62,6 +66,9 @@ lvs_alloc(void)
 	TAILQ_INIT(&lvs->pending_lvols);
 
 	lvs->load_esnaps = false;
+	RB_INIT(&lvs->missing_esnaps);
+	pthread_mutex_init(&lvs->missing_lock, NULL);
+	lvs->thread = spdk_get_thread();
 
 	return lvs;
 }
@@ -74,6 +81,8 @@ lvs_free(struct spdk_lvol_store *lvs)
 		TAILQ_REMOVE(&g_lvol_stores, lvs, link);
 	}
 	pthread_mutex_unlock(&g_lvol_stores_mutex);
+
+	assert(RB_EMPTY(&lvs->missing_esnaps));
 
 	free(lvs);
 }
@@ -811,6 +820,7 @@ spdk_lvs_unload(struct spdk_lvol_store *lvs, spdk_lvs_op_complete cb_fn,
 	}
 
 	TAILQ_FOREACH_SAFE(lvol, &lvs->lvols, link, tmp) {
+		lvs_esnap_missing_remove(lvol);
 		TAILQ_REMOVE(&lvs->lvols, lvol, link);
 		lvol_free(lvol);
 	}
@@ -941,6 +951,9 @@ lvol_delete_blob_cb(void *cb_arg, int lvolerrno)
 		SPDK_INFOLOG(lvol, "Lvol %s deleted\n", lvol->unique_id);
 	}
 
+	lvs_esnap_missing_swap(lvol, req->oldlvol);
+	lvs_esnap_missing_remove(lvol);
+
 	TAILQ_REMOVE(&lvol->lvol_store->lvols, lvol, link);
 	lvol_free(lvol);
 	req->cb_fn(req->cb_arg, lvolerrno);
@@ -994,6 +1007,8 @@ lvol_create_cb(void *cb_arg, spdk_blob_id blobid, int lvolerrno)
 	opts.clear_method = req->lvol->clear_method;
 	opts.external_ctx = req->lvol;
 	bs = req->lvol->lvol_store->blobstore;
+
+	lvs_esnap_missing_swap(req->lvol, req->origlvol);
 
 	spdk_bs_open_blob_ext(bs, blobid, &opts, lvol_create_open_cb, req);
 }
@@ -1456,6 +1471,18 @@ spdk_lvol_destroy(struct spdk_lvol *lvol, spdk_lvol_op_complete cb_fn, void *cb_
 	req->cb_arg = cb_arg;
 	req->lvol = lvol;
 	bs = lvol->lvol_store->blobstore;
+	if (spdk_blob_is_external_clone(lvol->blob)) {
+		struct spdk_lvol_store	*lvs = lvol->lvol_store;
+		spdk_blob_id	clone_id;
+		size_t		count = 1;
+		int		rc;
+
+		rc = spdk_blob_get_clones(lvs->blobstore, spdk_blob_get_id(lvol->blob),
+					  &clone_id, &count);
+		if (rc == 0 && count == 1) {
+			req->oldlvol = lvs_get_lvol_by_blob_id(lvs, clone_id);
+		}
+	}
 
 	spdk_bs_delete_blob(bs, lvol->blob_id, lvol_delete_blob_cb, req);
 }
@@ -1642,12 +1669,30 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
  * backed by clusters allocated in the blobstore can still service IO. An lvol that is an external
  * clone that does not have its external snapshot loaded is considered degraded. Attempts to read
  * from a degraded external snapshot will generate EIO.
+ *
+ * Each lvstore has a tree of missing external snapshots, lvs->missing_esnaps, indexed by external
+ * snapshot name.
  */
 
-struct spdk_lvs_degraded_dev {
+struct spdk_lvs_missing {
+	const char				*name;
+	TAILQ_HEAD(missing_lvols, spdk_lvol)	lvols;
+	RB_ENTRY(spdk_lvs_missing)		node;
+};
+
+struct lvs_degraded_dev {
 	struct spdk_bs_dev	bs_dev;
+	const char		*bdev_name;
 	struct spdk_lvol	*lvol;
 };
+
+static int
+lvs_esnap_name_cmp(struct spdk_lvs_missing *m1, struct spdk_lvs_missing *m2)
+{
+	return strcmp(m1->name, m2->name);
+}
+
+RB_GENERATE_STATIC(missing_esnap_tree, spdk_lvs_missing, node, lvs_esnap_name_cmp)
 
 static void
 lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
@@ -1656,6 +1701,108 @@ lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, 
 		       spdk_bdev_get_name(bdev), type);
 }
 
+/*
+ * Record in lvs->missing_esnaps that a bdev of the specified name is needed by the specified lvol.
+ */
+static int
+lvs_esnap_missing_add(struct spdk_lvol_store *lvs, struct spdk_lvol *lvol, const char *name)
+{
+	struct spdk_lvs_missing find, *missing;
+
+	assert(lvs->thread == spdk_get_thread());
+
+	find.name = name;
+	pthread_mutex_lock(&lvs->missing_lock);
+	missing = RB_FIND(missing_esnap_tree, &lvs->missing_esnaps, &find);
+	if (missing == NULL) {
+		missing = calloc(1, sizeof(*missing));
+		if (missing == NULL) {
+			pthread_mutex_unlock(&lvs->missing_lock);
+			SPDK_ERRLOG("lvol %s: cannot create missing node for bdev '%s': "
+				    "out of memory\n", lvol->unique_id, name);
+			return -ENOMEM;
+		}
+		missing->name = strdup(name);
+		if (missing->name == NULL) {
+			pthread_mutex_unlock(&lvs->missing_lock);
+			free(missing);
+			SPDK_ERRLOG("lvol %s: cannot create missing node for bdev '%s': "
+				    "out of memory\n", lvol->unique_id, name);
+			return -ENOMEM;
+		}
+		TAILQ_INIT(&missing->lvols);
+		RB_INSERT(missing_esnap_tree, &lvs->missing_esnaps, missing);
+	}
+	lvol->missing = missing;
+	TAILQ_INSERT_TAIL(&missing->lvols, lvol, missing_link);
+	pthread_mutex_unlock(&lvs->missing_lock);
+
+	return 0;
+}
+
+/*
+ * Remove the record of the specified lvol needing a missing bdev.
+ */
+static void
+lvs_esnap_missing_remove(struct spdk_lvol *lvol)
+{
+	struct spdk_lvol_store	*lvs = lvol->lvol_store;
+	struct spdk_lvs_missing	*missing = lvol->missing;
+
+	assert(lvs->thread == spdk_get_thread());
+
+	if (missing == NULL) {
+		return;
+	}
+
+	lvol->missing = NULL;
+
+	pthread_mutex_lock(&lvs->missing_lock);
+
+	TAILQ_REMOVE(&missing->lvols, lvol, missing_link);
+	if (!TAILQ_EMPTY(&missing->lvols)) {
+		pthread_mutex_unlock(&lvs->missing_lock);
+		return;
+	}
+
+	RB_REMOVE(missing_esnap_tree, &lvs->missing_esnaps, missing);
+	pthread_mutex_unlock(&lvs->missing_lock);
+
+	free((char *)missing->name);
+	free(missing);
+}
+
+/*
+ * When an external clone is snapshotted or an external clone snapshot with regular clones is
+ * removed, the lvol that will need a missing device changes.
+ */
+static void
+lvs_esnap_missing_swap(struct spdk_lvol *lvol1, struct spdk_lvol *lvol2)
+{
+	struct spdk_lvol_store	*lvs = lvol1->lvol_store;
+	struct spdk_lvs_missing *tmp;
+
+	assert(lvs->thread == spdk_get_thread());
+
+	if (lvol2 == NULL || (lvol1->missing == NULL && lvol2->missing == NULL)) {
+		return;
+	}
+	assert(lvol1->lvol_store == lvol2->lvol_store);
+
+	pthread_mutex_lock(&lvs->missing_lock);
+
+	tmp = lvol1->missing;
+	lvol1->missing = lvol2->missing;
+	lvol2->missing = tmp;
+
+	pthread_mutex_unlock(&lvs->missing_lock);
+}
+
+/*
+ * Tries to create a spdk_bs_dev using the name obtained from the blob's external snapshot cookie.
+ * If that fails, it creates a degraded device that generates EIO errors on read. Can fail due to
+ * memory allocation errors.
+ */
 static void
 lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 		     spdk_blob_op_with_bs_dev cb, void *cb_arg)
@@ -1699,7 +1846,24 @@ lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 
 	rc = spdk_bdev_create_bs_dev_ro(name, lvs_esnap_bdev_event_cb, NULL, &bs_dev);
 	if (rc == -ENODEV) {
-		rc = lvs_esnap_dev_create_degraded(lvs, blob, name, &bs_dev);
+		if (lvol == NULL) {
+			spdk_blob_id blob_id = spdk_blob_get_id(blob);
+			/*
+			 * If spdk_bs_blob_open() is used instead of spdk_bs_blob_open_ext() the
+			 * lvol will not have been passed in. The same is true if the open happens
+			 * spontaneously due to blobstore activity.
+			 */
+			lvol = lvs_get_lvol_by_blob_id(lvs, blob_id);
+			if (lvol == NULL) {
+				SPDK_ERRLOG("lvstore %s: no lvol for blob 0x%" PRIx64 "\n",
+					    lvs->name, blob_id);
+				rc = -ENODEV;
+				goto out;
+			}
+		}
+
+		lvs_esnap_missing_add(lvs, lvol, name);
+		rc = lvs_esnap_dev_create_degraded(lvs, lvol, blob, name, &bs_dev);
 	}
 	if (rc != 0) {
 		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to create bs_dev from bdev '%s': %d\n",
@@ -1789,23 +1953,24 @@ lvs_get_lvol_by_blob_id(struct spdk_lvol_store *lvs, spdk_blob_id blob_id)
 }
 
 static int
-lvs_esnap_dev_create_degraded(struct spdk_lvol_store *lvs, struct spdk_blob *blob, const char *name,
+lvs_esnap_dev_create_degraded(struct spdk_lvol_store *lvs, struct spdk_lvol *lvol,
+			      struct spdk_blob *blob, const char *name,
 			      struct spdk_bs_dev **bs_dev)
 {
-	struct spdk_lvs_degraded_dev	*ddev;
-	struct spdk_lvol		*lvol;
-	spdk_blob_id			blob_id = spdk_blob_get_id(blob);
-
-	lvol = lvs_get_lvol_by_blob_id(lvs, blob_id);
-	if (lvol == NULL) {
-		SPDK_ERRLOG("lvstore %s: blob 0x%" PRIx64 " not found\n", lvs->name, blob_id);
-		return -EINVAL;
-	}
-	assert(lvol->blob == NULL);
+	struct lvs_degraded_dev	*ddev;
 
 	ddev = calloc(1, sizeof(*ddev));
 	if (ddev == NULL) {
-		SPDK_ERRLOG("lvstore %s blob 0x%" PRIx64 ": out of memory\n", lvs->name, blob_id);
+		SPDK_ERRLOG("lvol %s: cannot create degraded dev: out of memory\n",
+			    lvol->unique_id);
+		return -ENOMEM;
+	}
+
+	ddev->bdev_name = strdup(name);
+	if (ddev->bdev_name == NULL) {
+		free(ddev);
+		SPDK_ERRLOG("lvol %s: cannot create degraded dev: out of memory\n",
+			    lvol->unique_id);
 		return -ENOMEM;
 	}
 
