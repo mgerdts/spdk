@@ -748,6 +748,7 @@ vbdev_lvol_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 				spdk_json_write_named_string(w, "external_snapshot_name", name);
 			}
 		}
+		spdk_json_write_named_bool(w, "external_snapshot_present", lvol->missing == NULL);
 	}
 
 end:
