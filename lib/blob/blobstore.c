@@ -163,7 +163,8 @@ bs_allocate_cluster(struct spdk_blob *blob, uint32_t cluster_num,
 		}
 	}
 
-	SPDK_DEBUGLOG(blob, "Claiming cluster %" PRIu64 " for blob %" PRIu64 "\n", *cluster, blob->id);
+	SPDK_DEBUGLOG(blob, "Claiming cluster %" PRIu64 " for blob 0x%" PRIx64 "\n", *cluster,
+		      blob->id);
 
 	if (update_map) {
 		blob_insert_cluster(blob, cluster_num, *cluster);
@@ -1463,7 +1464,7 @@ blob_load_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 	}
 
 	if (bserrno) {
-		SPDK_ERRLOG("Metadata page %d read failed for blobid %" PRIu64 ": %d\n",
+		SPDK_ERRLOG("Metadata page %d read failed for blobid 0x%" PRIx64 ": %d\n",
 			    current_page, blob->id, bserrno);
 		blob_load_final(ctx, bserrno);
 		return;
@@ -1472,7 +1473,7 @@ blob_load_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 	page = &ctx->pages[ctx->num_pages - 1];
 	crc = blob_md_page_calc_crc(page);
 	if (crc != page->crc) {
-		SPDK_ERRLOG("Metadata page %d crc mismatch for blobid %" PRIu64 "\n",
+		SPDK_ERRLOG("Metadata page %d crc mismatch for blobid 0x%" PRIx64 "\n",
 			    current_page, blob->id);
 		blob_load_final(ctx, -EINVAL);
 		return;
@@ -2109,7 +2110,8 @@ blob_persist_generate_new_md(struct spdk_blob_persist_ctx *ctx)
 		ctx->pages[i - 1].crc = blob_md_page_calc_crc(&ctx->pages[i - 1]);
 		blob->active.pages[i] = page_num;
 		bs_claim_md_page(bs, page_num);
-		SPDK_DEBUGLOG(blob, "Claiming page %u for blob %" PRIu64 "\n", page_num, blob->id);
+		SPDK_DEBUGLOG(blob, "Claiming page %u for blob 0x%" PRIx64 "\n", page_num,
+			      blob->id);
 		page_num++;
 	}
 	ctx->pages[i - 1].crc = blob_md_page_calc_crc(&ctx->pages[i - 1]);
@@ -4306,7 +4308,7 @@ bs_load_replay_md_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 		if (page->sequence_num == 0 || ctx->in_page_chain == true) {
 			bs_claim_md_page(ctx->bs, page_num);
 			if (page->sequence_num == 0) {
-				SPDK_NOTICELOG("Recover: blob %" PRIu32 "\n", page_num);
+				SPDK_NOTICELOG("Recover: blob 0x%" PRIx32 "\n", page_num);
 				spdk_bit_array_set(ctx->bs->used_blobids, page_num);
 			}
 			if (bs_load_replay_md_parse_page(ctx, page)) {
@@ -5721,7 +5723,7 @@ bs_create_blob(struct spdk_blob_store *bs,
 
 	id = bs_page_to_blobid(page_idx);
 
-	SPDK_DEBUGLOG(blob, "Creating blob with id %" PRIu64 " at page %u\n", id, page_idx);
+	SPDK_DEBUGLOG(blob, "Creating blob with id 0x%" PRIx64 " at page %u\n", id, page_idx);
 
 	blob = blob_alloc(bs, id);
 	if (!blob) {
@@ -6148,8 +6150,8 @@ bs_snapshot_origblob_open_cpl(void *cb_arg, struct spdk_blob *_blob, int bserrno
 	ctx->original.blob = _blob;
 
 	if (_blob->data_ro || _blob->md_ro) {
-		SPDK_DEBUGLOG(blob, "Cannot create snapshot from read only blob with id %" PRIu64 "\n",
-			      _blob->id);
+		SPDK_DEBUGLOG(blob, "Cannot create snapshot from read only blob with id 0x%" PRIx64
+			      "\n", _blob->id);
 		ctx->bserrno = -EINVAL;
 		spdk_blob_close(_blob, bs_clone_snapshot_cleanup_finish, ctx);
 		return;
@@ -6604,7 +6606,7 @@ spdk_blob_resize(struct spdk_blob *blob, uint64_t sz, spdk_blob_op_complete cb_f
 
 	blob_verify_md_op(blob);
 
-	SPDK_DEBUGLOG(blob, "Resizing blob %" PRIu64 " to %" PRIu64 " clusters\n", blob->id, sz);
+	SPDK_DEBUGLOG(blob, "Resizing blob 0x%" PRIx64 " to %" PRIu64 " clusters\n", blob->id, sz);
 
 	if (blob->md_ro) {
 		cb_fn(cb_arg, -EPERM);
@@ -7173,7 +7175,7 @@ spdk_bs_delete_blob(struct spdk_blob_store *bs, spdk_blob_id blobid,
 	struct spdk_bs_cpl	cpl;
 	spdk_bs_sequence_t	*seq;
 
-	SPDK_DEBUGLOG(blob, "Deleting blob %" PRIu64 "\n", blobid);
+	SPDK_DEBUGLOG(blob, "Deleting blob 0x%" PRIx64 "\n", blobid);
 
 	assert(spdk_get_thread() == bs->md_thread);
 
@@ -7260,7 +7262,7 @@ bs_open_blob(struct spdk_blob_store *bs,
 	spdk_bs_sequence_t		*seq;
 	uint32_t			page_num;
 
-	SPDK_DEBUGLOG(blob, "Opening blob %" PRIu64 "\n", blobid);
+	SPDK_DEBUGLOG(blob, "Opening blob 0x%" PRIx64 "\n", blobid);
 	assert(spdk_get_thread() == bs->md_thread);
 
 	page_num = bs_blobid_to_page(blobid);
@@ -7373,7 +7375,7 @@ spdk_blob_sync_md(struct spdk_blob *blob, spdk_blob_op_complete cb_fn, void *cb_
 {
 	blob_verify_md_op(blob);
 
-	SPDK_DEBUGLOG(blob, "Syncing blob %" PRIu64 "\n", blob->id);
+	SPDK_DEBUGLOG(blob, "Syncing blob 0x%" PRIx64 "\n", blob->id);
 
 	if (blob->md_ro) {
 		assert(blob->state == SPDK_BLOB_STATE_CLEAN);
@@ -7570,7 +7572,7 @@ spdk_blob_close(struct spdk_blob *blob, spdk_blob_op_complete cb_fn, void *cb_ar
 
 	blob_verify_md_op(blob);
 
-	SPDK_DEBUGLOG(blob, "Closing blob %" PRIu64 "\n", blob->id);
+	SPDK_DEBUGLOG(blob, "Closing blob 0x%" PRIx64 "\n", blob->id);
 
 	if (blob->open_ref == 0) {
 		cb_fn(cb_arg, -EBADF);
