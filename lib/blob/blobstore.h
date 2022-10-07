@@ -186,8 +186,7 @@ struct spdk_blob_store {
 
 	bool				clean;
 
-	void (*external_bs_dev_create)(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
-				       void *cb_arg);
+	spdk_bs_external_dev_create	external_bs_dev_create;
 
 	/* If external snapshot channels are being destroyed while
 	 * the blobstore is unloaded, the unload is deferred until

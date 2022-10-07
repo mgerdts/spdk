@@ -127,6 +127,30 @@ typedef void (*spdk_bs_dev_cpl)(struct spdk_io_channel *channel,
  */
 typedef void (*spdk_blob_op_with_bs_dev)(void *cb_arg, struct spdk_bs_dev *bs_dev, int bserrno);
 
+/**
+ * External snapshot device open callback. As an external clone blob is loading, it uses this
+ * callback registered with the blobstore to create the external snapshot device. The blobstore
+ * consumer must set this while loading the blobstore if it intends to support external snapshots.
+ *
+ * On success, an implementation of this callback calls:
+ *
+ *    cb(cb_arg, esnap_bs_dev, 0);
+ *
+ * On failure, an implementation of this callback calls:
+ *
+ *    cb(cb_arg, NULL, -<errno>);
+ *
+ * Before calling cb(), blob may be inspected with spdk_blob_get_xattr_value(),
+ * spdk_blob_get_external_cookie(), spdk_blob_get_id(), etc. After calling cb(), it is
+ * not safe to reference blob or any memory references obtained from these functions.
+ *
+ * \param blob The blob that needs its external snapshot device.
+ * \param cb Callback to register blobostore device or error.
+ * \param cb_arg Opaque argument to pass with cb.
+ */
+typedef void (*spdk_bs_external_dev_create)(struct spdk_blob *blob,
+					    spdk_blob_op_with_bs_dev cb, void *cb_arg);
+
 struct spdk_bs_dev_cb_args {
 	spdk_bs_dev_cpl		cb_fn;
 	struct spdk_io_channel	*channel;
@@ -256,25 +280,9 @@ struct spdk_bs_opts {
 	uint64_t force_recover;
 
 	/**
-	 * A blobstore consumer that supports external snapshots must define external_bs_dev_create,
-	 * which is responsible for opening the external snapshot and providing the blobstore with
-	 * `struct spdk_bs_dev` that may be used for performing reads from the external snapshot
-	 * device.
-	 *
-	 * Open the external snapshot device. On success, calls:
-	 *
-	 *    cb(cb_arg, esnap_bs_dev, 0);
-	 *
-	 * On failure, calls:
-	 *
-	 *    cb(cb_arg, NULL, -<errno>);
-	 *
-	 * Before calling cb(), blob may be inspected with spdk_blob_get_xattr_value(),
-	 * spdk_blob_get_external_cookie(), spdk_blob_get_id(), etc. After calling cb(), it is not
-	 * safe to reference blob or any memory references obtained from these functions.
+	 * External snapshot creation callback to register with the blobstore.
 	 */
-	void (*external_bs_dev_create)(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
-				       void *cb_arg);
+	spdk_bs_external_dev_create external_bs_dev_create;
 } __attribute__((packed));
 SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_opts) == 80, "Incorrect size");
 
