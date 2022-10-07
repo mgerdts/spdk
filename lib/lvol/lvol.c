@@ -21,6 +21,8 @@ SPDK_LOG_REGISTER_COMPONENT(lvol)
 static TAILQ_HEAD(, spdk_lvol_store) g_lvol_stores = TAILQ_HEAD_INITIALIZER(g_lvol_stores);
 static pthread_mutex_t g_lvol_stores_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static void lvs_esnap_dev_create(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg);
+
 static int
 add_lvs_to_list(struct spdk_lvol_store *lvs)
 {
@@ -355,46 +357,6 @@ lvs_load_cb(void *cb_arg, struct spdk_blob_store *bs, int lvolerrno)
 	req->lvol_store = lvs;
 
 	spdk_bs_get_super(bs, lvs_open_super, req);
-}
-
-static void
-lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
-{
-	SPDK_NOTICELOG("bdev name (%s) recieved unsupported event type %d\n",
-		       spdk_bdev_get_name(bdev), type);
-}
-
-static void
-lvs_esnap_dev_create(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg)
-{
-	struct spdk_bs_dev	*bs_dev = NULL;
-	const void		*cookie = NULL;
-	const char		*name;
-	size_t			cookie_len = 0;
-	int			rc;
-
-	rc = spdk_blob_get_external_cookie(blob, &cookie, &cookie_len);
-	if (rc != 0) {
-		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to get external snapshot cookie: %d\n",
-			    spdk_blob_get_id(blob), rc);
-		goto out;
-	}
-	name = cookie;
-	if (strnlen(name, cookie_len) + 1 != cookie_len) {
-		SPDK_ERRLOG("Blob 0x%" PRIx64 ": external snapshot cookie not a terminated "
-			    "string of the expected length\n", spdk_blob_get_id(blob));
-		rc = -EINVAL;
-		goto out;
-	}
-
-	rc = spdk_bdev_create_bs_dev_ro(name, lvs_esnap_bdev_event_cb, NULL, &bs_dev);
-	if (rc != 0) {
-		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to create bs_dev from bdev '%s': %d\n",
-			    spdk_blob_get_id(blob), name, rc);
-	}
-
-out:
-	cb(cb_arg, bs_dev, rc);
 }
 
 static void
@@ -1646,4 +1608,48 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
 
 	spdk_bs_grow(bs_dev, &opts, lvs_load_cb, req);
+}
+
+/*
+ * Begin external snapshot support
+ */
+
+static void
+lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
+{
+	SPDK_NOTICELOG("bdev name (%s) recieved unsupported event type %d\n",
+		       spdk_bdev_get_name(bdev), type);
+}
+
+static void
+lvs_esnap_dev_create(struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg)
+{
+	struct spdk_bs_dev	*bs_dev = NULL;
+	const void		*cookie = NULL;
+	const char		*name;
+	size_t			cookie_len = 0;
+	int			rc;
+
+	rc = spdk_blob_get_external_cookie(blob, &cookie, &cookie_len);
+	if (rc != 0) {
+		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to get external snapshot cookie: %d\n",
+			    spdk_blob_get_id(blob), rc);
+		goto out;
+	}
+	name = cookie;
+	if (strnlen(name, cookie_len) + 1 != cookie_len) {
+		SPDK_ERRLOG("Blob 0x%" PRIx64 ": external snapshot cookie not a terminated "
+			    "string of the expected length\n", spdk_blob_get_id(blob));
+		rc = -EINVAL;
+		goto out;
+	}
+
+	rc = spdk_bdev_create_bs_dev_ro(name, lvs_esnap_bdev_event_cb, NULL, &bs_dev);
+	if (rc != 0) {
+		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to create bs_dev from bdev '%s': %d\n",
+			    spdk_blob_get_id(blob), name, rc);
+	}
+
+out:
+	cb(cb_arg, bs_dev, rc);
 }
