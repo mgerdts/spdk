@@ -137,7 +137,7 @@ endif
 DEPDIRS-bdev_gpt := bdev json log thread util
 
 DEPDIRS-bdev_error := $(BDEV_DEPS)
-DEPDIRS-bdev_lvol := $(BDEV_DEPS) lvol blob blob_bdev
+DEPDIRS-bdev_lvol := $(BDEV_DEPS) lvol blob blob_bdev blob_eio
 DEPDIRS-bdev_rpc := $(BDEV_DEPS)
 DEPDIRS-bdev_split := $(BDEV_DEPS)
 

@@ -5,13 +5,18 @@
 #include "spdk_cunit.h"
 #include "spdk/string.h"
 
+#include "common/lib/ut_multithread.c"
 #include "bdev/lvol/vbdev_lvol_esnap.c"
+#include "blob/eio/blob_eio.c"
 
 #include "unit/lib/json_mock.c"
 
 DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *name), NULL);
 DEFINE_STUB(spdk_bs_bdev_claim, int,
 	    (struct spdk_bs_dev *bs_dev, struct spdk_bdev_module *module), 0);
+DEFINE_STUB(spdk_lvs_esnap_missing_add, int,
+	    (struct spdk_lvol_store *lvs, struct spdk_lvol *lvol, const void *esnap_id,
+	     uint32_t id_len), -ENOTSUP);
 
 struct spdk_blob {
 	uint64_t	id;
@@ -96,31 +101,36 @@ dev_create(void)
 	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(bs_dev == NULL);
 
-	/* Invaid UUID but the right length is invalid */
+	/* Invalid UUID but the right length is invalid */
 	bad_uuid_str[2] = 'z';
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, bad_uuid_str, sizeof(uuid_str),
 					 &bs_dev);
 	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(bs_dev == NULL);
 
-	/* Bdev not found */
+	/* Bdev not found: get a degraded bs_dev */
 	MOCK_SET(spdk_bdev_get_by_name, NULL);
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, uuid_str, sizeof(uuid_str), &bs_dev);
-	CU_ASSERT(rc == -ENODEV);
-	CU_ASSERT(bs_dev == NULL);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
+	CU_ASSERT(bs_dev->destroy == bs_dev_eio_destroy);
+	bs_dev->destroy(bs_dev);
 
-	/* Cannot get a claim */
+	/* Cannot get a claim: get a degraded bs_dev */
 	MOCK_SET(spdk_bdev_get_by_name, &bdev);
 	MOCK_SET(spdk_bs_bdev_claim, -EPERM);
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, uuid_str, sizeof(uuid_str), &bs_dev);
-	CU_ASSERT(rc == -EPERM);
-	CU_ASSERT(bs_dev == NULL);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
+	CU_ASSERT(bs_dev->destroy == bs_dev_eio_destroy);
+	bs_dev->destroy(bs_dev);
 
 	/* Happy path */
 	MOCK_SET(spdk_bs_bdev_claim, 0);
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, uuid_str, sizeof(uuid_str), &bs_dev);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
+	CU_ASSERT(bs_dev->destroy != bs_dev_eio_destroy);
 	bs_dev->destroy(bs_dev);
 
 	free(unterminated);
@@ -141,9 +151,15 @@ main(int argc, char **argv)
 
 	CU_ADD_TEST(suite, dev_create);
 
+	allocate_threads(2);
+	set_thread(0);
+
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
 	num_failures = CU_get_number_of_failures();
 	CU_cleanup_registry();
+
+	free_threads();
+
 	return num_failures;
 }
