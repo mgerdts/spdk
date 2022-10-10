@@ -543,6 +543,18 @@ op_with_bs_dev_complete(void *cb_arg, struct spdk_bs_dev *bs_dev, int lvserrno)
 	}
 }
 
+static void
+op_with_io_ch_complete(struct spdk_io_channel *ch, void *cb_arg, int lvserrno)
+{
+	g_lvserrno = lvserrno;
+	if (cb_arg != NULL) {
+		struct ut_cb_res *res = cb_arg;
+
+		res->data = ch;
+		res->err = lvserrno;
+	}
+}
+
 static struct ut_cb_res *
 ut_cb_res_clear(struct ut_cb_res *res)
 {
@@ -2385,6 +2397,96 @@ lvol_esnap_load_esnaps(void)
 	lvs_free(lvs);
 }
 
+static void
+lvol_esnap_degraded(void)
+{
+	struct spdk_blob	blob = { .id = 42 };
+	struct ut_cb_res	cb_res;
+	struct spdk_lvol_store	*lvs;
+	struct spdk_lvol	*lvol;
+	struct lvs_degraded_dev	*ddev;
+	struct spdk_bs_dev	*bs_dev;
+	struct spdk_io_channel	*ch;
+	struct spdk_bs_dev_cb_args cb_args;
+	char			buf[512];
+	struct iovec		iov = { 0 };
+	struct spdk_blob_ext_io_opts io_opts = { 0 };
+	const char		*name = "some_bdev";
+	int			rc;
+
+	lvs = lvs_alloc();
+	SPDK_CU_ASSERT_FATAL(lvs != NULL);
+	lvs->load_esnaps = true;
+	lvol = lvol_alloc(lvs, __func__, true, LVOL_CLEAR_WITH_DEFAULT);
+	SPDK_CU_ASSERT_FATAL(lvol != NULL);
+	lvol->blob_id = blob.id;
+	TAILQ_INSERT_TAIL(&lvs->lvols, lvol, link);
+
+	/* Creation succeeds with valid args */
+	bs_dev = NULL;
+	rc = lvs_esnap_dev_create_degraded(lvs, lvol, &blob, name, &bs_dev);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
+	ddev = (struct lvs_degraded_dev *)bs_dev;
+	CU_ASSERT(&ddev->bs_dev == bs_dev);
+	CU_ASSERT(ddev->lvol == lvol);
+
+	/* Required callbacks are defined */
+	CU_ASSERT(bs_dev->create_channel == lvs_degraded_create_channel);
+	CU_ASSERT(bs_dev->destroy_channel == lvs_degraded_destroy_channel);
+	CU_ASSERT(bs_dev->destroy == lvs_degraded_destroy);
+	CU_ASSERT(bs_dev->is_zeroes == lvs_degraded_is_zeroes);
+	CU_ASSERT(bs_dev->read == lvs_degraded_read);
+	CU_ASSERT(bs_dev->readv == lvs_degraded_readv);
+	CU_ASSERT(bs_dev->readv_ext == lvs_degraded_readv_ext);
+
+	/* read() leads to EIO */
+	ch = bs_dev->create_channel(bs_dev);
+	cb_args.cb_fn = op_with_io_ch_complete;
+	cb_args.channel = ch;
+	cb_args.cb_arg = ut_cb_res_clear(&cb_res);
+	bs_dev->read(bs_dev, ch, buf, 0, 1, &cb_args);
+	CU_ASSERT(cb_res.err == -EIO);
+
+	/* readv() leads to EIO */
+	iov.iov_base = buf;
+	iov.iov_len = sizeof(buf);
+	cb_args.cb_arg = ut_cb_res_clear(&cb_res);
+	bs_dev->readv(bs_dev, ch, &iov, 1, 0, 1, &cb_args);
+	CU_ASSERT(cb_res.err == -EIO);
+
+	/* readv_ext() leads to EIO */
+	iov.iov_base = buf;
+	iov.iov_len = sizeof(buf);
+	cb_args.cb_arg = ut_cb_res_clear(&cb_res);
+	bs_dev->readv_ext(bs_dev, ch, &iov, 1, 0, 1, &cb_args, &io_opts);
+	CU_ASSERT(cb_res.err == -EIO);
+
+	/* Math on the device size doesn't lead to errors or confusion. */
+	CU_ASSERT(bs_dev->blocklen != 0);
+	CU_ASSERT((bs_dev->blockcnt * bs_dev->blocklen) > bs_dev->blockcnt);
+
+	/* Clean up the existing device before creating a new one. */
+	bs_dev->destroy_channel(bs_dev, ch);
+	bs_dev->destroy(bs_dev);
+
+	/* The bs->external_dev_create() callback creates a degraded device. */
+	ut_spdk_bdev_create_bs_dev_ro = -ENODEV;
+	g_spdk_blob_get_external_cookie_errno = 0;
+	g_spdk_blob_get_external_cookie = "oreo";
+	g_spdk_blob_get_external_cookie_len = 5;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == 0);
+	SPDK_CU_ASSERT_FATAL(cb_res.data != NULL);
+	ddev = cb_res.data;
+	CU_ASSERT(ddev->lvol == lvol);
+	bs_dev = &ddev->bs_dev;
+	bs_dev->destroy(bs_dev);
+
+	lvol_free(lvol);
+	lvs_free(lvs);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2426,6 +2528,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, lvol_esnap_create_bad_args);
 	CU_ADD_TEST(suite, lvol_esnap_create_delete);
 	CU_ADD_TEST(suite, lvol_esnap_load_esnaps);
+	CU_ADD_TEST(suite, lvol_esnap_degraded);
 
 	allocate_threads(1);
 	set_thread(0);
