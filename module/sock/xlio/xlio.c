@@ -435,13 +435,17 @@ static int
 xlio_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 {
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
+	int min_size;
 	int rc;
 
 	assert(sock != NULL);
 
-	/* Set kernel buffer size to be at least MIN_SO_RCVBUF_SIZE */
-	if (sz < MIN_SO_RCVBUF_SIZE) {
-		sz = MIN_SO_RCVBUF_SIZE;
+	/* Set kernel buffer size to be at least MIN_SO_RCVBUF_SIZE and
+	 * impl_opts.recv_buf_size. */
+	min_size = spdk_max(MIN_SO_RCVBUF_SIZE, g_spdk_xlio_sock_impl_opts.recv_buf_size);
+
+	if (sz < min_size) {
+		sz = min_size;
 	}
 
 	rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
