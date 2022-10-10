@@ -59,6 +59,8 @@ lvs_alloc(void)
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
 
+	lvs->load_esnaps = false;
+
 	return lvs;
 }
 
@@ -189,6 +191,7 @@ load_next_lvol(void *cb_arg, struct spdk_blob *blob, int lvolerrno)
 	if (lvolerrno == -ENOENT) {
 		/* Finished iterating */
 		if (req->lvserrno == 0) {
+			lvs->load_esnaps = true;
 			req->cb_fn(req->cb_arg, lvs, req->lvserrno);
 			free(req);
 		} else {
@@ -375,18 +378,12 @@ static void
 lvs_load_cb(void *cb_arg, struct spdk_blob_store *bs, int lvolerrno)
 {
 	struct spdk_lvs_with_handle_req *req = (struct spdk_lvs_with_handle_req *)cb_arg;
-	struct spdk_lvol_store *lvs;
+	struct spdk_lvol_store *lvs = req->lvol_store;
 
 	if (lvolerrno != 0) {
 		req->cb_fn(req->cb_arg, NULL, lvolerrno);
+		lvs_free(lvs);
 		free(req);
-		return;
-	}
-
-	lvs = lvs_alloc();
-	if (lvs == NULL) {
-		SPDK_ERRLOG("Cannot alloc memory for lvol store\n");
-		spdk_bs_unload(bs, bs_unload_with_error_cb, req);
 		return;
 	}
 
@@ -427,12 +424,20 @@ spdk_lvs_load(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 		return;
 	}
 
+	req->lvol_store = lvs_alloc();
+	if (req->lvol_store == NULL) {
+		SPDK_ERRLOG("Cannot alloc memory for lvol store\n");
+		free(req);
+		cb_fn(cb_arg, NULL, -ENOMEM);
+		return;
+	}
 	req->cb_fn = cb_fn;
 	req->cb_arg = cb_arg;
 	req->bs_dev = bs_dev;
 
 	lvs_bs_opts_init(&opts);
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
+	opts.external_ctx = req->lvol_store;
 
 	spdk_bs_load(bs_dev, &opts, lvs_load_cb, req);
 }
@@ -559,6 +564,7 @@ lvs_init_cb(void *cb_arg, struct spdk_blob_store *bs, int lvserrno)
 	lvs->blobstore = bs;
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
+	lvs->load_esnaps = true;
 
 	SPDK_INFOLOG(lvol, "Lvol store initialized\n");
 
@@ -656,6 +662,7 @@ spdk_lvs_init(struct spdk_bs_dev *bs_dev, struct spdk_lvs_opts *o,
 	lvs->destruct = false;
 
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
+	opts.external_ctx = lvs;
 
 	SPDK_INFOLOG(lvol, "Initializing lvol store\n");
 	spdk_bs_init(bs_dev, &opts, lvs_init_cb, lvs_req);
@@ -983,6 +990,7 @@ lvol_create_cb(void *cb_arg, spdk_blob_id blobid, int lvolerrno)
 
 	spdk_blob_open_opts_init(&opts, sizeof(opts));
 	opts.clear_method = req->lvol->clear_method;
+	opts.external_ctx = req->lvol;
 	bs = req->lvol->lvol_store->blobstore;
 
 	spdk_bs_open_blob_ext(bs, blobid, &opts, lvol_create_open_cb, req);
@@ -1614,6 +1622,19 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 
 /*
  * Begin external snapshot support
+ *
+ * An external snapshot can be any read-only bdev that takes the place of an lvol snapshot.  With a
+ * clone of an external snapshot ("external clone"), the blobstore stores delta blocks just as it
+ * does for every other clone. External clones can be snapshotted, cloned, renamed, inflated, etc.,
+ * just like any other lvol.
+ *
+ * When spdk_lvs_load() is called, it iterates through all blobs in its blobstore building up a list
+ * of lvols (lvs->lvols). During this initial iteration, each blob is opened, passed to
+ * load_next_lvol(), then closed. There is no need to open the external snapshot during this phase,
+ * so the work is avoided by setting lvs->load_esnaps to false, which causes lvs_esnap_dev_create()
+ * to call the callback passed to it with a NULL spdk_bs_dev and no error. Once the blobstore is
+ * loaded, lvs->load_esnaps is set to true so that future lvol opens cause the external snapshot to
+ * be loaded.
  */
 
 static void
@@ -1627,11 +1648,28 @@ static void
 lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 		     spdk_blob_op_with_bs_dev cb, void *cb_arg)
 {
+	struct spdk_lvol_store	*lvs = bs_ctx;
+	struct spdk_lvol	*lvol = blob_ctx;
 	struct spdk_bs_dev	*bs_dev = NULL;
 	const void		*cookie = NULL;
 	const char		*name;
 	size_t			cookie_len = 0;
 	int			rc;
+
+	if (lvs == NULL) {
+		if (lvol == NULL) {
+			SPDK_ERRLOG("Blob 0x%" PRIx64 ": no lvs context nor lvol context\n",
+				    spdk_blob_get_id(blob));
+			cb(cb_arg, NULL, -EINVAL);
+			return;
+		}
+		lvs = lvol->lvol_store;
+	}
+
+	if (!lvs->load_esnaps) {
+		cb(cb_arg, NULL, 0);
+		return;
+	}
 
 	rc = spdk_blob_get_external_cookie(blob, &cookie, &cookie_len);
 	if (rc != 0) {
