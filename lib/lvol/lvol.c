@@ -348,6 +348,7 @@ lvs_load_cb(void *cb_arg, struct spdk_blob_store *bs, int lvolerrno)
 	lvs->bs_dev = req->bs_dev;
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
+	lvs->load_esnaps = true;
 
 	spdk_bs_get_super(bs, lvs_open_super, req);
 }
@@ -522,6 +523,7 @@ lvs_init_cb(void *cb_arg, struct spdk_blob_store *bs, int lvserrno)
 	lvs->blobstore = bs;
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
+	lvs->load_esnaps = true;
 
 	SPDK_INFOLOG(lvol, "Lvol store initialized\n");
 
@@ -1615,6 +1617,18 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 
 /*
  * Begin external snapshot support
+ *
+ * An external snapshot can be any read-only bdev that takes the place of an lvol snapshot.  With a
+ * clone of an external snapshot ("external clone"), the blobstore stores delta blocks just as it
+ * does for every other clone. External clones can be snapshotted, cloned, renamed, inflated, etc.,
+ * just like any other lvol.
+ *
+ * When spdk_lvs_load() is called, it iterates through all blobs in its blobstore building up a list
+ * of lvols (lvs->lvols). During this initial iteration, each blob is opened, passed to
+ * load_next_lvol(), then closed. There is no need to open the external snapshot during this phase,
+ * so the work is avoided by setting lvs->load_esnaps to false. Once the blobstore is loaded,
+ * lvs->load_esnaps is set to true so that future lvol opens cause the external snapshot to be
+ * loaded.
  */
 
 static void
@@ -1628,11 +1642,17 @@ static void
 lvs_esnap_dev_create(void *bs_ctx, struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
 		     void *cb_arg)
 {
+	struct spdk_lvol_store	*lvs = bs_ctx;
 	struct spdk_bs_dev	*bs_dev = NULL;
 	const void		*cookie = NULL;
 	const char		*name;
 	size_t			cookie_len = 0;
 	int			rc;
+
+	if (!lvs->load_esnaps) {
+		cb(cb_arg, NULL, 0);
+		return;
+	}
 
 	rc = spdk_blob_get_external_cookie(blob, &cookie, &cookie_len);
 	if (rc != 0) {
