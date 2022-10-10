@@ -28,8 +28,6 @@
 
 #define SPDK_BLOB_THIN_PROV (1ULL << 0)
 
-DEFINE_STUB(spdk_blob_get_external_cookie, int,
-	    (struct spdk_blob *blob, const void **cookie, size_t *len), -ENOTSUP);
 DEFINE_STUB(spdk_bdev_get_name, const char *, (const struct spdk_bdev *bdev), NULL);
 DEFINE_STUB(spdk_bdev_get_by_name, struct spdk_bdev *, (const char *name), NULL);
 DEFINE_STUB(spdk_bdev_create_bs_dev_ro, int,
@@ -487,6 +485,21 @@ spdk_bs_create_clone(struct spdk_blob_store *bs, spdk_blob_id blobid,
 	spdk_bs_create_blob_ext(bs, NULL, cb_fn, cb_arg);
 }
 
+static int g_spdk_blob_get_external_cookie_errno;
+static bool g_spdk_blob_get_external_cookie_called;
+static void *g_spdk_blob_get_external_cookie;
+static size_t g_spdk_blob_get_external_cookie_len;
+int
+spdk_blob_get_external_cookie(struct spdk_blob *blob, const void **cookie, size_t *len)
+{
+	g_spdk_blob_get_external_cookie_called = true;
+	if (g_spdk_blob_get_external_cookie_errno == 0) {
+		*cookie = g_spdk_blob_get_external_cookie;
+		*len = g_spdk_blob_get_external_cookie_len;
+	}
+	return g_spdk_blob_get_external_cookie_errno;
+}
+
 static void
 lvol_store_op_with_handle_complete(void *cb_arg, struct spdk_lvol_store *lvol_store, int lvserrno)
 {
@@ -514,6 +527,18 @@ op_complete(void *cb_arg, int lvserrno)
 	if (cb_arg != NULL) {
 		struct ut_cb_res *res = cb_arg;
 
+		res->err = lvserrno;
+	}
+}
+
+static void
+op_with_bs_dev_complete(void *cb_arg, struct spdk_bs_dev *bs_dev, int lvserrno)
+{
+	g_lvserrno = lvserrno;
+	if (cb_arg != NULL) {
+		struct ut_cb_res *res = cb_arg;
+
+		res->data = bs_dev;
 		res->err = lvserrno;
 	}
 }
@@ -2274,6 +2299,92 @@ lvol_esnap_create_delete(void)
 	g_lvol_store = NULL;
 }
 
+static void
+lvol_esnap_load_esnaps(void)
+{
+	struct spdk_blob	blob = { .id = 42 };
+	struct ut_cb_res	cb_res;
+	struct spdk_lvol_store	*lvs;
+	struct spdk_lvol	*lvol;
+
+	lvs = lvs_alloc();
+	SPDK_CU_ASSERT_FATAL(lvs != NULL);
+	lvol = lvol_alloc(lvs, __func__, true, LVOL_CLEAR_WITH_DEFAULT);
+	SPDK_CU_ASSERT_FATAL(lvol != NULL);
+
+	/* Handle missing bs_ctx and blob_ctx gracefully */
+	lvs_esnap_dev_create(NULL, NULL, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == -EINVAL);
+
+	/* Do not try to load external snapshot when load_esnaps is false */
+	g_spdk_blob_get_external_cookie_called = false;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == 0);
+	CU_ASSERT(cb_res.data == NULL);
+	CU_ASSERT(!g_spdk_blob_get_external_cookie_called);
+
+	/* Same, with only lvs */
+	lvs_esnap_dev_create(lvs, NULL, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == 0);
+	CU_ASSERT(cb_res.data == NULL);
+	CU_ASSERT(!g_spdk_blob_get_external_cookie_called);
+
+	/* Same, with only lvol */
+	lvs_esnap_dev_create(NULL, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == 0);
+	CU_ASSERT(cb_res.data == NULL);
+	CU_ASSERT(!g_spdk_blob_get_external_cookie_called);
+
+	/*
+	 * Remaining tests try to load the esnap.
+	 */
+	lvs->load_esnaps = true;
+
+	/* Missing cookie */
+	g_spdk_blob_get_external_cookie_errno = -ENOENT;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == -ENOENT);
+
+	/* May or may not have cookie, but is not an external clone. */
+	g_spdk_blob_get_external_cookie_errno = -EINVAL;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == -EINVAL);
+
+	/* Has a cookie but its length is longer than expected. (len should include '\0') */
+	g_spdk_blob_get_external_cookie_errno = 0;
+	g_spdk_blob_get_external_cookie = "oreo";
+	g_spdk_blob_get_external_cookie_len = 6;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == -EINVAL);
+
+	/* Has a cookie but it is too long to be '\0' terminated */
+	g_spdk_blob_get_external_cookie_errno = 0;
+	g_spdk_blob_get_external_cookie = "oreo";
+	g_spdk_blob_get_external_cookie_len = 4;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == -EINVAL);
+
+	/* Have a valid cookie but out of memory allocating bs_dev */
+	ut_spdk_bdev_create_bs_dev_ro = -ENOMEM;
+	g_spdk_blob_get_external_cookie_errno = 0;
+	g_spdk_blob_get_external_cookie = "oreo";
+	g_spdk_blob_get_external_cookie_len = 5;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == -ENOMEM);
+
+	/* Happy path */
+	ut_spdk_bdev_create_bs_dev_ro = 0;
+	g_spdk_blob_get_external_cookie_errno = 0;
+	g_spdk_blob_get_external_cookie = "oreo";
+	g_spdk_blob_get_external_cookie_len = 5;
+	lvs_esnap_dev_create(lvs, lvol, &blob, op_with_bs_dev_complete, ut_cb_res_clear(&cb_res));
+	CU_ASSERT(cb_res.err == 0);
+
+	/* Clean up */
+	lvol_free(lvol);
+	lvs_free(lvs);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2314,6 +2425,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, lvol_get_xattr);
 	CU_ADD_TEST(suite, lvol_esnap_create_bad_args);
 	CU_ADD_TEST(suite, lvol_esnap_create_delete);
+	CU_ADD_TEST(suite, lvol_esnap_load_esnaps);
 
 	allocate_threads(1);
 	set_thread(0);
