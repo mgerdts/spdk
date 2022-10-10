@@ -23,6 +23,8 @@ static pthread_mutex_t g_lvol_stores_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 				 spdk_blob_op_with_bs_dev cb, void *cb_arg);
+static void lvs_esnap_dev_create_degraded(struct spdk_lvol_store *lvs, struct spdk_blob *blob,
+		const char *name, spdk_blob_op_with_bs_dev cb, void *cb_arg);
 
 static int
 add_lvs_to_list(struct spdk_lvol_store *lvs)
@@ -1635,7 +1637,17 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
  * to call the callback passed to it with a NULL spdk_bs_dev and no error. Once the blobstore is
  * loaded, lvs->load_esnaps is set to true so that future lvol opens cause the external snapshot to
  * be loaded.
+ *
+ * A missing external snapshot does not strictly need to prevent IO on the lvol because the LBAs
+ * backed by clusters allocated in the blobstore can still service IO. An lvol that is an external
+ * clone that does not have its external snapshot loaded is considered degraded. Attempts to read
+ * from a degraded external snapshot will generate EIO.
  */
+
+struct spdk_lvs_degraded_dev {
+	struct spdk_bs_dev	bs_dev;
+	struct spdk_lvol	*lvol;
+};
 
 static void
 lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
@@ -1686,6 +1698,10 @@ lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 	}
 
 	rc = spdk_bdev_create_bs_dev_ro(name, lvs_esnap_bdev_event_cb, NULL, &bs_dev);
+	if (rc == -ENODEV) {
+		lvs_esnap_dev_create_degraded(lvs, blob, name, cb, cb_arg);
+		return;
+	}
 	if (rc != 0) {
 		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to create bs_dev from bdev '%s': %d\n",
 			    spdk_blob_get_id(blob), name, rc);
@@ -1693,4 +1709,125 @@ lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 
 out:
 	cb(cb_arg, bs_dev, rc);
+}
+
+static void
+lvs_degraded_read(struct spdk_bs_dev *dev, struct spdk_io_channel *channel, void *payload,
+		  uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EIO);
+}
+
+static void
+lvs_degraded_readv(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		   struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
+		   struct spdk_bs_dev_cb_args *cb_args)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EIO);
+}
+
+static void
+lvs_degraded_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		       struct iovec *iov, int iovcnt, uint64_t lba, uint32_t lba_count,
+		       struct spdk_bs_dev_cb_args *cb_args, struct spdk_blob_ext_io_opts *io_opts)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EIO);
+}
+
+static bool
+lvs_degraded_is_zeroes(struct spdk_bs_dev *dev, uint64_t lba, uint64_t lba_count)
+{
+	return false;
+}
+
+static struct spdk_io_channel *
+lvs_degraded_create_channel(struct spdk_bs_dev *bs_dev)
+{
+	struct lvs_degraded_dev *ddev = (struct lvs_degraded_dev *)bs_dev;
+
+	return spdk_get_io_channel(ddev);
+}
+
+static void
+lvs_degraded_destroy_channel(struct spdk_bs_dev *bs_dev, struct spdk_io_channel *channel)
+{
+	spdk_put_io_channel(channel);
+}
+
+static void
+lvs_degraded_destroy(struct spdk_bs_dev *bs_dev)
+{
+	struct lvs_degraded_dev *ddev = (struct lvs_degraded_dev *)bs_dev;
+
+	spdk_io_device_unregister(ddev, NULL);
+
+	free(ddev);
+}
+
+static int
+lvs_degraded_channel_create_cb(void *io_device, void *ctx_buf)
+{
+	return 0;
+}
+
+static void
+lvs_degraded_channel_destroy_cb(void *io_device, void *ctx_buf)
+{
+	return;
+}
+
+static struct spdk_lvol *
+lvs_get_lvol_by_blob_id(struct spdk_lvol_store *lvs, spdk_blob_id blob_id)
+{
+	struct spdk_lvol *lvol, *tmp;
+
+	TAILQ_FOREACH_SAFE(lvol, &lvs->lvols, link, tmp) {
+		if (lvol->blob_id == blob_id) {
+			return lvol;
+		}
+	}
+	return NULL;
+}
+
+static void
+lvs_esnap_dev_create_degraded(struct spdk_lvol_store *lvs, struct spdk_blob *blob, const char *name,
+			      spdk_blob_op_with_bs_dev cb, void *cb_arg)
+{
+	struct spdk_lvs_degraded_dev	*ddev;
+	struct spdk_lvol		*lvol;
+	spdk_blob_id			blob_id = spdk_blob_get_id(blob);
+
+	lvol = lvs_get_lvol_by_blob_id(lvs, blob_id);
+	if (lvol == NULL) {
+		SPDK_ERRLOG("lvstore %s: blob 0x%" PRIx64 " not found\n", lvs->name, blob_id);
+		cb(cb_arg, NULL, -EINVAL);
+		return;
+	}
+	assert(lvol->blob == NULL);
+
+	ddev = calloc(1, sizeof(*ddev));
+	if (ddev == NULL) {
+		SPDK_ERRLOG("lvstore %s blob 0x%" PRIx64 ": out of memory\n", lvs->name, blob_id);
+		cb(cb_arg, NULL, -ENOMEM);
+		return;
+	}
+
+	ddev->lvol = lvol;
+	ddev->bs_dev.create_channel = lvs_degraded_create_channel;
+	ddev->bs_dev.destroy_channel = lvs_degraded_destroy_channel;
+	ddev->bs_dev.destroy = lvs_degraded_destroy;
+	ddev->bs_dev.read = lvs_degraded_read;
+	ddev->bs_dev.readv = lvs_degraded_readv;
+	ddev->bs_dev.readv_ext = lvs_degraded_readv_ext;
+	ddev->bs_dev.is_zeroes = lvs_degraded_is_zeroes;
+
+	/* Assume the largest size to prevent reading zeroes past end of back_bs_dev. */
+	ddev->bs_dev.blockcnt = UINT64_MAX;
+	/* Prevent divide by zero errors calculating LBAs that will never be read. */
+	ddev->bs_dev.blocklen = 512;
+
+	spdk_io_device_register(ddev, lvs_degraded_channel_create_cb,
+				lvs_degraded_channel_destroy_cb, 0, lvol->name);
+
+	cb(cb_arg, &ddev->bs_dev, 0);
 }
