@@ -343,19 +343,11 @@ lvs_load_cb(void *cb_arg, struct spdk_blob_store *bs, int lvolerrno)
 		return;
 	}
 
-	lvs = calloc(1, sizeof(*lvs));
-	if (lvs == NULL) {
-		SPDK_ERRLOG("Cannot alloc memory for lvol store\n");
-		spdk_bs_unload(bs, bs_unload_with_error_cb, req);
-		return;
-	}
-
+	lvs = req->lvol_store;
 	lvs->blobstore = bs;
 	lvs->bs_dev = req->bs_dev;
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
-
-	req->lvol_store = lvs;
 
 	spdk_bs_get_super(bs, lvs_open_super, req);
 }
@@ -389,12 +381,21 @@ spdk_lvs_load(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 		return;
 	}
 
+	req->lvol_store = calloc(1, sizeof(*req->lvol_store));
+	if (req->lvol_store == NULL) {
+		SPDK_ERRLOG("Cannot alloc memory for lvol store\n");
+		free(req);
+		cb_fn(cb_arg, NULL, -ENOMEM);
+		return;
+	}
+
 	req->cb_fn = cb_fn;
 	req->cb_arg = cb_arg;
 	req->bs_dev = bs_dev;
 
 	lvs_bs_opts_init(&opts);
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
+	opts.external_ctx = req->lvol_store;
 
 	spdk_bs_load(bs_dev, &opts, lvs_load_cb, req);
 }
@@ -618,6 +619,7 @@ spdk_lvs_init(struct spdk_bs_dev *bs_dev, struct spdk_lvs_opts *o,
 	lvs->destruct = false;
 
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
+	opts.external_ctx = lvs;
 
 	SPDK_INFOLOG(lvol, "Initializing lvol store\n");
 	spdk_bs_init(bs_dev, &opts, lvs_init_cb, lvs_req);
