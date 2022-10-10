@@ -1391,8 +1391,18 @@ blob_esnap_load_done(void *arg, struct spdk_bs_dev *dev, int bserrno)
 
 	if (bserrno == 0) {
 		SPDK_DEBUGLOG(blob_esnap, "blob 0x%" PRIx64 ": loaded back_bs_dev\n", blob->id);
-		assert(dev != NULL);
-		if (blob->bs->io_unit_size < dev->blocklen) {
+		if (dev == NULL) {
+			/*
+			 * The blobstore consumer may know it has no use for the external snapshot
+			 * and choose not to open it now. This is likely to be the case at least
+			 * during spdk_bs_load() when all blobs opened only briefly during
+			 * iteration.
+			 */
+			SPDK_DEBUGLOG(blob_esnap, "blob 0x%" PRIx64 ": external snapshot is NULL\n",
+				      blob->id);
+			blob->back_bs_dev = NULL;
+			blob->parent_id = SPDK_BLOBID_EXTERNAL_SNAPSHOT;
+		} else if (blob->bs->io_unit_size < dev->blocklen) {
 			SPDK_NOTICELOG("blob 0x%" PRIx64 " external snapshot device block size %u "
 				       "is not compatible with blobstore block size %u\n",
 				       blob->id, dev->blocklen, blob->bs->io_unit_size);
