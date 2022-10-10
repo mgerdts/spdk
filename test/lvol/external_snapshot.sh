@@ -240,7 +240,7 @@ trap 'killprocess "$spdk_pid"; rm -f "$testdir/aio_bdev_0"; exit 1' SIGINT SIGTE
 waitforlisten $spdk_pid
 modprobe nbd
 
-#run_test "test_esnap_compare_with_lvol_bdev" test_esnap_compare_with_lvol_bdev
+run_test "test_esnap_compare_with_lvol_bdev" test_esnap_compare_with_lvol_bdev
 run_test "test_esnap_reload" test_esnap_reload
 
 trap - SIGINT SIGTERM EXIT
