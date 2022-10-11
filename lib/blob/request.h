@@ -65,6 +65,7 @@ struct spdk_bs_cpl {
 			spdk_blob_op_with_handle_complete       cb_fn;
 			void                                    *cb_arg;
 			struct spdk_blob                        *blob;
+			void					*external_ctx;
 		} blob_handle;
 
 		struct {
