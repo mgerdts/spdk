@@ -146,11 +146,13 @@ typedef void (*spdk_blob_op_with_bs_dev)(void *cb_arg, struct spdk_bs_dev *bs_de
  *
  * \param bs_ctx Context provided by the blobstore consumer via external_ctx member of struct
  * spdk_bs_opts.
+ * \param blob_ctx Context provided to spdk_bs_open_ext() via external_ctx member of struct
+ * spdk_bs_open_opts.
  * \param blob The blob that needs its external snapshot device.
  * \param cb Callback to register blobostore device or error.
  * \param cb_arg Opaque argument to pass with cb.
  */
-typedef void (*spdk_bs_external_dev_create)(void *bs_ctx, struct spdk_blob *blob,
+typedef void (*spdk_bs_external_dev_create)(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 		spdk_blob_op_with_bs_dev cb, void *cb_arg);
 
 struct spdk_bs_dev_cb_args {
@@ -757,8 +759,14 @@ struct spdk_blob_open_opts {
 	 * New added fields should be put at the end of the struct.
 	 */
 	size_t opts_size;
+
+	/**
+	 * Blob context to be passed to any call of bs->external_bs_dev_create() that is trigged by
+	 * this open call.
+	 */
+	void *external_ctx;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_open_opts) == 16, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_open_opts) == 24, "Incorrect size");
 
 /**
  * Initialize a spdk_blob_open_opts structure to the default blob option values.
