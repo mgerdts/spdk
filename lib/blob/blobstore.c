@@ -1368,7 +1368,7 @@ blob_esnap_load_done(void *arg, struct spdk_bs_dev *dev, int bserrno)
 }
 
 static void
-blob_load_backing_dev(void *cb_arg)
+blob_load_backing_dev(spdk_bs_sequence_t *seq, void *cb_arg)
 {
 	struct spdk_blob_load_ctx	*ctx = cb_arg;
 	struct spdk_blob		*blob = ctx->blob;
@@ -1386,7 +1386,8 @@ blob_load_backing_dev(void *cb_arg)
 		}
 
 		SPDK_INFOLOG(blob, "Creating external snapshot device\n");
-		blob->bs->external_bs_dev_create(blob->bs->external_ctx, blob,
+		blob->bs->external_bs_dev_create(blob->bs->external_ctx,
+						 seq->cpl.u.blob_handle.external_ctx, blob,
 						 blob_esnap_load_done, ctx);
 		return;
 	}
@@ -1495,7 +1496,7 @@ blob_load_cpl_extents_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 		}
 	}
 
-	blob_load_backing_dev(ctx);
+	blob_load_backing_dev(seq, ctx);
 }
 
 static void
@@ -1583,7 +1584,7 @@ blob_load_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserrno)
 	if (blob->extent_table_found) {
 		blob_load_cpl_extents_cpl(seq, ctx, 0);
 	} else {
-		blob_load_backing_dev(ctx);
+		blob_load_backing_dev(seq, ctx);
 	}
 }
 
@@ -7322,12 +7323,13 @@ blob_open_opts_copy(const struct spdk_blob_open_opts *src, struct spdk_blob_open
         } \
 
 	SET_FIELD(clear_method);
+	SET_FIELD(external_ctx);
 
 	dst->opts_size = src->opts_size;
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_open_opts) == 16, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_blob_open_opts) == 24, "Incorrect size");
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -7380,6 +7382,7 @@ bs_open_blob(struct spdk_blob_store *bs,
 	cpl.u.blob_handle.cb_fn = cb_fn;
 	cpl.u.blob_handle.cb_arg = cb_arg;
 	cpl.u.blob_handle.blob = blob;
+	cpl.u.blob_handle.external_ctx = opts_local.external_ctx;
 
 	seq = bs_sequence_start(bs->md_channel, &cpl);
 	if (!seq) {
