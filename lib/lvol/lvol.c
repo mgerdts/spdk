@@ -121,6 +121,7 @@ spdk_lvol_open(struct spdk_lvol *lvol, spdk_lvol_op_with_handle_complete cb_fn, 
 
 	spdk_blob_open_opts_init(&opts, sizeof(opts));
 	opts.clear_method = lvol->clear_method;
+	opts.external_ctx = lvol;
 
 	spdk_bs_open_blob_ext(lvol->lvol_store->blobstore, lvol->blob_id, &opts, lvol_open_cb, req);
 }
@@ -950,6 +951,7 @@ lvol_create_cb(void *cb_arg, spdk_blob_id blobid, int lvolerrno)
 
 	spdk_blob_open_opts_init(&opts, sizeof(opts));
 	opts.clear_method = req->lvol->clear_method;
+	opts.external_ctx = lvol;
 	bs = req->lvol->lvol_store->blobstore;
 
 	spdk_bs_open_blob_ext(bs, blobid, &opts, lvol_create_open_cb, req);
@@ -1639,8 +1641,8 @@ lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, 
 }
 
 static void
-lvs_esnap_dev_create(void *bs_ctx, struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb,
-		     void *cb_arg)
+lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+		     spdk_blob_op_with_bs_dev cb, void *cb_arg)
 {
 	struct spdk_lvol_store	*lvs = bs_ctx;
 	struct spdk_bs_dev	*bs_dev = NULL;
