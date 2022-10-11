@@ -100,7 +100,8 @@ ut_esnap_dev_alloc(const struct ut_esnap_opts *opts)
 }
 
 static void
-ut_esnap_create(void *bs_ctx, struct spdk_blob *blob, spdk_blob_op_with_bs_dev cb, void *cb_arg)
+ut_esnap_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+		spdk_blob_op_with_bs_dev cb, void *cb_arg)
 {
 	struct spdk_bs_dev	*bs_dev = NULL;
 	const void		*cookie = NULL;
