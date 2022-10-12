@@ -62,6 +62,7 @@ struct spdk_lvol_with_handle_req {
 	spdk_lvol_op_with_handle_complete cb_fn;
 	void				*cb_arg;
 	struct spdk_lvol		*lvol;
+	struct spdk_lvol		*origlvol;
 };
 
 struct spdk_lvol_store {

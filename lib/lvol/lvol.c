@@ -21,6 +21,9 @@ SPDK_LOG_REGISTER_COMPONENT(lvol)
 static TAILQ_HEAD(, spdk_lvol_store) g_lvol_stores = TAILQ_HEAD_INITIALIZER(g_lvol_stores);
 static pthread_mutex_t g_lvol_stores_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static void lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+				 spdk_blob_op_with_bs_dev cb, void *cb_arg);
+
 static int
 add_lvs_to_list(struct spdk_lvol_store *lvs)
 {
@@ -386,6 +389,7 @@ lvs_bs_opts_init(struct spdk_bs_opts *opts)
 {
 	spdk_bs_opts_init(opts, sizeof(*opts));
 	opts->max_channel_ops = SPDK_LVOL_BLOB_OPTS_CHANNEL_OPS;
+	opts->external_bs_dev_create = lvs_esnap_dev_create;
 }
 
 void
@@ -565,6 +569,7 @@ setup_lvs_opts(struct spdk_bs_opts *bs_opts, struct spdk_lvs_opts *o, uint32_t t
 	bs_opts->cluster_sz = o->cluster_sz;
 	bs_opts->clear_method = (enum bs_clear_method)o->clear_method;
 	bs_opts->num_md_pages = (o->num_md_pages_per_cluster_ratio * total_clusters) / 100;
+	bs_opts->external_bs_dev_create = lvs_esnap_dev_create;
 }
 
 int
@@ -1075,6 +1080,70 @@ spdk_lvol_create(struct spdk_lvol_store *lvs, const char *name, uint64_t sz,
 	return 0;
 }
 
+int
+spdk_lvol_create_bdev_clone(struct spdk_lvol_store *lvs,
+			    const char *back_name, const char *clone_name,
+			    spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+	struct spdk_blob_store *bs;
+	struct spdk_lvol *lvol;
+	struct spdk_blob_opts opts;
+	char *xattr_names[] = {LVOL_NAME, "uuid"};
+	struct spdk_bdev *bdev = spdk_bdev_get_by_name(back_name);
+	uint64_t sz;
+	int rc;
+
+	if (lvs == NULL) {
+		SPDK_ERRLOG("lvol store does not exist\n");
+		return -EINVAL;
+	}
+
+	if (bdev == NULL) {
+		SPDK_ERRLOG("bdev does not exist\n");
+		return -ENODEV;
+	}
+
+	rc = lvs_verify_lvol_name(lvs, clone_name);
+	if (rc < 0) {
+		return rc;
+	}
+
+	sz = spdk_bdev_get_num_blocks(bdev) * spdk_bdev_get_block_size(bdev);
+	bs = lvs->blobstore;
+
+	req = calloc(1, sizeof(*req));
+	if (!req) {
+		SPDK_ERRLOG("Cannot alloc memory for lvol request pointer\n");
+		return -ENOMEM;
+	}
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+
+	lvol = lvol_alloc(lvs, clone_name, true, BLOB_CLEAR_WITH_DEFAULT);
+	if (!lvol) {
+		free(req);
+		SPDK_ERRLOG("Cannot alloc memory for lvol base pointer\n");
+		return -ENOMEM;
+	}
+	req->lvol = lvol;
+
+	spdk_blob_opts_init(&opts, sizeof(opts));
+	opts.external_snapshot_cookie = back_name;
+	opts.external_snapshot_cookie_len = strlen(back_name) + 1;
+	opts.thin_provision = true;
+	opts.num_clusters = spdk_divide_round_up(sz, spdk_bs_get_cluster_size(bs));
+	opts.clear_method = lvol->clear_method;
+	opts.xattrs.count = SPDK_COUNTOF(xattr_names);
+	opts.xattrs.names = xattr_names;
+	opts.xattrs.ctx = lvol;
+	opts.xattrs.get_value = lvol_get_xattr_value;
+
+	spdk_bs_create_blob_ext(lvs->blobstore, &opts, lvol_create_cb, req);
+
+	return 0;
+}
+
 void
 spdk_lvol_create_snapshot(struct spdk_lvol *origlvol, const char *snapshot_name,
 			  spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
@@ -1128,6 +1197,7 @@ spdk_lvol_create_snapshot(struct spdk_lvol *origlvol, const char *snapshot_name,
 	snapshot_xattrs.names = xattr_names;
 	snapshot_xattrs.get_value = lvol_get_xattr_value;
 	req->lvol = newlvol;
+	req->origlvol = origlvol;
 	req->cb_fn = cb_fn;
 	req->cb_arg = cb_arg;
 
@@ -1525,4 +1595,49 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 	snprintf(opts.bstype.bstype, sizeof(opts.bstype.bstype), "LVOLSTORE");
 
 	spdk_bs_grow(bs_dev, &opts, lvs_load_cb, req);
+}
+
+/*
+ * Begin external snapshot support
+ */
+
+static void
+lvs_esnap_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
+{
+	SPDK_NOTICELOG("bdev name (%s) recieved unsupported event type %d\n",
+		       spdk_bdev_get_name(bdev), type);
+}
+
+static void
+lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+		     spdk_blob_op_with_bs_dev cb, void *cb_arg)
+{
+	struct spdk_bs_dev	*bs_dev = NULL;
+	const void		*cookie = NULL;
+	const char		*name;
+	size_t			cookie_len = 0;
+	int			rc;
+
+	rc = spdk_blob_get_external_cookie(blob, &cookie, &cookie_len);
+	if (rc != 0) {
+		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to get external snapshot cookie: %d\n",
+			    spdk_blob_get_id(blob), rc);
+		goto out;
+	}
+	name = cookie;
+	if (strnlen(name, cookie_len) + 1 != cookie_len) {
+		SPDK_ERRLOG("Blob 0x%" PRIx64 ": external snapshot cookie not a terminated "
+			    "string of the expected length\n", spdk_blob_get_id(blob));
+		rc = -EINVAL;
+		goto out;
+	}
+
+	rc = spdk_bdev_create_bs_dev_ro(name, lvs_esnap_bdev_event_cb, NULL, &bs_dev);
+	if (rc != 0) {
+		SPDK_ERRLOG("Blob 0x%" PRIx64 ": failed to create bs_dev from bdev '%s': %d\n",
+			    spdk_blob_get_id(blob), name, rc);
+	}
+
+out:
+	cb(cb_arg, bs_dev, rc);
 }
