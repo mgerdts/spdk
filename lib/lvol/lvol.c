@@ -67,6 +67,12 @@ lvs_alloc(void)
 	TAILQ_INIT(&lvs->pending_lvols);
 
 	lvs->load_esnaps = false;
+<<<<<<< HEAD
+=======
+	RB_INIT(&lvs->missing_esnaps);
+	pthread_mutex_init(&lvs->missing_lock, NULL);
+	lvs->thread = spdk_get_thread();
+>>>>>>> 4439d8c6a... add lvs_alloc() (tmp fix)
 
 	return lvs;
 }
@@ -79,6 +85,8 @@ lvs_free(struct spdk_lvol_store *lvs)
 		TAILQ_REMOVE(&g_lvol_stores, lvs, link);
 	}
 	pthread_mutex_unlock(&g_lvol_stores_mutex);
+
+	assert(RB_EMPTY(&lvs->missing_esnaps));
 
 	free(lvs);
 }
@@ -360,18 +368,12 @@ static void
 lvs_load_cb(void *cb_arg, struct spdk_blob_store *bs, int lvolerrno)
 {
 	struct spdk_lvs_with_handle_req *req = (struct spdk_lvs_with_handle_req *)cb_arg;
-	struct spdk_lvol_store *lvs;
+	struct spdk_lvol_store *lvs = req->lvol_store;
 
 	if (lvolerrno != 0) {
 		req->cb_fn(req->cb_arg, NULL, lvolerrno);
+		lvs_free(lvs);
 		free(req);
-		return;
-	}
-
-	lvs = lvs_alloc();
-	if (lvs == NULL) {
-		SPDK_ERRLOG("Cannot alloc memory for lvol store\n");
-		spdk_bs_unload(bs, bs_unload_with_error_cb, req);
 		return;
 	}
 
@@ -396,7 +398,6 @@ void
 spdk_lvs_load(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
 {
 	struct spdk_lvs_with_handle_req *req;
-	struct spdk_lvol_store *lvs;
 	struct spdk_bs_opts opts = {};
 
 	assert(cb_fn != NULL);
@@ -414,18 +415,13 @@ spdk_lvs_load(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
 		return;
 	}
 
-	lvs = calloc(1, sizeof(*req->lvol_store));
-	if (lvs == NULL) {
+	req->lvol_store = lvs_alloc();
+	if (req->lvol_store == NULL) {
 		SPDK_ERRLOG("Cannot alloc memory for lvol store\n");
 		free(req);
 		cb_fn(cb_arg, NULL, -ENOMEM);
 		return;
 	}
-	RB_INIT(&lvs->missing_esnaps);
-	pthread_mutex_init(&lvs->missing_lock, NULL);
-	lvs->thread = spdk_get_thread();
-
-	req->lvol_store = lvs;
 	req->cb_fn = cb_fn;
 	req->cb_arg = cb_arg;
 	req->bs_dev = bs_dev;
