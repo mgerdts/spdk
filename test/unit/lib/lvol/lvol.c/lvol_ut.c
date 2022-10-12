@@ -4,6 +4,10 @@
  *   Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+/*
+ * This commit is not really workable.  There is too much interplay between the blobstore and the
+ * lvstore for a straight-forward unit test.
+ */
 #include "spdk_cunit.h"
 #include "spdk/blob.h"
 #include "spdk/util.h"
@@ -12,6 +16,11 @@
 #include "thread/thread_internal.h"
 
 #include "common/lib/ut_multithread.c"
+
+void ut_lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+			    spdk_blob_op_with_bs_dev cb, void *cb_arg);
+#define UNIT_TEST_EXTERNAL_BS_DEV_CREATE_FN ut_lvs_esnap_dev_create
+
 #include "lvol/lvol.c"
 
 #define DEV_BUFFER_SIZE (64 * 1024 * 1024)
@@ -42,6 +51,7 @@ struct spdk_blob {
 	spdk_blob_id		id;
 	uint32_t		ref;
 	struct spdk_blob_store *bs;
+	struct spdk_lvol_store	*lvs;
 	int			close_status;
 	int			open_status;
 	int			load_status;
@@ -49,6 +59,7 @@ struct spdk_blob {
 	char			uuid[SPDK_UUID_STRING_LEN];
 	char			name[SPDK_LVS_NAME_MAX];
 	bool			thin_provisioned;
+	bool			is_external_clone;
 };
 
 int g_lvserrno;
@@ -62,6 +73,8 @@ struct spdk_lvol *g_lvol;
 spdk_blob_id g_blobid = 1;
 struct spdk_io_channel *g_io_channel;
 struct lvol_ut_bs_dev g_esnap_dev;
+uint32_t g_lvs_esnap_dev_creates;
+uint32_t g_lvs_esnap_dev_create_skips;
 
 struct spdk_blob_store {
 	struct spdk_bs_opts	bs_opts;
@@ -409,6 +422,13 @@ spdk_bs_open_blob(struct spdk_blob_store *bs, spdk_blob_id blobid,
 	if (!g_lvs_rename_blob_open_error) {
 		TAILQ_FOREACH(blob, &bs->blobs, link) {
 			if (blob->id == blobid) {
+				if (blob->is_external_clone) {
+					if (bs->lvs != NULL && !bs->lvs->load_esnaps) {
+						g_lvs_esnap_dev_create_skips++;
+					} else {
+						g_lvs_esnap_dev_creates++;
+					}
+				}
 				blob->ref++;
 				cb_fn(cb_arg, blob, blob->open_status);
 				return;
@@ -462,8 +482,9 @@ spdk_bs_create_blob_ext(struct spdk_blob_store *bs, const struct spdk_blob_opts 
 	SPDK_CU_ASSERT_FATAL(b != NULL);
 
 	b->id = g_blobid++;
-	if (opts != NULL && opts->thin_provision) {
-		b->thin_provisioned = true;
+	if (opts != NULL) {
+		b->thin_provisioned = opts->thin_provision;
+		b->is_external_clone = opts->external_snapshot_cookie != NULL;
 	}
 	b->bs = bs;
 
@@ -526,13 +547,19 @@ ut_cb_res_clear(struct ut_cb_res *res)
 	return res;
 }
 
-DECLARE_WRAPPER(lvs_esnap_dev_create, void,
-		(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
-		 spdk_blob_op_with_bs_dev cb, void *cb_arg));
 void
-__wrap_lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+ut_lvs_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 			    spdk_blob_op_with_bs_dev cb, void *cb_arg)
 {
+	struct spdk_lvol_store *lvs = bs_ctx;
+
+	if (!lvs->load_esnaps) {
+		g_lvs_esnap_dev_create_skips++;
+		cb(cb_arg, NULL, 0);
+		return;
+	}
+
+	g_lvs_esnap_dev_creates++;
 	cb(cb_arg, &g_esnap_dev.bs_dev, 0);
 }
 
@@ -2284,6 +2311,119 @@ lvol_esnap_create_delete(void)
 	g_lvol_store = NULL;
 }
 
+static void
+lvol_esnap_skip_first_open(void)
+{
+	struct spdk_bdev esnap_bdev;
+	struct lvol_ut_bs_dev dev;
+	struct spdk_lvs_opts opts;
+	struct spdk_lvol *lvol, *tmp;
+	int rc;
+	uint32_t count;
+
+	/* Initialization */
+	init_dev(&dev);
+	init_bdev(&esnap_bdev, "bdev1", BS_CLUSTER_SIZE);
+	init_dev(&g_esnap_dev);
+	g_esnap_dev.bs_dev.blockcnt = esnap_bdev.blockcnt;
+	g_lvs_esnap_dev_create_skips = g_lvs_esnap_dev_creates = 0;
+
+	/* Create lvstore */
+	spdk_lvs_opts_init(&opts);
+	snprintf(opts.name, sizeof(opts.name), "lvs");
+	g_lvserrno = -1;
+	rc = spdk_lvs_init(&dev.bs_dev, &opts, lvol_store_op_with_handle_complete, NULL);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(g_lvserrno == 0);
+	CU_ASSERT(g_lvol_store != NULL);
+	CU_ASSERT(g_lvs_esnap_dev_create_skips == 0);
+	CU_ASSERT(g_lvs_esnap_dev_creates == 0);
+	g_lvol_store->bs->lvs = g_lvol_store;
+
+	/* Create external clone. This should not trigger any bdev opens. */
+	g_lvserrno = 0xbad;
+	g_lvol = NULL;
+	MOCK_SET(spdk_bdev_get_by_name, &esnap_bdev);
+	rc = spdk_lvol_create_bdev_clone(g_lvol_store, esnap_bdev.name, "clone1",
+					 lvol_op_with_handle_complete, NULL);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(g_lvserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_lvol != NULL);
+	CU_ASSERT(g_lvs_esnap_dev_create_skips == 0);
+	CU_ASSERT(g_lvs_esnap_dev_creates == 0);
+	lvol = g_lvol;
+	g_lvol = NULL;
+
+	/* Open external clone. This should trigger an open. */
+	spdk_lvol_open(lvol, lvol_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_lvs_esnap_dev_create_skips == 0);
+	CU_ASSERT(g_lvs_esnap_dev_creates == 1);
+	CU_ASSERT(g_lvserrno == 0);
+	CU_ASSERT(lvol == g_lvol);
+
+	/* Close the lvol and unload the lvstore */
+	g_lvserrno = 0xbad;
+	spdk_lvol_close(g_lvol, op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_lvserrno == 0);
+	g_lvserrno = 0xbad;
+	spdk_lvol_destroy(g_lvol, op_complete, NULL);
+	CU_ASSERT(g_lvserrno == 0);
+	g_lvol = NULL;
+
+	g_lvserrno = -1;
+	rc = spdk_lvs_unload(g_lvol_store, op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_lvserrno == 0);
+	g_lvol_store = NULL;
+
+	/* Load the lvstore. There should be one skip and no creates. */
+	g_lvs_esnap_dev_create_skips = g_lvs_esnap_dev_creates = 0;
+	spdk_lvs_load(&dev.bs_dev, lvol_store_op_with_handle_complete, NULL);
+	CU_ASSERT(rc == 0);
+	poll_threads();
+	CU_ASSERT(g_lvserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_lvol_store != NULL);
+	CU_ASSERT(g_lvs_esnap_dev_create_skips == 1);
+	CU_ASSERT(g_lvs_esnap_dev_creates == 0);
+
+	/* Open the external clone. This should trigger an open. */
+	count = 0;
+	TAILQ_FOREACH_SAFE(lvol, &g_lvol_store->lvols, link, tmp) {
+		count++;
+		g_lvserrno = (0xbad << 16) + count;
+		spdk_lvol_open(lvol, lvol_op_with_handle_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_lvserrno == 0);
+		CU_ASSERT(g_lvs_esnap_dev_create_skips == 0);
+		CU_ASSERT(g_lvs_esnap_dev_creates == count);
+	}
+	CU_ASSERT(count == 1);
+
+	/* Clean up */
+	TAILQ_FOREACH_SAFE(lvol, &g_lvol_store->lvols, link, tmp) {
+		g_lvserrno = 0xbad;
+		spdk_lvol_close(lvol, op_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_lvserrno == 0);
+		g_lvserrno = 0xbad;
+		spdk_lvol_destroy(lvol, op_complete, NULL);
+		poll_threads();
+		CU_ASSERT(g_lvserrno == 0);
+	}
+	g_lvol = NULL;
+	g_lvserrno = -1;
+	rc = spdk_lvs_unload(g_lvol_store, op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_lvserrno == 0);
+	g_lvol_store = NULL;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2324,6 +2464,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, lvol_get_xattr);
 	CU_ADD_TEST(suite, lvol_esnap_create_bad_args);
 	CU_ADD_TEST(suite, lvol_esnap_create_delete);
+	CU_ADD_TEST(suite, lvol_esnap_skip_first_open);
 
 	allocate_threads(1);
 	set_thread(0);
