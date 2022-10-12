@@ -16,6 +16,9 @@
 #define SPDK_BLOBSTORE_H
 #define BLOB_EXTERNAL_SNAPSHOT_BDEV "EXTSNAP"
 
+spdk_bs_external_dev_create ut_lvs_esnap_dev_create_fn;
+#define UNIT_TEST_EXTERNAL_BS_DEV_CREATE_FN ut_lvs_esnap_dev_create_fn
+
 #include "lvol/lvol.c"
 
 #define DEV_BUFFER_SIZE (64 * 1024 * 1024)
@@ -2098,6 +2101,93 @@ lvol_get_xattr(void)
 	free_dev(&dev);
 }
 
+int g_load_esnap_skip = 0;
+int g_load_esnap = 0;
+struct lvol_ut_bs_dev g_esnap_dev;
+
+static void
+ut_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+		    spdk_blob_op_with_bs_dev cb, void *cb_arg)
+{
+	struct spdk_lvol_store *lvs = bs_ctx;
+
+	if (!lvs->load_esnaps) {
+		g_load_esnap_skip++;
+		cb(cb_arg, NULL, 0);
+		return;
+	}
+	g_load_esnap++;
+	cb(cb_arg, &g_esnap_dev.bs_dev, 0);
+}
+
+static int
+ut_create_bdev_clone(struct spdk_lvol_store *lvs, const char *bdev_name, const char *clone_name,
+		     spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+	struct spdk_lvol *lvol;
+
+	req = calloc(1, sizeof(*req));
+	SPDK_CU_ASSERT_FATAL(req != NULL);
+	lvol = calloc(1, sizeof(*lvol));
+	SPDK_CU_ASSERT_FATAL(lvol != NULL);
+
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+	req->lvol = lvol;
+
+	lvol->lvol_store = lvs;
+	lvol->thin_provision = true;
+	lvol->clear_method = BLOB_CLEAR_WITH_DEFAULT;
+	snprintf(lvol->name, sizeof(lvol->name), "%s", clone_name);
+	spdk_uuid_generate(&lvol->uuid);
+	spdk_uuid_fmt_lower(lvol->uuid_str, sizeof(lvol->uuid_str), &lvol->uuid);
+
+	TAILQ_INSERT_TAIL(&lvs->pending_lvols, lvol, link);
+
+	return 0;
+}
+
+static void
+lvol_esnap_skip_first_open(void)
+{
+	struct lvol_ut_bs_dev dev;
+	struct spdk_lvs_opts opts;
+	int rc;
+	struct spdk_lvol *lvol;
+
+	ut_lvs_esnap_dev_create_fn = ut_esnap_dev_create;
+
+	init_dev(&dev);
+	init_dev(&g_esnap_dev);
+	g_esnap_dev.bs_dev.blockcnt = 1;
+	g_load_esnap_skip = 0;
+	g_load_esnap = 0;
+
+	spdk_lvs_opts_init(&opts);
+	g_lvserrno = -1;
+	rc = spdk_lvs_init(&dev.bs_dev, &opts, lvol_store_op_with_handle_complete, NULL);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_lvserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_lvol_store != NULL);
+	CU_ASSERT(g_load_esnap == 0);
+	CU_ASSERT(g_load_esnap_skip == 0);
+
+	spdk_lvol_create(g_lvol_store, "lvol", 10, false, LVOL_CLEAR_WITH_DEFAULT,
+			 lvol_op_with_handle_complete, NULL);
+	CU_ASSERT(g_lvserrno == 0);
+	CU_ASSERT(g_load_esnap == 0);
+	CU_ASSERT(g_load_esnap_skip == 0);
+	SPDK_CU_ASSERT_FATAL(g_lvol != NULL);
+	lvol = g_lvol;
+
+	/* XXX to make build happy */
+	CU_ASSERT(lvol != NULL);
+
+	rc = ut_create_bdev_clone(g_lvol_store, "foo", "bar", lvol_op_with_handle_complete, NULL);
+	CU_ASSERT(rc == 0);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2136,6 +2226,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, lvol_inflate);
 	CU_ADD_TEST(suite, lvol_decouple_parent);
 	CU_ADD_TEST(suite, lvol_get_xattr);
+	CU_ADD_TEST(suite, lvol_esnap_skip_first_open);
 
 	allocate_threads(1);
 	set_thread(0);

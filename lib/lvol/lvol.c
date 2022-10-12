@@ -382,7 +382,11 @@ lvs_bs_opts_init(struct spdk_bs_opts *opts)
 {
 	spdk_bs_opts_init(opts, sizeof(*opts));
 	opts->max_channel_ops = SPDK_LVOL_BLOB_OPTS_CHANNEL_OPS;
+#ifdef UNIT_TEST_EXTERNAL_BS_DEV_CREATE_FN
+	opts->external_bs_dev_create = UNIT_TEST_EXTERNAL_BS_DEV_CREATE_FN;
+#else
 	opts->external_bs_dev_create = lvs_esnap_dev_create;
+#endif
 }
 
 void
