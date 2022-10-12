@@ -8743,7 +8743,7 @@ blob_esnap_destroy_bs_dev_channels(struct spdk_blob *blob, spdk_blob_op_with_han
 {
 	struct blob_esnap_destroy_ctx	*ctx;
 
-	if (!blob_is_external_clone(blob)) {
+	if (!blob_is_external_clone(blob) || blob->back_bs_dev == NULL) {
 		cb_fn(cb_arg, blob, 0);
 		return;
 	}
