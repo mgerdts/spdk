@@ -1672,12 +1672,52 @@ spdk_lvs_grow(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn
  *
  * Each lvstore has a tree of missing external snapshots, lvs->missing_esnaps, indexed by external
  * snapshot name.
+ *
+ * When an external snapshot device becomes available, it is hot-plugged into the lvol and the lvol
+ * is no longer degraded. The arrival of the bdev is noticed by vbdev_lvol's examine_disk()
+ * callback. During vbdev_lvol_examine(), each lvstore's missing external snapshots tree is searched
+ * for lvols matching the new bdev's name and uuid string. Note that the examine callbacks are
+ * called before any bdev aliases may be registered so aliases are not considered. Each match
+ * triggers the creation of a struct spdk_bs_dev which is registered with the appropriate blob. Any
+ * number of blobs in any number of blobstores may concurrently use the same bdev as an external
+ * snapshot. Each blob that uses a bdev will have its own bdev_desc.
+ *
+ * There is a potential for races between the bdev examine_config() invocation that loads the
+ * lvstore and another invocation that loads external snapshot bdevs. These may be running in
+ * different threads on different reactors. To ensure that an lvol doesn't get stuck in degraded
+ * mode due to a race:
+ *
+ *   - All access of an lvs->missing_esnaps tree is done while holding lvs->_missing_esnaps_lock.
+ *     This lock must not be held across async calls.
+ *   - All operations that alter lvs->missing_esnaps happen on the lvs->thread thread.
+ *   - When lvs_esnap_dev_create() is called with lvs->load_esnaps set to true and the external
+ *     snapshot bdev cannot be opened, the lvol is added to lvs->missing_esnaps. The lvol is still
+ *     opened, but in degraded mode with lvol->degraded set to true.
+ *   - The lvstore's examine_disk callback will look for the new bdev in each lvstore's
+ *     missing_esnaps tree. If found, a new blob_bdev is created and registered as the blob's
+ *     back_bs_dev. The examine may happen on any thread, but the blob_bdev creation and
+ *     registration happens on lvs->thread.
+ *   - There is a small window around the time that a missing bdev is registered with
+ *     spdk_bdev_register() where a race still exists:
+ *       1. reactor 1, lvs->thread: lvs_esnap_dev_create() does not find the bdev
+ *       2. reactor 2: someone else registers the bdev
+ *       3. reactor 2: examine hooks are run. The bdev is not in any missing_esnaps tree
+ *       4. reactor 1: lvs->thread: add bdev to lvs->missing_esnaps
+ *     To close this race, immediately after adding a bdev to lvs->missing_esnaps, the bdev is
+ *     looked up again. If found, it is opened immediately and the lvol is not opened in degraded
+ *     mode.
+ *
+ * XXX-mg: I think with the approach above, the lvs->esnap thread requirement is not needed. We
+ * still need to be sure that the bdev is closed on the same thread it is opened, so doing this all
+ * on lvs->thread still may be best.
  */
 
 struct spdk_lvs_missing {
+	struct spdk_lvol_store			*lvol_store;
 	const char				*name;
 	TAILQ_HEAD(missing_lvols, spdk_lvol)	lvols;
 	RB_ENTRY(spdk_lvs_missing)		node;
+	uint32_t				holds;
 };
 
 struct lvs_degraded_dev {
@@ -1722,6 +1762,7 @@ lvs_esnap_missing_add(struct spdk_lvol_store *lvs, struct spdk_lvol *lvol, const
 				    "out of memory\n", lvol->unique_id, name);
 			return -ENOMEM;
 		}
+		missing->lvol_store = lvs;
 		missing->name = strdup(name);
 		if (missing->name == NULL) {
 			pthread_mutex_unlock(&lvs->missing_lock);
@@ -1760,7 +1801,7 @@ lvs_esnap_missing_remove(struct spdk_lvol *lvol)
 	pthread_mutex_lock(&lvs->missing_lock);
 
 	TAILQ_REMOVE(&missing->lvols, lvol, missing_link);
-	if (!TAILQ_EMPTY(&missing->lvols)) {
+	if (!TAILQ_EMPTY(&missing->lvols) || missing->holds != 0) {
 		pthread_mutex_unlock(&lvs->missing_lock);
 		return;
 	}
@@ -1805,6 +1846,118 @@ lvs_esnap_missing_swap(struct spdk_lvol *lvol1, struct spdk_lvol *lvol2)
 	lvol2->missing = missing1;
 
 	pthread_mutex_unlock(&lvs->missing_lock);
+}
+
+static void
+lvs_esnap_hotplug_done(void *cb_arg, int bserrno)
+{
+	struct spdk_lvol	*lvol = cb_arg;
+	struct spdk_lvol_store	*lvs = lvol->lvol_store;
+
+	if (bserrno != 0) {
+		SPDK_ERRLOG("lvol %s/%s: failed to hotplug blob_bdev due to error %d\n",
+			    lvs->name, lvol->name, bserrno);
+	}
+}
+
+static void
+lvs_esnap_dev_create_on_thread_done(void *ctx, struct spdk_bs_dev *bs_dev, int bserrno)
+{
+	struct spdk_lvol	*lvol = ctx;
+
+	lvol->missing = NULL;
+
+	if (bserrno != 0) {
+		SPDK_ERRLOG("lvol %s/%s: failed to create blob_bdev due to error %d\n",
+			    lvol->lvol_store->name, lvol->name, bserrno);
+		return;
+	}
+
+	spdk_blob_set_esnap_bs_dev(lvol->blob, bs_dev, lvs_esnap_hotplug_done, lvol);
+}
+
+static void
+lvs_esnap_dev_create_on_thread(void *ctx)
+{
+	struct spdk_lvs_missing	*missing = ctx;
+	struct spdk_lvol_store	*lvs = missing->lvol_store;
+	struct spdk_lvol	*lvol, *tmp;
+
+	assert(lvs->thread == spdk_get_thread());
+
+	pthread_mutex_lock(&lvs->missing_lock);
+	assert(missing->holds > 0);
+	RB_REMOVE(missing_esnap_tree, &lvs->missing_esnaps, missing);
+	pthread_mutex_unlock(&lvs->missing_lock);
+
+	TAILQ_FOREACH_SAFE(lvol, &missing->lvols, missing_link, tmp) {
+		TAILQ_REMOVE(&missing->lvols, lvol, missing_link);
+		missing->holds++;
+		lvol->missing = NULL;
+		lvs_esnap_dev_create(lvs, lvol, lvol->blob, lvs_esnap_dev_create_on_thread_done,
+				     lvol);
+	}
+
+	missing->holds--;
+	if (missing->holds == 0) {
+		free((char *)missing->name);
+		free(missing);
+	}
+}
+
+/*
+ * Notify each lvstore that is missing a bdev by the specified name or uuid that the bdev now
+ * exists. If spdk_thread_send_msg() fails, the lvstore will not be notified. There's not a good
+ * way to recover from this as it is likely that any effort to queue a retry would fail for the same
+ * reason (e.g. ENOMEM).
+ *
+ * Returns true if any lvstore is missing the bdev, else false.
+ */
+bool
+spdk_lvs_esnap_notify_bdev_add(const char **names, size_t namecnt)
+{
+	struct spdk_lvs_missing	*found[namecnt];
+	struct spdk_lvol_store	*lvs;
+	struct spdk_lvs_missing find;
+	size_t			i;
+	bool			ret = false;
+	int			rc;
+
+	pthread_mutex_lock(&g_lvol_stores_mutex);
+	TAILQ_FOREACH(lvs, &g_lvol_stores, link) {
+
+		pthread_mutex_lock(&lvs->missing_lock);
+
+		for (i = 0; i < namecnt; i++) {
+			find.name = names[i];
+			found[i] = RB_FIND(missing_esnap_tree, &lvs->missing_esnaps, &find);
+			if (found[i] != NULL) {
+				found[i]->holds++;
+			}
+		}
+
+		pthread_mutex_unlock(&lvs->missing_lock);
+
+		for (i = 0; i < namecnt; i++) {
+			if (found[i] == NULL) {
+				continue;
+			}
+			/*
+			 * Return true even if sending the message fails, as we would prefer to
+			 * prevent any other bdev module from starting to use this bdev.
+			 */
+			ret = true;
+			rc = spdk_thread_send_msg(lvs->thread, lvs_esnap_dev_create_on_thread,
+						  found[i]);
+			if (rc != 0) {
+				SPDK_ERRLOG("lvstore %s: missing bdev %s: failed to send message "
+					    " to thread with error %d", lvs->name, names[i], rc);
+			}
+		}
+	}
+	pthread_mutex_unlock(&g_lvol_stores_mutex);
+
+	return ret;
 }
 
 /*

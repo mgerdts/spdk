@@ -1547,8 +1547,26 @@ end:
 	free(req);
 }
 
+static bool
+vbdev_lvs_examine_esnap(struct spdk_bdev *bdev)
+{
+	const char *names[2];
+	char uuid_str[SPDK_UUID_STRING_LEN];
+
+	spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), &bdev->uuid);
+	names[0] = bdev->name;
+	names[1] = uuid_str;
+
+	if (spdk_lvs_esnap_notify_bdev_add(names, 2)) {
+		SPDK_INFOLOG(vbdev_lvol, "One or more lvstores need bdev with name %s and/or "
+			     "uuid %s\n", bdev->name, uuid_str);
+		return true;
+	}
+	return false;
+}
+
 static void
-vbdev_lvs_examine(struct spdk_bdev *bdev)
+vbdev_lvs_examine_blobstore(struct spdk_bdev *bdev)
 {
 	struct spdk_bs_dev *bs_dev;
 	struct spdk_lvs_with_handle_req *req;
@@ -1580,6 +1598,15 @@ vbdev_lvs_examine(struct spdk_bdev *bdev)
 	req->base_bdev = bdev;
 
 	spdk_lvs_load(bs_dev, _vbdev_lvs_examine_cb, req);
+}
+
+static void
+vbdev_lvs_examine(struct spdk_bdev *bdev)
+{
+	if (vbdev_lvs_examine_esnap(bdev)) {
+		return;
+	}
+	vbdev_lvs_examine_blobstore(bdev);
 }
 
 struct spdk_lvol *
