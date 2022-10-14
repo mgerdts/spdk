@@ -118,4 +118,7 @@ void spdk_lvol_resize(struct spdk_lvol *lvol, uint64_t sz, spdk_lvol_op_complete
 void spdk_lvol_set_read_only(struct spdk_lvol *lvol, spdk_lvol_op_complete cb_fn,
 			     void *cb_arg);
 
+bool spdk_lvs_esnap_notify_bdev_add(const char **names, size_t namecnt);
+
+
 #endif /* SPDK_INTERNAL_LVOLSTORE_H */

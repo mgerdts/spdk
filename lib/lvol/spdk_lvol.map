@@ -25,6 +25,7 @@
 	# internal functions
 	spdk_lvol_resize;
 	spdk_lvol_set_read_only;
+	spdk_lvs_esnap_notify_bdev_add;
 
 	local: *;
 };
