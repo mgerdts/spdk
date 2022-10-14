@@ -1081,8 +1081,8 @@ lvol_create_cb(void *cb_arg, spdk_blob_id blobid, int lvolerrno)
 	opts.esnap_ctx = req->lvol;
 	bs = req->lvol->lvol_store->blobstore;
 
-	lvs_esnap_swap(req->lvol, req->origlvol);
 
+	lvs_esnap_swap(req->lvol, req->origlvol);
 	spdk_bs_open_blob_ext(bs, blobid, &opts, lvol_create_open_cb, req);
 }
 
@@ -1781,6 +1781,7 @@ lvs_esnap_bs_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
 }
 
 struct spdk_lvs_missing {
+	struct spdk_lvol_store			*lvol_store;
 	const void				*esnap_id;
 	uint32_t				id_len;
 	TAILQ_HEAD(missing_lvols, spdk_lvol)	lvols;
@@ -1828,6 +1829,7 @@ spdk_lvs_esnap_missing_add(struct spdk_lvol_store *lvs, struct spdk_lvol *lvol,
 		}
 		memcpy((void *)missing->esnap_id, esnap_id, id_len);
 		missing->id_len = id_len;
+		missing->lvol_store = lvs;
 		TAILQ_INIT(&missing->lvols);
 		RB_INSERT(missing_esnap_tree, &lvs->missing_esnaps, missing);
 	}
@@ -1897,4 +1899,92 @@ lvs_esnap_swap(struct spdk_lvol *lvol1, struct spdk_lvol *lvol2)
 	}
 	lvol1->missing = missing2;
 	lvol2->missing = missing1;
+}
+
+static void
+lvs_esnap_hotplug_done(void *cb_arg, int bserrno)
+{
+	struct spdk_lvol	*lvol = cb_arg;
+	struct spdk_lvol_store	*lvs = lvol->lvol_store;
+
+	if (bserrno != 0) {
+		SPDK_ERRLOG("lvol %s/%s: failed to hotplug blob_bdev due to error %d\n",
+			    lvs->name, lvol->name, bserrno);
+	}
+}
+
+static void
+lvs_esnap_missing_hotplug(struct spdk_lvs_missing *missing)
+{
+	struct spdk_lvol_store	*lvs = missing->lvol_store;
+	struct spdk_lvol	*lvol, *tmp;
+	struct spdk_bs_dev	*bs_dev;
+	const void		*esnap_id = missing->esnap_id;
+	uint32_t		id_len = missing->id_len;
+	int			rc;
+
+	assert(lvs->thread == spdk_get_thread());
+
+	RB_REMOVE(missing_esnap_tree, &lvs->missing_esnaps, missing);
+
+	TAILQ_FOREACH_SAFE(lvol, &missing->lvols, missing_link, tmp) {
+		TAILQ_REMOVE(&missing->lvols, lvol, missing_link);
+		lvol->missing = NULL;
+		bs_dev = NULL;
+		rc = lvs->esnap_bs_dev_create(lvs, lvol, lvol->blob, esnap_id, id_len, &bs_dev);
+		if (rc != 0) {
+			SPDK_ERRLOG("lvol %s: failed to create esnap bs_dev: error %d\n",
+				    lvol->unique_id, rc);
+			continue;
+		}
+		spdk_blob_set_esnap_bs_dev(lvol->blob, bs_dev, lvs_esnap_hotplug_done, lvol);
+	}
+
+	free((void *)missing->esnap_id);
+	free(missing);
+}
+
+/*
+ * Notify each lvstore created on this thread that is missing a bdev by the specified name or uuid
+ * that the bdev now exists.
+ */
+bool
+spdk_lvs_esnap_notify_hotplug(const void *esnap_id, uint32_t id_len)
+{
+	struct spdk_lvs_missing	*found;
+	struct spdk_lvol_store	*lvs;
+	struct spdk_thread	*thread = spdk_get_thread();
+	struct spdk_lvs_missing find = { 0 };
+	bool			ret = false;
+
+	find.esnap_id = esnap_id;
+	find.id_len = id_len;
+
+	pthread_mutex_lock(&g_lvol_stores_mutex);
+	TAILQ_FOREACH(lvs, &g_lvol_stores, link) {
+		if (thread != lvs->thread) {
+			/*
+			 * It is expected that this is called from vbdev_lvol's examine_config()
+			 * callback. The lvstore was likely loaded do a creation happening as a
+			 * result of an RPC call or opening of an existing lvstore via
+			 * examine_disk() callback. RPC calls, examine_disk(), and examine_config()
+			 * should all be happening only on the app thread. The "wrong thread"
+			 * condition will only happen when an application is doing something weird.
+			 */
+			SPDK_NOTICELOG("Discarded examine for lvstore %s: wrong thread\n",
+				       lvs->name);
+			continue;
+		}
+
+		found = RB_FIND(missing_esnap_tree, &lvs->missing_esnaps, &find);
+		if (found == NULL) {
+			continue;
+		}
+
+		ret = true;
+		lvs_esnap_missing_hotplug(found);
+	}
+	pthread_mutex_unlock(&g_lvol_stores_mutex);
+
+	return ret;
 }
