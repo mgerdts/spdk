@@ -42,7 +42,7 @@ DEFINE_STUB(spdk_blob_is_external_clone, bool, (const struct spdk_blob *blob), f
 DEFINE_STUB(spdk_blob_get_external_parent, const char *, (struct spdk_blob *blob), NULL);
 DEFINE_STUB(spdk_blob_get_external_cookie, int,
 	    (struct spdk_blob *blob, const void **cookie, size_t *len), -ENOTSUP);
-
+DEFINE_STUB(spdk_lvs_esnap_notify_bdev_add, bool, (const char **names, size_t namecnt), false);
 struct spdk_bdev *spdk_bdev_get_by_uuid(const struct spdk_uuid *uuid);
 
 const struct spdk_bdev_aliases_list *
