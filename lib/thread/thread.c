@@ -127,6 +127,8 @@ struct spdk_thread {
 	struct spdk_cpuset		cpumask;
 	uint64_t			exit_timeout_tsc;
 
+	uint32_t			lock_count;
+
 	/* Indicates whether this spdk_thread currently runs in interrupt. */
 	bool				in_interrupt;
 	bool				poller_unregistered;
@@ -691,6 +693,12 @@ msg_queue_run_batch(struct spdk_thread *thread, uint32_t max_msgs)
 
 		msg->fn(msg->arg);
 
+		/*
+		 * The message must not have taken and retained any errorcheck locks because this
+		 * SPDK thread could next run on a different pthread.
+		 */
+		assert(thread->lock_count == 0);
+
 		if (thread->msg_cache_count < SPDK_MSG_MEMPOOL_CACHE_SIZE) {
 			/* Insert the messages at the head. We want to re-use the hot
 			 * ones. */
@@ -794,6 +802,13 @@ thread_execute_poller(struct spdk_thread *thread, struct spdk_poller *poller)
 	poller->state = SPDK_POLLER_STATE_RUNNING;
 	rc = poller->fn(poller->arg);
 
+	/*
+	 * An spdk_thread may migrate to another reactor using a different POSIX thread. It's not
+	 * safe to hold errorcheck or recursive pthread mutexes across migrations. Only DEBUG builds
+	 * maintain lock_count.
+	 */
+	assert(thread->lock_count == 0);
+
 	poller->run_count++;
 	if (rc > 0) {
 		poller->busy_count++;
@@ -852,6 +867,13 @@ thread_execute_timed_poller(struct spdk_thread *thread, struct spdk_poller *poll
 
 	poller->state = SPDK_POLLER_STATE_RUNNING;
 	rc = poller->fn(poller->arg);
+
+	/*
+	 * An spdk_thread may migrate to another reactor using a different POSIX thread. It's not
+	 * safe to hold errorcheck or recursive pthread mutexes across migrations. Only DEBUG builds
+	 * maintain lock_count.
+	 */
+	assert(thread->lock_count == 0);
 
 	poller->run_count++;
 	if (rc > 0) {
@@ -2707,6 +2729,90 @@ bool
 spdk_interrupt_mode_is_enabled(void)
 {
 	return g_interrupt_mode;
+}
+
+int
+spdk_mutex_init(struct spdk_mutex *smutex)
+{
+	pthread_mutexattr_t attr;
+	int rc;
+
+	rc = pthread_mutexattr_init(&attr);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
+	if (rc != 0) {
+		return rc;
+	}
+	return pthread_mutex_init(&smutex->mutex, &attr);
+}
+
+int
+spdk_mutex_destroy(struct spdk_mutex *smutex)
+{
+	return pthread_mutex_destroy(&smutex->mutex);
+}
+
+void
+spdk_mutex_lock(struct spdk_mutex *smutex)
+{
+	int rc;
+
+#ifdef DEBUG
+	/*
+	 * Initialization is required before first use. This is not guaranteed to be a portable
+	 * check. If it becomes problematic, we probably need another field in spdk_mutex.
+	 */
+	pthread_mutex_t m = { 0 };
+	assert(memcmp(&smutex->mutex, &m, sizeof(m)) != 0);
+#endif
+
+	rc = pthread_mutex_lock(&smutex->mutex);
+	if (spdk_unlikely(rc != 0)) {
+		SPDK_ERRLOG("lock failed for errorcheck pthread_mutex_t %p\n", &smutex->mutex);
+		abort();
+	}
+#ifdef DEBUG
+	smutex->thread = spdk_get_thread();
+	smutex->thread->lock_count++;
+#endif
+}
+
+void
+spdk_mutex_unlock(struct spdk_mutex *smutex)
+{
+	int rc;
+
+	rc = pthread_mutex_unlock(&smutex->mutex);
+	if (spdk_unlikely(rc != 0)) {
+		SPDK_ERRLOG("unlock failed for errorcheck pthread_mutex_t %p\n", &smutex->mutex);
+		abort();
+	}
+#ifdef DEBUG
+	assert(smutex->thread == spdk_get_thread());
+	assert(smutex->thread->lock_count > 0);
+	smutex->thread->lock_count--;
+	smutex->thread = NULL;
+#endif
+}
+
+bool
+spdk_mutex_held(struct spdk_mutex *smutex)
+{
+	int rc;
+
+	rc = pthread_mutex_lock(&smutex->mutex);
+	if (rc == EDEADLK) {
+		assert(smutex->thread == spdk_get_thread());
+		return true;
+	} else if (rc != 0) {
+		SPDK_ERRLOG("lock failed for errorcheck pthread_mutex_t %p\n", &smutex->mutex);
+		abort();
+	}
+	rc = pthread_mutex_unlock(&smutex->mutex);
+	assert(rc == 0);
+	return false;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(thread)

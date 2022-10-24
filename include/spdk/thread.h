@@ -842,6 +842,65 @@ int spdk_interrupt_mode_enable(void);
  */
 bool spdk_interrupt_mode_is_enabled(void);
 
+/**
+ * An errorcheck mutex augmented with safety checks for use with SPDK.
+ *
+ * SPDK code that uses spdk_mutex runs from a poller, which is associated with an spdk thread, which
+ * itself is associated with a POSIX thread. There is a many:1 relationship between pollers and
+ * spdk threads as well as between spdk threads and POSIX threads. Pollers may move between SPDK
+ * threads and SPDK threads may move between POSIX threads. Migration of a poller to another POSIX
+ * thread can become toxic with errorcheck and recursive mutexes.
+ *
+ * If the errorcheck pthread mutex detects an error, the program will abort. This indicates that a
+ * critical logic error is present and it is not safe for the program to continue.
+ *
+ * When built with DEBUG enabled, assertions are enabled to be sure that no locks are held when a
+ * poller gives up the CPU.
+ */
+struct spdk_mutex {
+	pthread_mutex_t	mutex;
+	/* Only used with DEBUG but always defined for constant structure size. */
+	struct spdk_thread *thread;
+};
+
+/**
+ * Initialize an spdk_mutex.
+ *
+ * \param smutex The SPDK mutex to initialize.
+ * \return 0 on success or error returned from pthread_mutexattr_init() or pthread_mutex_init().
+ */
+int spdk_mutex_init(struct spdk_mutex *smutex);
+
+/**
+ * Destroy an spdk_mutex.
+ *
+ * \param smutex The SPDK mutex to initialize.
+ * \return 0 on success or error returned from pthred_mutex_destroy().
+ */
+int spdk_mutex_destroy(struct spdk_mutex *smutex);
+
+/**
+ * Lock an SPDK mutex.
+ *
+ * \param smutex An SPDK mutex.
+ */
+void spdk_mutex_lock(struct spdk_mutex *smutex);
+
+/**
+ * Unlock an SPDK mutex.
+ *
+ * \param smutex An SPDK mutex.
+ */
+void spdk_mutex_unlock(struct spdk_mutex *smutex);
+
+/**
+ * Determine if the caller holds this SPDK mutex.
+ *
+ * \param smutex An SPDK mutex.
+ * \return true if mutex is held by this thread, else false
+ */
+bool spdk_mutex_held(struct spdk_mutex *smutex);
+
 #ifdef __cplusplus
 }
 #endif
