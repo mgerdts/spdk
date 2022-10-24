@@ -314,6 +314,7 @@ struct spdk_bdev_desc {
 	spdk_bdev_io_timeout_cb	cb_fn;
 	void			*cb_arg;
 	struct spdk_poller	*io_timeout_poller;
+	struct bdev_claim	*claim;
 };
 
 struct spdk_bdev_iostat_ctx {
@@ -7000,6 +7001,354 @@ spdk_bdev_module_release_bdev(struct spdk_bdev *bdev)
 
 	spdk_mutex_unlock(&bdev->internal.mutex);
 }
+
+/*
+ * Start claims v2
+ */
+
+static bool
+claim_type_is_v2(enum spdk_bdev_module_claim_type type)
+{
+	switch (type) {
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_ONCE:
+	case SPDK_BDEV_MOD_CLAIM_READ_ONLY_MANY:
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY:
+		return true;
+	default:
+		break;
+	}
+	return false;
+}
+
+/* Returns true if taking a claim with desc->write == false should make the descriptor writable. */
+static bool
+claim_type_promotes_to_write(enum spdk_bdev_module_claim_type type)
+{
+	switch (type) {
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_ONCE:
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY:
+		return true;
+	default:
+		break;
+	}
+	return false;
+}
+
+void
+spdk_bdev_module_claim_opts_init(struct spdk_bdev_module_claim_opts *opts, size_t size)
+{
+	if (opts == NULL) {
+		SPDK_ERRLOG("opts should not be NULL\n");
+		assert(opts != NULL);
+		return;
+	}
+	if (size == 0) {
+		SPDK_ERRLOG("size should not be zero\n");
+		assert(size != 0);
+		return;
+	}
+
+	memset(opts, 0, size);
+	opts->opts_size = size;
+
+#define FIELD_OK(field) \
+        offsetof(struct spdk_bdev_module_claim_opts, field) + sizeof(opts->field) <= size
+
+#define SET_FIELD(field, value) \
+        if (FIELD_OK(field)) { \
+                opts->field = value; \
+        } \
+
+	SET_FIELD(shared_claim_key, NULL);
+
+#undef FIELD_OK
+#undef SET_FIELD
+}
+
+static int
+claim_opts_copy(struct spdk_bdev_module_claim_opts *src, struct spdk_bdev_module_claim_opts *dst)
+{
+	if (src->opts_size == 0) {
+		SPDK_ERRLOG("size should not be zero\n");
+		return -1;
+	}
+
+#define FIELD_OK(field) \
+        offsetof(struct spdk_bdev_module_claim_opts, field) + sizeof(src->field) <= src->opts_size
+
+#define SET_FIELD(field) \
+        if (FIELD_OK(field)) { \
+                dst->field = src->field; \
+        } \
+
+	SET_FIELD(shared_claim_key);
+
+	dst->opts_size = src->opts_size;
+
+	/* You should not remove this statement, but need to update the assert statement
+	 * if you add a new field, and also add a corresponding SET_FIELD statement */
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_module_claim_opts) == 16, "Incorrect size");
+
+#undef FIELD_OK
+#undef SET_FIELD
+	return 0;
+}
+
+/* Returns 0 if a read-write-once clain can be taken. */
+static int
+claim_verify_rwo(struct spdk_bdev_desc *desc, enum spdk_bdev_module_claim_type type,
+		 struct spdk_bdev_module_claim_opts *opts, struct spdk_bdev_module *module)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+	struct spdk_bdev_desc *open_desc;
+
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+	assert(type == SPDK_BDEV_MOD_CLAIM_READ_WRITE_ONCE);
+
+	if (opts->shared_claim_key != NULL) {
+		SPDK_ERRLOG("%s: key option not supported with read-write-once claims\n",
+			    bdev->name);
+		return -EINVAL;
+	}
+	if (bdev->internal.claim_type != SPDK_BDEV_MOD_CLAIM_NONE) {
+		log_already_claimed_err(__func__, bdev);
+		return -EBUSY;
+	}
+	if (desc->claim != NULL) {
+		SPDK_NOTICELOG("%s: descriptor already claimed bdev with module %s\n",
+			       bdev->name, desc->claim->module->name);
+		return -EBUSY;
+	}
+	TAILQ_FOREACH(open_desc, &bdev->internal.open_descs, link) {
+		if (desc != open_desc && open_desc->write) {
+			SPDK_NOTICELOG("%s: Cannot obtain read-write-once claim while "
+				       "another descriptor is open for writing\n",
+				       bdev->name);
+			return -EBUSY;
+		}
+	}
+
+	return 0;
+}
+
+/* Returns 0 if a read-only-many claim can be taken. */
+static int
+claim_verify_rom(struct spdk_bdev_desc *desc, enum spdk_bdev_module_claim_type type,
+		 struct spdk_bdev_module_claim_opts *opts, struct spdk_bdev_module *module)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+	struct spdk_bdev_desc *open_desc;
+
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+	assert(type == SPDK_BDEV_MOD_CLAIM_READ_ONLY_MANY);
+
+	if (desc->write) {
+		SPDK_ERRLOG("%s: Cannot obtain read-only-many claim with writable descriptor\n",
+			    bdev->name);
+		return -EINVAL;
+	}
+	if (opts->shared_claim_key != NULL) {
+		SPDK_ERRLOG("%s: key option not supported with read-only-may claims\n", bdev->name);
+		return -EINVAL;
+	}
+	if (bdev->internal.claim_type == SPDK_BDEV_MOD_CLAIM_NONE) {
+		TAILQ_FOREACH(open_desc, &bdev->internal.open_descs, link) {
+			if (open_desc->write) {
+				SPDK_NOTICELOG("%s: Cannot obtain read-only-many claim while "
+					       "another descriptor is open for writing\n",
+					       bdev->name);
+				return -EBUSY;
+			}
+		}
+		return 0;
+	}
+
+	if (desc->claim != NULL && desc->claim->module != module) {
+		SPDK_NOTICELOG("%s: descriptor already claimed bdev with module %s, cannot "
+			       "claim with module %s\n", bdev->name, desc->claim->module->name,
+			       module->name);
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
+/* Returns 0 if a read-write-many claim can be taken. */
+static int
+claim_verify_rwm(struct spdk_bdev_desc *desc, enum spdk_bdev_module_claim_type type,
+		 struct spdk_bdev_module_claim_opts *opts, struct spdk_bdev_module *module)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+	struct spdk_bdev_desc *open_desc;
+
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+	assert(type == SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY);
+
+	if (opts->shared_claim_key == NULL) {
+		SPDK_ERRLOG("%s: shared_claim_key option required with read-write-may claims\n",
+			    bdev->name);
+		return -EINVAL;
+	}
+	switch (bdev->internal.claim_type) {
+	case SPDK_BDEV_MOD_CLAIM_NONE:
+		TAILQ_FOREACH(open_desc, &bdev->internal.open_descs, link) {
+			if (open_desc->write) {
+				SPDK_NOTICELOG("%s: Cannot obtain read-write-many claim while "
+					       "another descriptor is open for writing without a "
+					       "claim\n", bdev->name);
+				return -EBUSY;
+			}
+		}
+		break;
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY:
+		if (opts->shared_claim_key != bdev->internal.claim.v2.key) {
+			SPDK_NOTICELOG("%s: bdev already claimed read-write-many with another "
+				       "key\n", bdev->name);
+			log_already_claimed_err(__func__, bdev);
+			return -EBUSY;
+		}
+		break;
+	default:
+		log_already_claimed_err(__func__, bdev);
+		break;
+	}
+
+	if (desc->claim != NULL && desc->claim->module != module) {
+		SPDK_NOTICELOG("%s: descriptor already claimed bdev with module %s, cannot "
+			       "claim with module %s\n", bdev->name, desc->claim->module->name,
+			       module->name);
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
+/* Updates desc and its bdev with a v2 claim. */
+static int
+claim_bdev(struct spdk_bdev_desc *desc, enum spdk_bdev_module_claim_type type,
+	   struct spdk_bdev_module_claim_opts *opts, struct spdk_bdev_module *module)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+	struct bdev_claim *claim;
+
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+	assert(claim_type_is_v2(type));
+
+	if (desc->claim == NULL) {
+		claim = calloc(1, sizeof(*desc->claim));
+		if (claim == NULL) {
+			SPDK_ERRLOG("%s: out of memory while allocating claim\n", bdev->name);
+			return -ENOMEM;
+		}
+		claim->module = module;
+		claim->desc = desc;
+	}
+
+	if (bdev->internal.claim_type == SPDK_BDEV_MOD_CLAIM_NONE) {
+		assert(desc->claim == NULL);
+		bdev->internal.claim_type = type;
+		TAILQ_INIT(&bdev->internal.claim.v2.claims);
+		bdev->internal.claim.v2.key = opts->shared_claim_key;
+	}
+	assert(type == bdev->internal.claim_type);
+
+	if (desc->claim == NULL) {
+		desc->claim = claim;
+		TAILQ_INSERT_TAIL(&bdev->internal.claim.v2.claims, claim, link);
+	}
+	desc->claim->count++;
+	if (!desc->write && claim_type_promotes_to_write(type)) {
+		desc->write = true;
+	}
+
+	return 0;
+}
+
+int
+spdk_bdev_module_claim_bdev_desc(struct spdk_bdev_desc *desc,
+				 enum spdk_bdev_module_claim_type type,
+				 struct spdk_bdev_module_claim_opts *_opts,
+				 struct spdk_bdev_module *module)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+	struct spdk_bdev_module_claim_opts opts;
+	int rc = 0;
+
+	if (_opts == NULL) {
+		spdk_bdev_module_claim_opts_init(&opts, sizeof(opts));
+	} else if (claim_opts_copy(_opts, &opts) != 0) {
+		return -EINVAL;
+	}
+
+	spdk_mutex_lock(&bdev->internal.mutex);
+
+	if (bdev->internal.claim_type != SPDK_BDEV_MOD_CLAIM_NONE &&
+	    bdev->internal.claim_type != type) {
+		log_already_claimed_err(__func__, bdev);
+		spdk_mutex_unlock(&bdev->internal.mutex);
+		return -EBUSY;
+	}
+
+	switch (type) {
+	case SPDK_BDEV_MOD_CLAIM_EXCL_WRITE:
+		spdk_mutex_unlock(&bdev->internal.mutex);
+		return spdk_bdev_module_claim_bdev(bdev, desc, module);
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_ONCE:
+		rc = claim_verify_rwo(desc, type, &opts, module);
+		break;
+	case SPDK_BDEV_MOD_CLAIM_READ_ONLY_MANY:
+		rc = claim_verify_rom(desc, type, &opts, module);
+		break;
+	case SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY:
+		rc = claim_verify_rwm(desc, type, &opts, module);
+		break;
+	default:
+		SPDK_ERRLOG("%s: claim type %d not supported\n", bdev->name, type);
+		rc = -ENOTSUP;
+	}
+
+	if (rc == 0) {
+		rc = claim_bdev(desc, type, &opts, module);
+	}
+
+	spdk_mutex_unlock(&bdev->internal.mutex);
+	return rc;
+}
+
+void
+spdk_bdev_module_release_bdev_desc(struct spdk_bdev_desc *desc)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+
+	spdk_mutex_lock(&bdev->internal.mutex);
+
+	if (bdev->internal.claim_type == SPDK_BDEV_MOD_CLAIM_EXCL_WRITE) {
+		spdk_mutex_unlock(&bdev->internal.mutex);
+		return spdk_bdev_module_release_bdev(bdev);
+	}
+
+	assert(desc->claim != NULL);
+	assert(desc->claim->count > 0);
+	assert(claim_type_is_v2(bdev->internal.claim_type));
+
+	desc->claim->count--;
+	if (desc->claim->count == 0) {
+		TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
+		free(desc->claim);
+		desc->claim = NULL;
+
+		if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
+			memset(&bdev->internal.claim, 0, sizeof(bdev->internal.claim));
+			bdev->internal.claim_type = SPDK_BDEV_MOD_CLAIM_NONE;
+		}
+	}
+
+	spdk_mutex_unlock(&bdev->internal.mutex);
+}
+
+/*
+ * End claims v2
+ */
 
 struct spdk_bdev *
 spdk_bdev_desc_get_bdev(struct spdk_bdev_desc *desc)

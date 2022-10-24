@@ -167,10 +167,79 @@ enum spdk_bdev_module_claim_type {
 	SPDK_BDEV_MOD_CLAIM_NONE = 0,
 
 	/**
-	 * Exclusive writer.
+	 * Exclusive writer, with allowances for legacy behavior.  This matches the behavior of
+	 * `spdk_bdev_module_claim_bdev()` as of SPDK 22.09, which is deprecated.  This claim type
+	 * is deprecated.
 	 */
-	SPDK_BDEV_MOD_CLAIM_EXCL_WRITE
+	SPDK_BDEV_MOD_CLAIM_EXCL_WRITE,
+
+	/**
+	 * The descriptor passed with this claim request is the only writer. Other claimless readers
+	 * are allowed.
+	 */
+	SPDK_BDEV_MOD_CLAIM_READ_WRITE_ONCE,
+
+	/**
+	 * Any number of readers, no writers. Readers without a claim are allowed.
+	 */
+	SPDK_BDEV_MOD_CLAIM_READ_ONLY_MANY,
+
+	/**
+	 * Any number of writers with matching shared_claim_key. After the first writer establishes
+	 * a claim, future aspiring writers should open read-only and pass the read-only descriptor.
+	 * If the shared claim is granted to the aspiring writer, the descriptor will be upgraded to
+	 * read-write.
+	 */
+	SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY
 };
+
+/** Options used when requesting a claim. */
+struct spdk_bdev_module_claim_opts {
+	/* Size of this structure in bytes */
+	size_t opts_size;
+	/**
+	 * Used with SPDK_BDEV_MOD_CLAIM_READ_WRITE_MANY claims.
+	 */
+	void *shared_claim_key;
+};
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_module_claim_opts) == 16, "Incorrect size");
+
+/**
+ * Initialize bdev module claim options structure.
+ *
+ * \param opts The structure to initialize.
+ * \param size The size of *opts.
+ */
+void spdk_bdev_module_claim_opts_init(struct spdk_bdev_module_claim_opts *opts, size_t size);
+
+/**
+ * Claim the bdev referenced by the open descriptor. This interface is typically used for
+ * establishing shared claims.
+ *
+ * \param desc An open bdev descriptor. Some claim types may upgrade this from read-only to
+ * read-write.
+ * \param type The type of claim to establish.
+ * \param opts NULL or options required by the particular claim type.
+ * \param module The bdev module making this claim.
+ * \return 0 on success
+ * \return -ENOMEM if insufficient memory to track the claim
+ * \return -EBUSY if the claim cannot be granted due to a conflict
+ * \return -EINVAL if the claim type required options that were not passed or required parameters
+ * were NULL.
+ */
+int spdk_bdev_module_claim_bdev_desc(struct spdk_bdev_desc *desc,
+				     enum spdk_bdev_module_claim_type type,
+				     struct spdk_bdev_module_claim_opts *opts,
+				     struct spdk_bdev_module *module);
+
+/**
+ * Release a claim obtained with the specified descriptor. Each call to
+ * spdk_bdev_module_claim_bdev_desc() should be matched with a call to this function. Alternatively,
+ * spdk_bdev_close() will release all claims associated with the descriptor.
+ *
+ * \param desc A descriptor previously passed to spdk_bdev_module_claim_desc().
+ */
+void spdk_bdev_module_release_bdev_desc(struct spdk_bdev_desc *desc);
 
 /**
  * Called by a bdev module to lay exclusive claim to a bdev.
@@ -294,6 +363,13 @@ struct spdk_bdev_name {
 struct spdk_bdev_alias {
 	struct spdk_bdev_name alias;
 	TAILQ_ENTRY(spdk_bdev_alias) tailq;
+};
+
+struct bdev_claim {
+	struct spdk_bdev_module *module;
+	struct spdk_bdev_desc *desc;
+	uint32_t count;
+	TAILQ_ENTRY(bdev_claim) link;
 };
 
 typedef TAILQ_HEAD(, spdk_bdev_io) bdev_io_tailq_t;
@@ -532,6 +608,12 @@ struct spdk_bdev {
 				 */
 				struct spdk_bdev_module		*module;
 			} v1;
+			/* Used with all other claim types. */
+			struct {
+				TAILQ_HEAD(, bdev_claim)	claims;
+				/* See spdk_bdev_module_claim_opts.shared_claim_key */
+				void				*key;
+			} v2;
 		} claim;
 
 		/** Callback function that will be called after bdev destruct is completed. */
