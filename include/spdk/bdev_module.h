@@ -161,6 +161,17 @@ struct spdk_bdev_module {
 	} internal;
 };
 
+/** Claim types */
+enum spdk_bdev_module_claim_type {
+	/* Not claimed. Must not be used to request a claim. */
+	SPDK_BDEV_MOD_CLAIM_NONE = 0,
+
+	/**
+	 * Exclusive writer.
+	 */
+	SPDK_BDEV_MOD_CLAIM_EXCL_WRITE
+};
+
 /**
  * Called by a bdev module to lay exclusive claim to a bdev.
  *
@@ -507,6 +518,9 @@ struct spdk_bdev {
 		 * multiple internal fields.
 		 */
 		enum spdk_bdev_status status;
+
+		/** The claim type: used in conjunction with claim. */
+		enum spdk_bdev_module_claim_type claim_type;
 
 		/** Which module has claimed this bdev */
 		union {
