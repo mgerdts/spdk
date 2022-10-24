@@ -6711,6 +6711,18 @@ bdev_start_qos(struct spdk_bdev *bdev)
 	return 0;
 }
 
+static void
+log_already_claimed_err(const char *detail, struct spdk_bdev *bdev)
+{
+	struct spdk_bdev_module *module;
+
+	assert(bdev->internal.claim_type == SPDK_BDEV_MOD_CLAIM_EXCL_WRITE);
+
+	module = bdev->internal.claim.v1.module;
+	SPDK_ERRLOG("%s: bdev %s already claimed by module %s\n",
+		    detail, bdev->name, module->name);
+}
+
 static int
 bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 {
@@ -6738,8 +6750,7 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 	}
 
 	if (write && bdev->internal.claim_type != SPDK_BDEV_MOD_CLAIM_NONE) {
-		SPDK_ERRLOG("Could not open %s - %s module already claimed it\n",
-			    bdev->name, bdev->internal.claim.v1.module->name);
+		log_already_claimed_err(__func__, bdev);
 		spdk_mutex_unlock(&bdev->internal.mutex);
 		return -EPERM;
 	}
@@ -6962,8 +6973,7 @@ spdk_bdev_module_claim_bdev(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 	spdk_mutex_lock(&bdev->internal.mutex);
 
 	if (bdev->internal.claim_type != SPDK_BDEV_MOD_CLAIM_NONE) {
-		SPDK_ERRLOG("bdev %s already claimed by module %s\n", bdev->name,
-			    bdev->internal.claim.v1.module->name);
+		log_already_claimed_err(__func__, bdev);
 		spdk_mutex_unlock(&bdev->internal.mutex);
 		return -EPERM;
 	}
