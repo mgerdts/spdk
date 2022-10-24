@@ -3133,6 +3133,8 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 	struct spdk_bdev_qos	*qos = bdev->internal.qos;
 	int			i;
 
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+
 	/* Rate limiting on this bdev enabled */
 	if (qos) {
 		if (qos->ch == NULL) {
@@ -6478,6 +6480,9 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
 	int			rc = 0;
 	char			uuid[SPDK_UUID_STRING_LEN];
 
+	assert(spdk_mutex_held(&g_bdev_mgr.mutex));
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+
 	/* Notify each descriptor about hotremoval */
 	TAILQ_FOREACH_SAFE(desc, &bdev->internal.open_descs, link, tmp) {
 		rc = -EBUSY;
@@ -6776,6 +6781,7 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 {
 	int rc;
 
+	assert(spdk_mutex_held(&g_bdev_mgr.mutex));
 	spdk_mutex_lock(&bdev->internal.mutex);
 	spdk_mutex_lock(&desc->mutex);
 
@@ -6842,7 +6848,9 @@ bdev_register_finished(void *arg)
 
 	spdk_notify_send("bdev_register", spdk_bdev_get_name(bdev));
 
+	spdk_mutex_lock(&g_bdev_mgr.mutex);
 	bdev_close(bdev, desc);
+	spdk_mutex_unlock(&g_bdev_mgr.mutex);
 }
 
 int
