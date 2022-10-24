@@ -487,8 +487,14 @@ struct spdk_bdev {
 		/** True if the state of the QoS is being modified */
 		bool qos_mod_in_progress;
 
-		/** Mutex protecting claimed */
-		pthread_mutex_t mutex;
+		/**
+		 * SPDK mutex protecting many of the internal fields of this structure. If multiple
+		 * locks need to be held, the following order must be used:
+		 *   g_bdev_mgr.mutex
+		 *   bdev->internal.mutex
+		 *   bdev_desc->mutex
+		 */
+		struct spdk_mutex mutex;
 
 		/** The bdev status */
 		enum spdk_bdev_status status;
@@ -1387,7 +1393,7 @@ void spdk_bdev_get_current_qd(struct spdk_bdev *bdev,
  *  Macro used to register module for later initialization.
  */
 #define SPDK_BDEV_MODULE_REGISTER(name, module) \
-static void __attribute__((constructor)) _spdk_bdev_module_register_##name(void) \
+static void __attribute__((constructor (102))) _spdk_bdev_module_register_##name(void) \
 { \
 	spdk_bdev_module_list_add(module); \
 }
