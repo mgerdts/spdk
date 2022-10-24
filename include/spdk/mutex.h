@@ -6,8 +6,8 @@
  * pthread lock wrappers
  */
 
-#ifndef SPDK_UTIL_H
-#define SPDK_UTIL_H
+#ifndef SPDK_MUTEX_H
+#define SPDK_MUTEX_H
 
 #include "spdk/stdinc.h"
 
@@ -35,7 +35,7 @@ spdk_mutex_init(pthread_mutex_t *mutex)
 	if (rc != 0) {
 		return rc;
 	}
-	return pthread_mutex_init(&mutex, &attr);
+	return pthread_mutex_init(mutex, &attr);
 }
 
 /**
@@ -49,7 +49,7 @@ spdk_mutex_lock(pthread_mutex_t *mutex)
 {
 	int rc;
 
-	rc = pthread_mutex_lock(&mutex);
+	rc = pthread_mutex_lock(mutex);
 	assert(rc == 0);
 }
 
@@ -64,7 +64,7 @@ spdk_mutex_unlock(pthread_mutex_t *mutex)
 {
 	int rc;
 
-	rc = pthread_mutex_unlock(&mutex);
+	rc = pthread_mutex_unlock(mutex);
 	assert(rc == 0);
 }
 
@@ -79,8 +79,8 @@ spdk_mutex_held(pthread_mutex_t *mutex)
 {
 	int rc;
 
-	rc = pthread_mutex_lock(&mutex);
-	if (spdk_likely(rc == EDEADLK)) {
+	rc = pthread_mutex_lock(mutex);
+	if (rc == EDEADLK) {
 		return true;
 	}
 	spdk_mutex_unlock(mutex);
