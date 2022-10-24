@@ -508,12 +508,17 @@ struct spdk_bdev {
 		 */
 		enum spdk_bdev_status status;
 
-		/**
-		 * Pointer to the module that has claimed this bdev for purposes of creating virtual
-		 * bdevs on top of it. Set to NULL if the bdev has not been claimed. Must hold mutex
-		 * on all updates.
-		 */
-		struct spdk_bdev_module *claim_module;
+		/** Which module has claimed this bdev */
+		union {
+			struct {
+				/**
+				 * Pointer to the module that has claimed this bdev for purposes of
+				 * creating virtual bdevs on top of it. Set to NULL if the bdev has
+				 * not been claimed.
+				 */
+				struct spdk_bdev_module		*module;
+			} v1;
+		} claim;
 
 		/** Callback function that will be called after bdev destruct is completed. */
 		spdk_bdev_unregister_cb	unregister_cb;

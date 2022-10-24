@@ -774,7 +774,7 @@ claim_test(void)
 
 	rc = spdk_bdev_module_claim_bdev(bdev, NULL, &bdev_ut_if);
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(bdev->internal.claim_module == &bdev_ut_if);
+	CU_ASSERT(bdev->internal.claim.v1.module == &bdev_ut_if);
 
 	/* There should be only one open descriptor and it should still be ro */
 	count = 0;
@@ -789,7 +789,7 @@ claim_test(void)
 	spdk_bdev_module_release_bdev(bdev);
 	rc = spdk_bdev_module_claim_bdev(bdev, desc, &bdev_ut_if);
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(bdev->internal.claim_module == &bdev_ut_if);
+	CU_ASSERT(bdev->internal.claim.v1.module == &bdev_ut_if);
 
 	/* There should be only one open descriptor and it should be rw */
 	count = 0;
