@@ -458,6 +458,8 @@ bdev_get_by_name(const char *bdev_name)
 	struct spdk_bdev_name find;
 	struct spdk_bdev_name *res;
 
+	assert(spdk_mutex_held(&g_bdev_mgr.mutex));
+
 	find.name = (char *)bdev_name;
 	res = RB_FIND(bdev_name_tree, &g_bdev_mgr.bdev_names, &find);
 	if (res != NULL) {
@@ -3668,6 +3670,7 @@ bdev_name_add(struct spdk_bdev_name *bdev_name, struct spdk_bdev *bdev, const ch
 static void
 bdev_name_del_unsafe(struct spdk_bdev_name *bdev_name)
 {
+	assert(spdk_mutex_held(&g_bdev_mgr.mutex));
 	RB_REMOVE(bdev_name_tree, &g_bdev_mgr.bdev_names, bdev_name);
 	free(bdev_name->name);
 }
