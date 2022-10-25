@@ -496,7 +496,10 @@ struct spdk_bdev {
 		 */
 		struct spdk_mutex mutex;
 
-		/** The bdev status */
+		/**
+		 * The bdev status. Must hold mutex on all updates and when conditionals use
+		 * multiple internal fields.
+		 */
 		enum spdk_bdev_status status;
 
 		/**
@@ -511,7 +514,9 @@ struct spdk_bdev {
 		/** Unregister call context */
 		void *unregister_ctx;
 
-		/** List of open descriptors for this block device. */
+		/**
+		 * List of open descriptors for this block device. Must hold mutex while accessing.
+		 */
 		TAILQ_HEAD(, spdk_bdev_desc) open_descs;
 
 		/**
