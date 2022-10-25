@@ -6052,10 +6052,14 @@ bdev_reset_complete(struct spdk_io_channel_iter *i, int status)
 
 	bdev_io_complete(bdev_io);
 
+	spdk_mutex_lock(&bdev->internal.mutex);
 	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING &&
 	    TAILQ_EMPTY(&bdev->internal.open_descs)) {
+		spdk_mutex_unlock(&bdev->internal.mutex);
 		spdk_io_device_unregister(__bdev_to_io_dev(bdev), bdev_destroy_cb);
+		spdk_mutex_lock(&bdev->internal.mutex);
 	}
+	spdk_mutex_unlock(&bdev->internal.mutex);
 }
 
 static void
