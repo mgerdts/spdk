@@ -145,6 +145,11 @@ struct spdk_bdev_module {
 	 */
 	struct __bdev_module_internal_fields {
 		/**
+		 * Protects action_in_progress. Take no locks while holding this one.
+		 */
+		pthread_mutex_t mutex;
+
+		/**
 		 * Count of bdev inits/examinations in progress. Used by generic bdev
 		 * layer and must not be modified by bdev modules.
 		 *
