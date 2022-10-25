@@ -514,6 +514,10 @@ struct spdk_bdev {
 		/** List of open descriptors for this block device. */
 		TAILQ_HEAD(, spdk_bdev_desc) open_descs;
 
+		/**
+		 * List node for g_bdev_mgmr.bdevs. Modify this list only while holding
+		 * g_bdev_mgr.mutex.
+		 */
 		TAILQ_ENTRY(spdk_bdev) link;
 
 		/** points to a reset bdev_io if one is in progress. */

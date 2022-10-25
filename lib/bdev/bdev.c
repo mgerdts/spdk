@@ -1775,6 +1775,8 @@ bdev_finish_unregister_bdevs_iter(void *cb_arg, int bdeverrno)
 {
 	struct spdk_bdev *bdev = cb_arg;
 
+	assert(!spdk_mutex_held(&g_bdev_mgr.mutex));
+
 	if (bdeverrno && bdev) {
 		SPDK_WARNLOG("Unable to unregister bdev '%s' during spdk_bdev_finish()\n",
 			     bdev->name);
@@ -1784,7 +1786,9 @@ bdev_finish_unregister_bdevs_iter(void *cb_arg, int bdeverrno)
 		 *  bdev; try to continue by manually removing this bdev from the list and continue
 		 *  with the next bdev in the list.
 		 */
+		spdk_mutex_lock(&g_bdev_mgr.mutex);
 		TAILQ_REMOVE(&g_bdev_mgr.bdevs, bdev, internal.link);
+		spdk_mutex_unlock(&g_bdev_mgr.mutex);
 	}
 
 	if (TAILQ_EMPTY(&g_bdev_mgr.bdevs)) {
@@ -6409,7 +6413,9 @@ bdev_register(struct spdk_bdev *bdev)
 	spdk_mutex_init(&bdev->internal.mutex);
 
 	SPDK_DEBUGLOG(bdev, "Inserting bdev %s into list\n", bdev->name);
+	spdk_mutex_lock(&g_bdev_mgr.mutex);
 	TAILQ_INSERT_TAIL(&g_bdev_mgr.bdevs, bdev, internal.link);
+	spdk_mutex_unlock(&g_bdev_mgr.mutex);
 
 	return 0;
 }
