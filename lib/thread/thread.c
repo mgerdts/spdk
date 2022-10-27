@@ -2738,6 +2738,22 @@ spdk_interrupt_mode_is_enabled(void)
 #undef spdk_mutex_unlock
 #endif
 
+static void
+handle_mutex_error_default(const char *funcname, struct spdk_mutex *smutex, int err)
+{
+	SPDK_ERRLOG("%s(%p) failed with error %d. Last successful caller at line %u. Aborting\n",
+		    funcname, smutex, err, smutex->line);
+	abort();
+}
+
+static spdk_mutex_error_handler_fn handle_mutex_error = handle_mutex_error_default;
+
+void
+spdk_mutex_set_error_handler(spdk_mutex_error_handler_fn handler)
+{
+	handle_mutex_error = handler;
+}
+
 int
 spdk_mutex_init(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
@@ -2745,20 +2761,24 @@ spdk_mutex_init(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 	int rc;
 
 	rc = pthread_mutexattr_init(&attr);
-	if (rc != 0) {
+	if (spdk_unlikely(rc != 0)) {
+		handle_mutex_error(__func__, smutex, rc);
 		return rc;
 	}
 	rc = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
-	if (rc != 0) {
+	if (spdk_unlikely(rc != 0)) {
+		handle_mutex_error(__func__, smutex, rc);
 		return rc;
 	}
 	rc = pthread_mutex_init(&smutex->mutex, &attr);
-#ifdef DEBUG
-	if (rc == 0) {
-		smutex->line = line;
+	if (spdk_unlikely(rc != 0)) {
+		handle_mutex_error(__func__, smutex, rc);
+		return rc;
 	}
+#ifdef DEBUG
+	smutex->line = line;
 #endif
-	return rc;
+	return 0;
 }
 
 int
@@ -2767,15 +2787,19 @@ spdk_mutex_destroy(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 	int rc;
 
 	rc = pthread_mutex_destroy(&smutex->mutex);
+	if (spdk_unlikely(rc != 0)) {
+		handle_mutex_error(__func__, smutex, rc);
+		return rc;
+	}
 #ifdef DEBUG
 	if (rc == 0) {
 		smutex->line = line;
 	}
 #endif
-	return rc;
+	return 0;
 }
 
-void
+int
 spdk_mutex_lock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
 	int rc;
@@ -2791,25 +2815,26 @@ spdk_mutex_lock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 
 	rc = pthread_mutex_lock(&smutex->mutex);
 	if (spdk_unlikely(rc != 0)) {
-		SPDK_ERRLOG("lock failed for errorcheck pthread_mutex_t %p\n", &smutex->mutex);
-		abort();
+		handle_mutex_error(__func__, smutex, rc);
+		return rc;
 	}
 #ifdef DEBUG
 	smutex->thread = spdk_get_thread();
 	smutex->thread->lock_count++;
 	smutex->line = line;
 #endif
+	return 0;
 }
 
-void
+int
 spdk_mutex_unlock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
 	int rc;
 
 	rc = pthread_mutex_unlock(&smutex->mutex);
 	if (spdk_unlikely(rc != 0)) {
-		SPDK_ERRLOG("unlock failed for errorcheck pthread_mutex_t %p\n", &smutex->mutex);
-		abort();
+		handle_mutex_error(__func__, smutex, rc);
+		return rc;
 	}
 #ifdef DEBUG
 	assert(smutex->thread == spdk_get_thread());
@@ -2818,6 +2843,7 @@ spdk_mutex_unlock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 	smutex->thread = NULL;
 	smutex->line = line;
 #endif
+	return 0;
 }
 
 bool
@@ -2829,12 +2855,17 @@ spdk_mutex_held(struct spdk_mutex *smutex)
 	if (rc == EDEADLK) {
 		assert(smutex->thread == spdk_get_thread());
 		return true;
-	} else if (rc != 0) {
-		SPDK_ERRLOG("lock failed for errorcheck pthread_mutex_t %p\n", &smutex->mutex);
+	}
+	/* There is no safe return with either of the following errors. Force abort(). */
+	if (rc != 0) {
+		handle_mutex_error(__func__, smutex, rc);
 		abort();
 	}
 	rc = pthread_mutex_unlock(&smutex->mutex);
-	assert(rc == 0);
+	if (rc != 0) {
+		handle_mutex_error(__func__, smutex, rc);
+		abort();
+	}
 	return false;
 }
 

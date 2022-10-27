@@ -878,10 +878,33 @@ struct spdk_mutex {
 #endif
 
 /**
+ * A function that will be called in the error path of spdk_mutex_*() functions that operate on SPDK
+ * mutexes.
+ *
+ * \param caller The name of the function in which the error was encountered.
+ * \param smutex The SPDK mutex that encountered the problem
+ * \param err The error (positive errno) that was encountered.
+ */
+typedef void (*spdk_mutex_error_handler_fn)(const char *caller, struct spdk_mutex *smutex, int err);
+
+/**
+ * Set an error handler for when SPDK mutexes encounter errors. The default handler will log a
+ * message then call abort(). If a custom handler is used and it does not cause the program to exit,
+ * all uses of spdk_mutex_init(), spdk_mutex_destroy(), spdk_mutex_lock(), and spdk_mutex_unlock()
+ * should check return values just as if the corresponding pthread_*() functions were called with a
+ * PTHREAD_MUTEX_ERRORCHECK mutex.
+ *
+ * \param handler A function to call when SPDK mutexes encounter errors. If NULL is passed, the
+ * default handler is installed.
+ */
+void spdk_mutex_set_error_handler(spdk_mutex_error_handler_fn handler);
+
+/**
  * Initialize an spdk_mutex.
  *
  * \param smutex The SPDK mutex to initialize.
- * \return 0 on success or error returned from pthread_mutexattr_init() or pthread_mutex_init().
+ * \return If the spdk_mutex_error_handler_fn function does not abort on error detection, this is
+ * the return value from pthread_mutexattr_init() or pthread_mutex_init().
  */
 int spdk_mutex_init(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
@@ -889,7 +912,8 @@ int spdk_mutex_init(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
  * Destroy an spdk_mutex.
  *
  * \param smutex The SPDK mutex to initialize.
- * \return 0 on success or error returned from pthred_mutex_destroy().
+ * \return If the spdk_mutex_error_handler_fn function does not abort on error detection, this is
+ * the return value from pthread_mutex_destroy().
  */
 int spdk_mutex_destroy(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
@@ -897,15 +921,19 @@ int spdk_mutex_destroy(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
  * Lock an SPDK mutex.
  *
  * \param smutex An SPDK mutex.
+ * \return If the spdk_mutex_error_handler_fn function does not abort on error detection, this is
+ * the return value from pthread_mutex_lock().
  */
-void spdk_mutex_lock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
+int spdk_mutex_lock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
 /**
  * Unlock an SPDK mutex.
  *
  * \param smutex An SPDK mutex.
+ * \return If the spdk_mutex_error_handler_fn function does not abort on error detection, this is
+ * the return value from pthread_mutex_unlock().
  */
-void spdk_mutex_unlock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
+int spdk_mutex_unlock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
 /**
  * Determine if the caller holds this SPDK mutex.

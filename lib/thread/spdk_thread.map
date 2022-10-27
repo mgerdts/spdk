@@ -55,6 +55,7 @@
 	spdk_thread_get_interrupt_fd;
 	spdk_interrupt_mode_enable;
 	spdk_interrupt_mode_is_enabled;
+	spdk_mutex_set_error_handler;
 	spdk_mutex_init;
 	spdk_mutex_destroy;
 	spdk_mutex_lock;
