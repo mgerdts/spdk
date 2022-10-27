@@ -6607,10 +6607,8 @@ spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn, void
 		return;
 	}
 
-	spdk_mutex_lock(&g_bdev_mgr.mutex);
 	if (bdev->internal.status == SPDK_BDEV_STATUS_UNREGISTERING ||
 	    bdev->internal.status == SPDK_BDEV_STATUS_REMOVING) {
-		spdk_mutex_unlock(&g_bdev_mgr.mutex);
 		if (cb_fn) {
 			cb_fn(cb_arg, -EBUSY);
 		}
@@ -6622,7 +6620,6 @@ spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn, void
 	bdev->internal.unregister_cb = cb_fn;
 	bdev->internal.unregister_ctx = cb_arg;
 	spdk_mutex_unlock(&bdev->internal.mutex);
-	spdk_mutex_unlock(&g_bdev_mgr.mutex);
 
 	spdk_bdev_set_qd_sampling_period(bdev, 0);
 
