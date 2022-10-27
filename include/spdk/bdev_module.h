@@ -538,7 +538,7 @@ struct spdk_bdev {
 		/** poller for tracking the queue_depth of a device, NULL if not tracking */
 		struct spdk_poller *qd_poller;
 
-		/** open descriptor to use qd_poller safely */
+		/** Open descriptor to use qd_poller safely. Must hold mutex while updating. */
 		struct spdk_bdev_desc *qd_desc;
 
 		/** period at which we poll for queue depth information */

@@ -4062,23 +4062,34 @@ bdev_update_qd_sampling_period(void *ctx)
 {
 	struct spdk_bdev *bdev = ctx;
 
+	assert(spdk_get_thread() == bdev->internal.qd_desc->thread);
+
 	if (bdev->internal.period == bdev->internal.new_period) {
 		return;
 	}
 
 	if (bdev->internal.qd_poll_in_progress) {
+		/* The update will happen when the next queue depth measurement completes. */
 		return;
 	}
 
+	spdk_poller_unregister(&bdev->internal.qd_poller);
+
+	spdk_mutex_lock(&bdev->internal.mutex);
 	bdev->internal.period = bdev->internal.new_period;
 
-	spdk_poller_unregister(&bdev->internal.qd_poller);
 	if (bdev->internal.period != 0) {
+		spdk_mutex_unlock(&bdev->internal.mutex);
 		bdev->internal.qd_poller = SPDK_POLLER_REGISTER(bdev_calculate_measured_queue_depth,
 					   bdev, bdev->internal.period);
 	} else {
-		spdk_bdev_close(bdev->internal.qd_desc);
+		struct spdk_bdev_desc *desc;
+
+		desc = bdev->internal.qd_desc;
 		bdev->internal.qd_desc = NULL;
+		spdk_mutex_unlock(&bdev->internal.mutex);
+
+		spdk_bdev_close(desc);
 	}
 }
 
@@ -4091,9 +4102,13 @@ _tmp_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void 
 void
 spdk_bdev_set_qd_sampling_period(struct spdk_bdev *bdev, uint64_t period)
 {
+	struct spdk_bdev_desc *desc = NULL;
 	int rc;
 
+	spdk_mutex_lock(&bdev->internal.mutex);
+
 	if (bdev->internal.new_period == period) {
+		spdk_mutex_unlock(&bdev->internal.mutex);
 		return;
 	}
 
@@ -4104,20 +4119,33 @@ spdk_bdev_set_qd_sampling_period(struct spdk_bdev *bdev, uint64_t period)
 
 		spdk_thread_send_msg(bdev->internal.qd_desc->thread,
 				     bdev_update_qd_sampling_period, bdev);
+		spdk_mutex_unlock(&bdev->internal.mutex);
+		return;
+	}
+
+	/* Temporarily release the mutex because bdev_open() needs to take it. */
+	spdk_mutex_unlock(&bdev->internal.mutex);
+	rc = spdk_bdev_open_ext(spdk_bdev_get_name(bdev), false, _tmp_bdev_event_cb, NULL, &desc);
+	if (rc != 0) {
+		return;
+	}
+	spdk_mutex_lock(&bdev->internal.mutex);
+
+	if (bdev->internal.qd_desc != NULL) {
+		/* Lost a race with another thread that was doing an update. */
+		spdk_mutex_unlock(&bdev->internal.mutex);
+		spdk_bdev_close(desc);
 		return;
 	}
 
 	assert(bdev->internal.period == 0);
 
-	rc = spdk_bdev_open_ext(spdk_bdev_get_name(bdev), false, _tmp_bdev_event_cb,
-				NULL, &bdev->internal.qd_desc);
-	if (rc != 0) {
-		return;
-	}
-
+	bdev->internal.qd_desc = desc;
 	bdev->internal.period = period;
 	bdev->internal.qd_poller = SPDK_POLLER_REGISTER(bdev_calculate_measured_queue_depth,
 				   bdev, period);
+
+	spdk_mutex_unlock(&bdev->internal.mutex);
 }
 
 struct bdev_get_current_qd_ctx {
