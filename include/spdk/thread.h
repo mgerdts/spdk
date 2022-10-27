@@ -859,9 +859,23 @@ bool spdk_interrupt_mode_is_enabled(void);
  */
 struct spdk_mutex {
 	pthread_mutex_t	mutex;
-	/* Only used with DEBUG but always defined for constant structure size. */
+
+	/*
+	 * The following fields are only used with DEBUG but always defined for consistent
+	 * structure size between debug and non-debug.
+	 */
+
+	/* The SPDK thread holding this SPDK mutex. */
 	struct spdk_thread *thread;
+	/* The line number of the caller that last altered this lock. */
+	uint32_t line;
 };
+
+#ifdef DEBUG
+#define SPDK_DEBUG_MUTEX_LINE_ARG , uint32_t line
+#else
+#define SPDK_DEBUG_MUTEX_LINE_ARG
+#endif
 
 /**
  * Initialize an spdk_mutex.
@@ -869,7 +883,7 @@ struct spdk_mutex {
  * \param smutex The SPDK mutex to initialize.
  * \return 0 on success or error returned from pthread_mutexattr_init() or pthread_mutex_init().
  */
-int spdk_mutex_init(struct spdk_mutex *smutex);
+int spdk_mutex_init(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
 /**
  * Destroy an spdk_mutex.
@@ -877,21 +891,21 @@ int spdk_mutex_init(struct spdk_mutex *smutex);
  * \param smutex The SPDK mutex to initialize.
  * \return 0 on success or error returned from pthred_mutex_destroy().
  */
-int spdk_mutex_destroy(struct spdk_mutex *smutex);
+int spdk_mutex_destroy(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
 /**
  * Lock an SPDK mutex.
  *
  * \param smutex An SPDK mutex.
  */
-void spdk_mutex_lock(struct spdk_mutex *smutex);
+void spdk_mutex_lock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
 /**
  * Unlock an SPDK mutex.
  *
  * \param smutex An SPDK mutex.
  */
-void spdk_mutex_unlock(struct spdk_mutex *smutex);
+void spdk_mutex_unlock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG);
 
 /**
  * Determine if the caller holds this SPDK mutex.
@@ -900,6 +914,13 @@ void spdk_mutex_unlock(struct spdk_mutex *smutex);
  * \return true if mutex is held by this thread, else false
  */
 bool spdk_mutex_held(struct spdk_mutex *smutex);
+
+#ifdef DEBUG
+#define spdk_mutex_init(m)	spdk_mutex_init((m), __LINE__)
+#define spdk_mutex_destroy(m)	spdk_mutex_destroy((m), __LINE__)
+#define spdk_mutex_lock(m)	spdk_mutex_lock((m), __LINE__)
+#define spdk_mutex_unlock(m)	spdk_mutex_unlock((m), __LINE__)
+#endif
 
 #ifdef __cplusplus
 }

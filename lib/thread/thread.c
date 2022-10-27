@@ -2731,8 +2731,15 @@ spdk_interrupt_mode_is_enabled(void)
 	return g_interrupt_mode;
 }
 
+#ifdef DEBUG
+#undef spdk_mutex_init
+#undef spdk_mutex_destroy
+#undef spdk_mutex_lock
+#undef spdk_mutex_unlock
+#endif
+
 int
-spdk_mutex_init(struct spdk_mutex *smutex)
+spdk_mutex_init(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
 	pthread_mutexattr_t attr;
 	int rc;
@@ -2745,17 +2752,31 @@ spdk_mutex_init(struct spdk_mutex *smutex)
 	if (rc != 0) {
 		return rc;
 	}
-	return pthread_mutex_init(&smutex->mutex, &attr);
+	rc = pthread_mutex_init(&smutex->mutex, &attr);
+#ifdef DEBUG
+	if (rc == 0) {
+		smutex->line = line;
+	}
+#endif
+	return rc;
 }
 
 int
-spdk_mutex_destroy(struct spdk_mutex *smutex)
+spdk_mutex_destroy(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
-	return pthread_mutex_destroy(&smutex->mutex);
+	int rc;
+
+	rc = pthread_mutex_destroy(&smutex->mutex);
+#ifdef DEBUG
+	if (rc == 0) {
+		smutex->line = line;
+	}
+#endif
+	return rc;
 }
 
 void
-spdk_mutex_lock(struct spdk_mutex *smutex)
+spdk_mutex_lock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
 	int rc;
 
@@ -2776,11 +2797,12 @@ spdk_mutex_lock(struct spdk_mutex *smutex)
 #ifdef DEBUG
 	smutex->thread = spdk_get_thread();
 	smutex->thread->lock_count++;
+	smutex->line = line;
 #endif
 }
 
 void
-spdk_mutex_unlock(struct spdk_mutex *smutex)
+spdk_mutex_unlock(struct spdk_mutex *smutex SPDK_DEBUG_MUTEX_LINE_ARG)
 {
 	int rc;
 
@@ -2794,6 +2816,7 @@ spdk_mutex_unlock(struct spdk_mutex *smutex)
 	assert(smutex->thread->lock_count > 0);
 	smutex->thread->lock_count--;
 	smutex->thread = NULL;
+	smutex->line = line;
 #endif
 }
 
