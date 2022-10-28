@@ -605,18 +605,20 @@ bdev_examine(struct spdk_bdev *bdev)
 		}
 	}
 
-	if (bdev->internal.claim_type != SPDK_BDEV_MOD_CLAIM_NONE) {
-		module = bdev->internal.claim.v1.module;
-		if (module->examine_disk) {
-			spdk_mutex_lock(&module->internal.mutex);
-			module->internal.action_in_progress++;
-			spdk_mutex_unlock(&module->internal.mutex);
-			module->examine_disk(bdev);
+	switch (bdev->internal.claim_type) {
+	case SPDK_BDEV_MOD_CLAIM_NONE:
+		TAILQ_FOREACH(module, &g_bdev_mgr.bdev_modules, internal.tailq) {
+			if (module->examine_disk) {
+				spdk_mutex_lock(&module->internal.mutex);
+				module->internal.action_in_progress++;
+				spdk_mutex_unlock(&module->internal.mutex);
+				spdk_mutex_unlock(&bdev->internal.mutex);
+				module->examine_disk(bdev);
+			}
 		}
-		return;
-	}
-
-	TAILQ_FOREACH(module, &g_bdev_mgr.bdev_modules, internal.tailq) {
+		break;
+	default:
+		module = bdev->internal.claim.v1.module;
 		if (module->examine_disk) {
 			spdk_mutex_lock(&module->internal.mutex);
 			module->internal.action_in_progress++;
