@@ -6853,6 +6853,8 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	return rc;
 }
 
+static void release_bdev_desc_claims(struct spdk_bdev_desc *desc);
+
 static void
 bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 {
@@ -6865,6 +6867,10 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 	TAILQ_REMOVE(&bdev->internal.open_descs, desc, link);
 
 	desc->closed = true;
+
+	if (desc->claim != NULL) {
+		release_bdev_desc_claims(desc);
+	}
 
 	if (0 == desc->refs) {
 		spdk_mutex_unlock(&desc->mutex);
@@ -7315,6 +7321,24 @@ spdk_bdev_module_claim_bdev_desc(struct spdk_bdev_desc *desc,
 	return rc;
 }
 
+static void
+release_bdev_desc_claims(struct spdk_bdev_desc *desc)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+	assert(claim_type_is_v2(bdev->internal.claim_type));
+
+	TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
+	free(desc->claim);
+	desc->claim = NULL;
+
+	if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
+		memset(&bdev->internal.claim, 0, sizeof(bdev->internal.claim));
+		bdev->internal.claim_type = SPDK_BDEV_MOD_CLAIM_NONE;
+	}
+}
+
 void
 spdk_bdev_module_release_bdev_desc(struct spdk_bdev_desc *desc)
 {
@@ -7333,14 +7357,7 @@ spdk_bdev_module_release_bdev_desc(struct spdk_bdev_desc *desc)
 
 	desc->claim->count--;
 	if (desc->claim->count == 0) {
-		TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
-		free(desc->claim);
-		desc->claim = NULL;
-
-		if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
-			memset(&bdev->internal.claim, 0, sizeof(bdev->internal.claim));
-			bdev->internal.claim_type = SPDK_BDEV_MOD_CLAIM_NONE;
-		}
+		release_bdev_desc_claims(desc);
 	}
 
 	spdk_mutex_unlock(&bdev->internal.mutex);
