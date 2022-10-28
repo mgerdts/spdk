@@ -369,6 +369,7 @@ struct bdev_claim {
 	struct spdk_bdev_module *module;
 	struct spdk_bdev_desc *desc;
 	uint32_t count;
+	uint32_t examine_count;
 	TAILQ_ENTRY(bdev_claim) link;
 };
 

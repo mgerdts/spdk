@@ -363,6 +363,10 @@ static inline void bdev_io_complete(void *ctx);
 static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort);
 static bool bdev_abort_buf_io(bdev_io_stailq_t *queue, struct spdk_bdev_io *bio_to_abort);
 
+static void release_bdev_desc_claims(struct spdk_bdev_desc *desc);
+static bool claim_type_is_v2(enum spdk_bdev_module_claim_type type);
+static void claim_reset(struct spdk_bdev *bdev);
+
 void
 spdk_bdev_get_opts(struct spdk_bdev_opts *opts, size_t opts_size)
 {
@@ -585,6 +589,7 @@ static void
 bdev_examine(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_module *module;
+	struct bdev_claim *claim;
 	uint32_t action;
 
 	if (!bdev_ok_to_examine(bdev)) {
@@ -605,6 +610,8 @@ bdev_examine(struct spdk_bdev *bdev)
 		}
 	}
 
+	spdk_mutex_lock(&bdev->internal.mutex);
+
 	switch (bdev->internal.claim_type) {
 	case SPDK_BDEV_MOD_CLAIM_NONE:
 		TAILQ_FOREACH(module, &g_bdev_mgr.bdev_modules, internal.tailq) {
@@ -614,18 +621,70 @@ bdev_examine(struct spdk_bdev *bdev)
 				spdk_mutex_unlock(&module->internal.mutex);
 				spdk_mutex_unlock(&bdev->internal.mutex);
 				module->examine_disk(bdev);
+				return;
 			}
 		}
 		break;
-	default:
+	case SPDK_BDEV_MOD_CLAIM_EXCL_WRITE:
 		module = bdev->internal.claim.v1.module;
 		if (module->examine_disk) {
 			spdk_mutex_lock(&module->internal.mutex);
 			module->internal.action_in_progress++;
 			spdk_mutex_unlock(&module->internal.mutex);
+			spdk_mutex_unlock(&bdev->internal.mutex);
 			module->examine_disk(bdev);
+			return;
+		}
+		break;
+	default:
+		assert(claim_type_is_v2(bdev->internal.claim_type));
+		/*
+		 * While holding internal.mutex, mark all the bdev_claim structures to prevent the
+		 * list from being modified while the lock is dropped during examine_disk().
+		 */
+		TAILQ_FOREACH(claim, &bdev->internal.claim.v2.claims, link) {
+			claim->examine_count++;
+		}
+
+		/*
+		 * Call examine_disk for the module on each claim. If there are multiple claims by
+		 * the same module on different descriptors, the module will see multiple
+		 * examine_disk() calls.
+		 */
+		TAILQ_FOREACH(claim, &bdev->internal.claim.v2.claims, link) {
+			if (claim->count == 0) {
+				/* This is a vestigial claim, held by examine_count */
+				assert(claim->examine_count != 0);
+				continue;
+			}
+
+			if (claim->module->examine_disk == NULL) {
+				continue;
+			}
+
+			spdk_mutex_lock(&module->internal.mutex);
+			module->internal.action_in_progress++;
+			spdk_mutex_unlock(&module->internal.mutex);
+
+			/* Call examine_disk without holding internal.mutex. */
+			spdk_mutex_unlock(&bdev->internal.mutex);
+			module->examine_disk(bdev);
+			spdk_mutex_lock(&bdev->internal.mutex);
+		}
+
+		/* Remove claims that were released during examine_disk */
+		TAILQ_FOREACH(claim, &bdev->internal.claim.v2.claims, link) {
+			claim->examine_count--;
+			if (claim->count == 0 && claim->examine_count == 0) {
+				TAILQ_REMOVE(&bdev->internal.claim.v2.claims, claim, link);
+				free(claim);
+				if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
+					claim_reset(bdev);
+				}
+			}
 		}
 	}
+	spdk_mutex_unlock(&bdev->internal.mutex);
 }
 
 int
@@ -6859,8 +6918,6 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	return rc;
 }
 
-static void release_bdev_desc_claims(struct spdk_bdev_desc *desc);
-
 static void
 bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 {
@@ -7328,6 +7385,17 @@ spdk_bdev_module_claim_bdev_desc(struct spdk_bdev_desc *desc,
 }
 
 static void
+claim_reset(struct spdk_bdev *bdev)
+{
+	assert(spdk_mutex_held(&bdev->internal.mutex));
+	assert(claim_type_is_v2(bdev->internal.claim_type));
+	assert(TAILQ_EMPTY(&bdev->internal.claim.v2.claims));
+
+	memset(&bdev->internal.claim, 0, sizeof(bdev->internal.claim));
+	bdev->internal.claim_type = SPDK_BDEV_MOD_CLAIM_NONE;
+}
+
+static void
 release_bdev_desc_claims(struct spdk_bdev_desc *desc)
 {
 	struct spdk_bdev *bdev = desc->bdev;
@@ -7335,13 +7403,19 @@ release_bdev_desc_claims(struct spdk_bdev_desc *desc)
 	assert(spdk_mutex_held(&bdev->internal.mutex));
 	assert(claim_type_is_v2(bdev->internal.claim_type));
 
-	TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
-	free(desc->claim);
+	if (desc->claim->examine_count == 0) {
+		TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
+		free(desc->claim);
+	} else {
+		/* This is a dead claim that will be cleaned up when bdev_examine() is done. */
+		desc->claim->module = NULL;
+		desc->claim->desc = NULL;
+		desc->claim->count = 0;
+	}
 	desc->claim = NULL;
 
 	if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
-		memset(&bdev->internal.claim, 0, sizeof(bdev->internal.claim));
-		bdev->internal.claim_type = SPDK_BDEV_MOD_CLAIM_NONE;
+		claim_reset(bdev);
 	}
 }
 
