@@ -224,6 +224,8 @@ typedef void (*spdk_bdev_wait_for_examine_cb)(void *arg);
  * This function needs to be called again to receive
  * further reports on examine process.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param cb_fn Callback function.
  * \param cb_arg Callback argument.
  * \return 0 if function was registered, suitable errno value otherwise
@@ -232,6 +234,8 @@ int spdk_bdev_wait_for_examine(spdk_bdev_wait_for_examine_cb cb_fn, void *cb_arg
 
 /**
  * Examine a block device explicitly
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param name the name or alias of the block device
  * \return 0 if block device was examined successfully, suitable errno value otherwise
@@ -282,6 +286,8 @@ void spdk_bdev_finish(spdk_bdev_fini_cb cb_fn, void *cb_arg);
 /**
  * Get the full configuration options for the registered block device modules and created bdevs.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param w pointer to a JSON write context where the configuration will be written.
  */
 void spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w);
@@ -306,12 +312,16 @@ struct spdk_bdev *spdk_bdev_get_by_name(const char *bdev_name);
 /**
  * Get the first registered block device.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \return The first registered block device.
  */
 struct spdk_bdev *spdk_bdev_first(void);
 
 /**
  * Get the next registered block device.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param prev The current block device.
  * \return The next registered block device.
@@ -324,6 +334,8 @@ struct spdk_bdev *spdk_bdev_next(struct spdk_bdev *prev);
  * This function only traverses over block devices which have no virtual block
  * devices on top of them, then get the first one.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \return The first block device without virtual block devices on top.
  */
 struct spdk_bdev *spdk_bdev_first_leaf(void);
@@ -334,6 +346,8 @@ struct spdk_bdev *spdk_bdev_first_leaf(void);
  * This function only traverses over block devices which have no virtual block
  * devices on top of them, then get the next one.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param prev The current block device.
  * \return The next block device without virtual block devices on top.
  */
@@ -341,6 +355,8 @@ struct spdk_bdev *spdk_bdev_next_leaf(struct spdk_bdev *prev);
 
 /**
  * Open a block device for I/O operations.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev_name Block device name to open.
  * \param write true is read/write access requested, false if read-only
@@ -359,8 +375,7 @@ int spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t e
 /**
  * Close a previously opened block device.
  *
- * Must be called on the same thread that the spdk_bdev_open_ext()
- * was performed on.
+ * This function must be called from the SPDK app thread.
  *
  * \param desc Block device descriptor to close.
  */
@@ -381,6 +396,8 @@ typedef int (*spdk_for_each_bdev_fn)(void *ctx, struct spdk_bdev *bdev);
  * spdk_for_each_bdev() opens before and closes after executing the provided
  * callback function for each bdev internally.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param ctx Context passed to the callback function.
  * \param fn Callback function for each block device.
  *
@@ -395,6 +412,8 @@ int spdk_for_each_bdev(void *ctx, spdk_for_each_bdev_fn fn);
  *
  * spdk_for_each_bdev_leaf() opens before and closes after executing the provided
  * callback function for each unclaimed bdev internally.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param ctx Context passed to the callback function.
  * \param fn Callback funciton for each block device without virtual block devices on top.
@@ -448,6 +467,8 @@ bool spdk_bdev_io_type_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_type 
  * The JSON write context will be initialized with an open object, so the bdev
  * driver should write a name(based on the driver name) followed by a JSON value
  * (most likely another nested object).
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device to query.
  * \param w JSON write context. It will store the driver-specific configuration context.
@@ -515,6 +536,8 @@ const char *spdk_bdev_get_qos_rpc_type(enum spdk_bdev_qos_rate_limit_type type);
 /**
  * Get the quality of service rate limits on a bdev.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to query.
  * \param limits Pointer to the QoS rate limits array which holding the limits.
  *
@@ -524,6 +547,8 @@ void spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits);
 
 /**
  * Set the quality of service rate limits on a bdev.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device.
  * \param limits Pointer to the QoS rate limits array which holding the limits.
@@ -715,6 +740,8 @@ spdk_bdev_get_qd_sampling_period(const struct spdk_bdev *bdev);
  * Enables queue depth sampling when period is greater than 0. Disables it when the period
  * is equal to zero. The resulting queue depth is stored in the spdk_bdev object as
  * measured_queue_depth.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device on which to enable queue depth tracking.
  * \param period The period at which to poll this bdev's queue depth. If this is set
@@ -1818,6 +1845,8 @@ void spdk_bdev_get_io_stat(struct spdk_bdev *bdev, struct spdk_io_channel *ch,
  * Return I/O statistics for this bdev. All the required information will be passed
  * via the callback function.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to query.
  * \param stat Structure for aggregating collected statistics.  Passed as argument to cb.
  * \param cb Called when this operation completes.
@@ -1917,6 +1946,8 @@ uint64_t spdk_bdev_io_get_seek_offset(const struct spdk_bdev_io *bdev_io);
 /**
  * Enable or disable collecting histogram data on a bdev.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device.
  * \param cb_fn Callback function to be called when histograms are enabled.
  * \param cb_arg Argument to pass to cb_fn.
@@ -1928,6 +1959,8 @@ void spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_stat
 /**
  * Get aggregated histogram data from a bdev. Callback provides merged histogram
  * for specified bdev.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device.
  * \param histogram Histogram for aggregated data
