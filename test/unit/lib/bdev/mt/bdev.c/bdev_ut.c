@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_cunit.h"
@@ -11,6 +12,9 @@
 #include "spdk/config.h"
 /* HACK: disable VTune integration so the unit test doesn't need VTune headers and libs to build */
 #undef SPDK_CONFIG_VTUNE
+
+static struct spdk_thread *bdev_ut_thread_get_app_thread(void);
+#define spdk_thread_get_app_thread bdev_ut_thread_get_app_thread
 
 #include "bdev/bdev.c"
 
@@ -2286,16 +2290,339 @@ unregister_during_reset(void)
 	teardown_test();
 }
 
+static struct spdk_thread *g_bdev_ut_app_thread;
+
+static struct spdk_thread *
+bdev_ut_thread_get_app_thread(void)
+{
+	return g_bdev_ut_app_thread;
+}
+
+static void
+bdev_init_wt_cb(void *done, int rc)
+{
+}
+
+
+static uint64_t
+get_wrong_thread_hits(void)
+{
+	static uint64_t previous = 0;
+	uint64_t ret, current;
+
+	current = spdk_deprecation_get_hits(_deprecated_bdev_mgmt_wrong_thread);
+	ret = current - previous;
+	previous = current;
+
+	return ret;
+}
+
+static int
+wrong_thread_setup(void)
+{
+	allocate_cores(1);
+	allocate_threads(2);
+	set_thread(0);
+	g_bdev_ut_app_thread = spdk_get_thread();
+
+	spdk_bdev_initialize(bdev_init_wt_cb, NULL);
+	spdk_io_device_register(&g_io_device, stub_create_ch, stub_destroy_ch,
+				sizeof(struct ut_bdev_channel), NULL);
+	register_bdev(&g_bdev, "ut_bdev_wt", &g_io_device);
+	spdk_bdev_open_ext("ut_bdev_wt", true, _bdev_event_cb, NULL, &g_desc);
+
+	set_thread(1);
+
+	/* Ignore return, just setting the base for the next time it is called. */
+	get_wrong_thread_hits();
+
+	return 0;
+}
+
+static int
+wrong_thread_teardown(void)
+{
+	int rc;
+
+	rc = get_wrong_thread_hits();
+
+	set_thread(0);
+
+	g_teardown_done = false;
+	spdk_bdev_close(g_desc);
+	g_desc = NULL;
+	unregister_bdev(&g_bdev);
+	spdk_io_device_unregister(&g_io_device, NULL);
+	spdk_bdev_finish(finish_cb, NULL);
+	poll_threads();
+	memset(&g_bdev, 0, sizeof(g_bdev));
+	if (!g_teardown_done) {
+		fprintf(stderr, "%s:%d %s: teardown not done\n", __FILE__, __LINE__, __func__);
+		rc = -1;
+	}
+	g_teardown_done = false;
+
+	g_bdev_ut_app_thread = NULL;
+
+	free_threads();
+	free_cores();
+
+	return rc;
+}
+
+static void
+wait_for_examine_cb(void *arg)
+{
+}
+
+static void
+spdk_bdev_examine_wt(void)
+{
+	int rc;
+	bool save_auto_examine = g_bdev_opts.bdev_auto_examine;
+
+	rc = spdk_bdev_wait_for_examine(wait_for_examine_cb, NULL);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+
+	g_bdev_opts.bdev_auto_examine = true;
+	rc = spdk_bdev_examine("");
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	g_bdev_opts.bdev_auto_examine = save_auto_examine;
+}
+
+static int
+for_each_bdev_cb(void *ctx, struct spdk_bdev *bdev)
+{
+	return 0;
+}
+
+static void
+spdk_bdev_iter_wt(void)
+{
+	struct spdk_bdev *bdev;
+	int rc;
+
+	bdev = spdk_bdev_first();
+	CU_ASSERT(bdev == &g_bdev.bdev);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	bdev = spdk_bdev_next(bdev);
+	CU_ASSERT(bdev == NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	bdev = spdk_bdev_first_leaf();
+	CU_ASSERT(bdev == &g_bdev.bdev);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	bdev = spdk_bdev_next_leaf(bdev);
+	CU_ASSERT(bdev == NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	rc = spdk_for_each_bdev(NULL, for_each_bdev_cb);
+	CU_ASSERT(rc == 0);
+	/* for_each, first, next */
+	CU_ASSERT(get_wrong_thread_hits() == 3);
+
+	rc = spdk_for_each_bdev_leaf(NULL, for_each_bdev_cb);
+	CU_ASSERT(rc == 0);
+	/* for_each, first, next */
+	CU_ASSERT(get_wrong_thread_hits() == 3);
+}
+
+static void
+spdk_bdev_json_wt(void)
+{
+	int dummy;
+	struct spdk_json_write_ctx *json;
+
+	json = (struct spdk_json_write_ctx *)&dummy;
+
+	spdk_bdev_subsystem_config_json(json);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_dump_info_json(&g_bdev.bdev, json);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+spdk_bdev_alias_wt(void)
+{
+	int rc;
+
+	rc = spdk_bdev_alias_add(&g_bdev.bdev, NULL);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	rc = spdk_bdev_alias_del(&g_bdev.bdev, "");
+	CU_ASSERT(rc == -ENOENT);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_alias_del_all(&g_bdev.bdev);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+set_qos_rate_limit_cb(void *arg, int status)
+{
+}
+
+static void
+get_current_qd(struct spdk_bdev *bdev, uint64_t current_qd, void *cb_arg, int rc)
+{
+}
+
+static void
+spdk_bdev_qos_wt(void)
+{
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
+
+	spdk_bdev_get_qos_rate_limits(&g_bdev.bdev, limits);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_set_qos_rate_limits(&g_bdev.bdev, limits, set_qos_rate_limit_cb, NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+spdk_bdev_qd_wt(void)
+{
+	spdk_bdev_set_qd_sampling_period(&g_bdev.bdev, 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_get_current_qd(&g_bdev.bdev, get_current_qd, NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+}
+
+static void
+spdk_bdev_notify_wt(void)
+{
+	int rc;
+
+	rc = spdk_bdev_notify_blockcnt_change(&g_bdev.bdev, g_bdev.bdev.blockcnt);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_notify_media_management(&g_bdev.bdev);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	g_bdev.bdev.media_events = true;
+	rc = spdk_bdev_push_media_events(&g_bdev.bdev, NULL, 0);
+	CU_ASSERT(rc == -ENODEV);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+get_device_stat_cb(struct spdk_bdev *bdev, struct spdk_bdev_io_stat *stat, void *arg, int rc)
+{
+}
+
+static void
+spdk_bdev_get_device_stat_wt(void)
+{
+	struct spdk_bdev_io_stat stat = { 0 };
+
+	spdk_bdev_get_device_stat(&g_bdev.bdev, &stat, get_device_stat_cb, NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+spdk_bdev_destruct_done_wt(void)
+{
+	struct spdk_bdev bdev = { 0 };
+
+	spdk_bdev_destruct_done(&bdev, 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+spdk_bdev_register_wt(void)
+{
+	struct spdk_bdev bdev = { 0 };
+	int rc;
+
+	bdev.module = &bdev_ut_if;
+	spdk_spin_init(&bdev.internal.spinlock);
+	bdev.internal.status = SPDK_BDEV_STATUS_REMOVING;
+
+	/* register on wrong thread, with other problems */
+	rc = spdk_bdev_register(&bdev);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	/* unregister by bdev on wrong thread */
+	spdk_bdev_unregister(&bdev, NULL, NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	/* unregister by bdev name on wrong thread */
+	rc = spdk_bdev_unregister_by_name("", NULL, NULL, NULL);
+	CU_ASSERT(rc == -ENODEV);
+	/* Once in spdk_bdev_unregister_by_name(), once in spdk_bdev_open_ext() */
+	CU_ASSERT(get_wrong_thread_hits() == 2);
+}
+
+static void
+spdk_bdev_open_close_wt(void)
+{
+	struct spdk_bdev_desc *desc = NULL;
+	struct spdk_bdev *bdev = &g_bdev.bdev;
+	int rc;
+
+	rc = spdk_bdev_open_ext(bdev->name, false, _bdev_event_cb, NULL, &desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(desc != NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_close(desc);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+spdk_bdev_module_claim_wt(void)
+{
+	struct spdk_bdev *bdev = &g_bdev.bdev;
+	int rc;
+
+	rc = spdk_bdev_module_claim_bdev(bdev, NULL, &bdev_ut_if);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_module_release_bdev(bdev);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+}
+
+static void
+spdk_bdev_histogram_wt(void)
+{
+	struct spdk_histogram_data histogram = { 0 };
+
+	spdk_bdev_histogram_enable(&g_bdev.bdev, histogram_status_cb, NULL, false);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	spdk_bdev_histogram_get(&g_bdev.bdev, &histogram, histogram_data_cb, NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+}
+
 int
 main(int argc, char **argv)
 {
 	CU_pSuite	suite = NULL;
+	CU_pSuite	suite_wt = NULL;
 	unsigned int	num_failures;
 
 	CU_set_error_action(CUEA_ABORT);
 	CU_initialize_registry();
 
 	suite = CU_add_suite("bdev", NULL, NULL);
+	suite_wt = CU_add_suite("bdev_wrong_thread", wrong_thread_setup, wrong_thread_teardown);
 
 	CU_ADD_TEST(suite, basic);
 	CU_ADD_TEST(suite, unregister_and_close);
@@ -2316,6 +2643,19 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, bdev_set_io_timeout_mt);
 	CU_ADD_TEST(suite, lock_lba_range_then_submit_io);
 	CU_ADD_TEST(suite, unregister_during_reset);
+	CU_ADD_TEST(suite_wt, spdk_bdev_examine_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_iter_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_json_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_alias_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_qos_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_qd_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_notify_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_get_device_stat_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_destruct_done_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_register_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_open_close_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_module_claim_wt);
+	CU_ADD_TEST(suite_wt, spdk_bdev_histogram_wt);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();

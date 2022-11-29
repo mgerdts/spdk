@@ -162,6 +162,8 @@ struct spdk_bdev_module {
  * Also upgrades that bdev's descriptor to have write access if desc
  * is not NULL.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to be claimed.
  * \param desc Descriptor for the above block device or NULL.
  * \param module Bdev module attempting to claim bdev.
@@ -174,6 +176,8 @@ int spdk_bdev_module_claim_bdev(struct spdk_bdev *bdev, struct spdk_bdev_desc *d
 
 /**
  * Called to release a write claim on a block device.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device to be released.
  */
@@ -831,6 +835,8 @@ struct spdk_bdev_io {
 /**
  * Register a new bdev.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to register.
  *
  * \return 0 on success.
@@ -848,6 +854,8 @@ int spdk_bdev_register(struct spdk_bdev *bdev);
  * Note: spdk_bdev_unregister() can be unsafe unless the bdev is not opened before and
  * closed after unregistration. It is recommended to use spdk_bdev_unregister_by_name().
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to unregister.
  * \param cb_fn Callback function to be called when the unregister is complete.
  * \param cb_arg Argument to be supplied to cb_fn
@@ -859,6 +867,8 @@ void spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn,
  * on this bdev of the hotremoval to request the upper layer to stop using this bdev
  * and manually close all the descriptors with spdk_bdev_close().
  * The actual bdev unregistration may be deferred until all descriptors are closed.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev_name Block device name to unregister.
  * \param module Module by which the block device was registered.
@@ -877,6 +887,8 @@ int spdk_bdev_unregister_by_name(const char *bdev_name, struct spdk_bdev_module 
  * destruct function and call this function at the conclusion of that path.
  * Bdevs with synchronous destruct paths should return 0 from their destruct
  * path.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device that was destroyed.
  * \param bdeverrno Error code returned from bdev's destruct callback.
@@ -924,6 +936,8 @@ void spdk_bdev_module_fini_start_done(void);
  * Add alias to block device names list.
  * Aliases can be add only to registered bdev.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to query.
  * \param alias Alias to be added to list.
  *
@@ -937,6 +951,8 @@ int spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias);
 /**
  * Removes name from block device names list.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device to query.
  * \param alias Alias to be deleted from list.
  * \return 0 on success
@@ -946,6 +962,8 @@ int spdk_bdev_alias_del(struct spdk_bdev *bdev, const char *alias);
 
 /**
  * Removes all alias from block device alias list.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device to operate.
  */
@@ -1092,6 +1110,8 @@ uint64_t spdk_bdev_io_get_submit_tsc(struct spdk_bdev_io *bdev_io);
  *
  * Change number of blocks for provided block device.
  * It can only be called on a registered bdev.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device to change.
  * \param size New size of bdev.
@@ -1362,6 +1382,8 @@ uint64_t spdk_bdev_part_get_offset_blocks(struct spdk_bdev_part *part);
  * Push media management events.  To send the notification that new events are
  * available, spdk_bdev_notify_media_management needs to be called.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device
  * \param events Array of media events
  * \param num_events Size of the events array
@@ -1374,6 +1396,8 @@ int spdk_bdev_push_media_events(struct spdk_bdev *bdev, const struct spdk_bdev_m
 /**
  * Send SPDK_BDEV_EVENT_MEDIA_MANAGEMENT to all open descriptors that have
  * pending media events.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device
  */
@@ -1412,6 +1436,8 @@ typedef void (*spdk_bdev_get_current_qd_cb)(struct spdk_bdev *bdev, uint64_t cur
  * This function should be used only in the bdev module and it should be ensured
  * that the dev is not unregistered while executing the function.
  * cb_fn is required to specify.
+ *
+ * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device to query.
  * \param cb_fn Callback function to be called with queue depth measured for a bdev.

@@ -61,6 +61,13 @@ int __itt_init_ittlib(const char *, __itt_group_id);
  */
 #define SPDK_BDEV_MAX_CHILDREN_COPY_REQS (8)
 
+SPDK_LOG_DEPRECATION_REGISTER(bdev_mgmt_wrong_thread, "bdev management on non-app thread",
+			      "SPDK 23.05", 0);
+#define BDEV_MUST_BE_ON_APP_THREAD() \
+	if (spdk_unlikely(spdk_thread_get_app_thread() != spdk_get_thread())) { \
+		SPDK_LOG_DEPRECATED(bdev_mgmt_wrong_thread); \
+	}
+
 static const char *qos_rpc_type[] = {"rw_ios_per_sec",
 				     "rw_mbytes_per_sec", "r_mbytes_per_sec", "w_mbytes_per_sec"
 				    };
@@ -522,6 +529,8 @@ spdk_bdev_wait_for_examine(spdk_bdev_wait_for_examine_cb cb_fn, void *cb_arg)
 {
 	struct spdk_bdev_wait_for_examine_ctx *ctx;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		return -ENOMEM;
@@ -632,6 +641,8 @@ spdk_bdev_examine(const char *name)
 	struct spdk_bdev *bdev;
 	struct spdk_bdev_examine_item *item;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (g_bdev_opts.bdev_auto_examine) {
 		SPDK_ERRLOG("Manual examine is not allowed if auto examine is enabled");
 		return -EINVAL;
@@ -679,6 +690,8 @@ spdk_bdev_first(void)
 {
 	struct spdk_bdev *bdev;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	bdev = TAILQ_FIRST(&g_bdev_mgr.bdevs);
 	if (bdev) {
 		SPDK_DEBUGLOG(bdev, "Starting bdev iteration at %s\n", bdev->name);
@@ -691,6 +704,8 @@ struct spdk_bdev *
 spdk_bdev_next(struct spdk_bdev *prev)
 {
 	struct spdk_bdev *bdev;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	bdev = TAILQ_NEXT(prev, internal.link);
 	if (bdev) {
@@ -719,6 +734,8 @@ spdk_bdev_first_leaf(void)
 {
 	struct spdk_bdev *bdev;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	bdev = _bdev_next_leaf(TAILQ_FIRST(&g_bdev_mgr.bdevs));
 
 	if (bdev) {
@@ -732,6 +749,8 @@ struct spdk_bdev *
 spdk_bdev_next_leaf(struct spdk_bdev *prev)
 {
 	struct spdk_bdev *bdev;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	bdev = _bdev_next_leaf(TAILQ_NEXT(prev, internal.link));
 
@@ -1362,6 +1381,8 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 {
 	struct spdk_bdev_module *bdev_module;
 	struct spdk_bdev *bdev;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	assert(w != NULL);
 
@@ -3106,6 +3127,8 @@ spdk_bdev_io_get_submit_tsc(struct spdk_bdev_io *bdev_io)
 int
 spdk_bdev_dump_info_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *w)
 {
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (bdev->fn_table->dump_info_json) {
 		return bdev->fn_table->dump_info_json(bdev->ctxt, w);
 	}
@@ -3885,6 +3908,8 @@ spdk_bdev_alias_add(struct spdk_bdev *bdev, const char *alias)
 	struct spdk_bdev_alias *tmp;
 	int ret;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (alias == NULL) {
 		SPDK_ERRLOG("Empty alias passed\n");
 		return -EINVAL;
@@ -3930,6 +3955,8 @@ spdk_bdev_alias_del(struct spdk_bdev *bdev, const char *alias)
 {
 	int rc;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	rc = bdev_alias_del(bdev, alias, bdev_name_del);
 	if (rc == -ENOENT) {
 		SPDK_INFOLOG(bdev, "Alias %s does not exist\n", alias);
@@ -3942,6 +3969,8 @@ void
 spdk_bdev_alias_del_all(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_alias *p, *tmp;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	TAILQ_FOREACH_SAFE(p, &bdev->aliases, tailq, tmp) {
 		TAILQ_REMOVE(&bdev->aliases, p, tailq);
@@ -4021,6 +4050,8 @@ void
 spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits)
 {
 	int i;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	memset(limits, 0, sizeof(*limits) * SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES);
 
@@ -4267,6 +4298,8 @@ spdk_bdev_set_qd_sampling_period(struct spdk_bdev *bdev, uint64_t period)
 {
 	int rc;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (bdev->internal.new_period == period) {
 		return;
 	}
@@ -4328,6 +4361,8 @@ spdk_bdev_get_current_qd(struct spdk_bdev *bdev, spdk_bdev_get_current_qd_cb cb_
 {
 	struct bdev_get_current_qd_ctx *ctx;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	assert(cb_fn != NULL);
 
 	ctx = calloc(1, sizeof(*ctx));
@@ -4372,6 +4407,8 @@ spdk_bdev_notify_blockcnt_change(struct spdk_bdev *bdev, uint64_t size)
 {
 	struct spdk_bdev_desc *desc;
 	int ret;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	if (size == bdev->blockcnt) {
 		return 0;
@@ -5737,6 +5774,8 @@ spdk_bdev_get_device_stat(struct spdk_bdev *bdev, struct spdk_bdev_io_stat *stat
 {
 	struct spdk_bdev_iostat_ctx *bdev_iostat_ctx;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	assert(bdev != NULL);
 	assert(stat != NULL);
 	assert(cb != NULL);
@@ -6754,6 +6793,8 @@ bdev_destroy_cb(void *io_device)
 void
 spdk_bdev_destruct_done(struct spdk_bdev *bdev, int bdeverrno)
 {
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (bdev->internal.unregister_cb != NULL) {
 		bdev->internal.unregister_cb(bdev->internal.unregister_ctx, bdeverrno);
 	}
@@ -6871,6 +6912,8 @@ spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn, void
 {
 	struct spdk_thread	*thread;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	SPDK_DEBUGLOG(bdev, "Removing bdev %s from list\n", bdev->name);
 
 	thread = spdk_get_thread();
@@ -6912,6 +6955,8 @@ spdk_bdev_unregister_by_name(const char *bdev_name, struct spdk_bdev_module *mod
 	struct spdk_bdev_desc *desc;
 	struct spdk_bdev *bdev;
 	int rc;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	rc = spdk_bdev_open_ext(bdev_name, false, _tmp_bdev_event_cb, NULL, &desc);
 	if (rc != 0) {
@@ -7050,6 +7095,8 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	struct spdk_bdev *bdev;
 	int rc;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (event_cb == NULL) {
 		SPDK_ERRLOG("Missing event callback function\n");
 		return -EINVAL;
@@ -7133,6 +7180,8 @@ spdk_bdev_close(struct spdk_bdev_desc *desc)
 {
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	SPDK_DEBUGLOG(bdev, "Closing descriptor %p for bdev %s on thread %p\n", desc, bdev->name,
 		      spdk_get_thread());
 
@@ -7167,6 +7216,8 @@ spdk_bdev_register(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_desc *desc;
 	int rc;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	rc = bdev_register(bdev);
 	if (rc != 0) {
@@ -7203,6 +7254,8 @@ int
 spdk_bdev_module_claim_bdev(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 			    struct spdk_bdev_module *module)
 {
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	if (bdev->internal.claim_module != NULL) {
 		SPDK_ERRLOG("bdev %s already claimed by module %s\n", bdev->name,
 			    bdev->internal.claim_module->name);
@@ -7220,6 +7273,8 @@ spdk_bdev_module_claim_bdev(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 void
 spdk_bdev_module_release_bdev(struct spdk_bdev *bdev)
 {
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	assert(bdev->internal.claim_module != NULL);
 	bdev->internal.claim_module = NULL;
 }
@@ -7237,6 +7292,8 @@ spdk_for_each_bdev(void *ctx, spdk_for_each_bdev_fn fn)
 	struct spdk_bdev *bdev, *tmp;
 	struct spdk_bdev_desc *desc;
 	int rc = 0;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	assert(fn != NULL);
 
@@ -7281,6 +7338,8 @@ spdk_for_each_bdev_leaf(void *ctx, spdk_for_each_bdev_fn fn)
 	struct spdk_bdev *bdev, *tmp;
 	struct spdk_bdev_desc *desc;
 	int rc = 0;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	assert(fn != NULL);
 
@@ -7383,7 +7442,6 @@ spdk_bdev_io_get_cb_arg(struct spdk_bdev_io *bdev_io)
 void
 spdk_bdev_module_list_add(struct spdk_bdev_module *bdev_module)
 {
-
 	if (spdk_bdev_module_list_find(bdev_module->name)) {
 		SPDK_ERRLOG("ERROR: module '%s' already registered.\n", bdev_module->name);
 		assert(false);
@@ -7616,6 +7674,8 @@ spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
 	int				i;
 	bool				disable_rate_limit = true;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		if (limits[i] == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 			continue;
@@ -7788,6 +7848,8 @@ spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_status_cb
 {
 	struct spdk_bdev_histogram_ctx *ctx;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	ctx = calloc(1, sizeof(struct spdk_bdev_histogram_ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM);
@@ -7863,6 +7925,8 @@ spdk_bdev_histogram_get(struct spdk_bdev *bdev, struct spdk_histogram_data *hist
 {
 	struct spdk_bdev_histogram_data_ctx *ctx;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	ctx = calloc(1, sizeof(struct spdk_bdev_histogram_data_ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM, NULL);
@@ -7924,6 +7988,8 @@ spdk_bdev_push_media_events(struct spdk_bdev *bdev, const struct spdk_bdev_media
 	size_t event_id;
 	int rc = 0;
 
+	BDEV_MUST_BE_ON_APP_THREAD();
+
 	assert(bdev->media_events);
 
 	spdk_spin_lock(&bdev->internal.spinlock);
@@ -7959,6 +8025,8 @@ void
 spdk_bdev_notify_media_management(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_desc *desc;
+
+	BDEV_MUST_BE_ON_APP_THREAD();
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
