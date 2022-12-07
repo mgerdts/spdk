@@ -2363,8 +2363,13 @@ wrong_thread_teardown(void)
 #define WT_DESC		"bdev management on non-app thread"
 #define WT_REMOVAL	"SPDK 23.05"
 #define WT_MSG		WT_TAG ": deprecated feature " WT_DESC " to be removed in " WT_REMOVAL "\n"
+#define WT_LOCK_TAG	"bdev_internal_lock"
+#define WT_LOCK_DESC	"bdev internal.spinlock taken on non-app thread"
+#define WT_LOCK_MSG	WT_LOCK_TAG ": deprecated feature " WT_LOCK_DESC " to be removed in " \
+	WT_REMOVAL "\n"
 #define BDEV_UT_EXPECT_LOG_WRONG_THREAD(func) \
-	CU_ASSERT(spdk_cu_log_expect(SPDK_LOG_WARN, "bdev.c", # func, NULL, WT_MSG))
+	CU_ASSERT(spdk_cu_log_expect(SPDK_LOG_WARN, "bdev.c", # func, NULL, WT_MSG)); \
+	do { } while(spdk_cu_log_expect(SPDK_LOG_WARN, NULL, NULL, NULL, WT_LOCK_MSG))
 
 static void
 wait_for_examine_cb(void *arg)

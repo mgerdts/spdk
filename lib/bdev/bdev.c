@@ -63,10 +63,17 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 
 SPDK_LOG_DEPRECATION_REGISTER(bdev_mgmt_wrong_thread, "bdev management on non-app thread",
 			      "SPDK 23.05", 0);
+SPDK_LOG_DEPRECATION_REGISTER(bdev_internal_lock, "bdev internal.spinlock taken on non-app thread",
+			      "SPDK 23.05", 0);
 #define BDEV_MUST_BE_ON_APP_THREAD() \
 	if (spdk_unlikely(spdk_thread_get_app_thread() != spdk_get_thread())) { \
 		SPDK_LOG_DEPRECATED(bdev_mgmt_wrong_thread); \
 	}
+#define BDEV_INTERNAL_LOCK(lock) \
+	if (spdk_unlikely(spdk_thread_get_app_thread() != spdk_get_thread())) { \
+		SPDK_LOG_DEPRECATED(bdev_internal_lock); \
+	} \
+	spdk_spin_lock(lock)
 
 static const char *qos_rpc_type[] = {"rw_ios_per_sec",
 				     "rw_mbytes_per_sec", "r_mbytes_per_sec", "w_mbytes_per_sec"
@@ -3500,7 +3507,7 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	}
 #endif
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	bdev_enable_qos(bdev, ch);
 
 	TAILQ_FOREACH(range, &bdev->internal.locked_ranges, tailq) {
@@ -3718,7 +3725,7 @@ bdev_channel_destroy(void *io_device, void *ctx_buf)
 			  spdk_thread_get_id(spdk_io_channel_get_thread(ch->channel)));
 
 	/* This channel is going away, so add its statistics into the bdev so that they don't get lost. */
-	spdk_spin_lock(&ch->bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&ch->bdev->internal.spinlock);
 	bdev_io_stat_add(&ch->bdev->internal.stat, &ch->stat);
 	spdk_spin_unlock(&ch->bdev->internal.spinlock);
 
@@ -3931,7 +3938,7 @@ spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits)
 
 	memset(limits, 0, sizeof(*limits) * SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES);
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	if (bdev->internal.qos) {
 		for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 			if (bdev->internal.qos->rate_limits[i].limit !=
@@ -4290,7 +4297,7 @@ spdk_bdev_notify_blockcnt_change(struct spdk_bdev *bdev, uint64_t size)
 		return 0;
 	}
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 
 	/* bdev has open descriptors */
 	if (!TAILQ_EMPTY(&bdev->internal.open_descs) &&
@@ -5535,7 +5542,7 @@ bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bd
 		 * the channel flag is set, so the lock here should not
 		 * be necessary. We're not in the fast path though, so
 		 * just take it anyway. */
-		spdk_spin_lock(&channel->bdev->internal.spinlock);
+		BDEV_INTERNAL_LOCK(&channel->bdev->internal.spinlock);
 		if (channel->bdev->internal.qos->ch == channel) {
 			TAILQ_SWAP(&channel->bdev->internal.qos->queued, &tmp_queued, spdk_bdev_io, internal.link);
 		}
@@ -5566,7 +5573,7 @@ bdev_channel_start_reset(struct spdk_bdev_channel *ch)
 
 	assert(!TAILQ_EMPTY(&ch->queued_resets));
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	if (bdev->internal.reset_in_progress == NULL) {
 		bdev->internal.reset_in_progress = TAILQ_FIRST(&ch->queued_resets);
 		/*
@@ -5602,7 +5609,7 @@ spdk_bdev_reset(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	bdev_io->u.reset.ch_ref = NULL;
 	bdev_io_init(bdev_io, bdev, cb_arg, cb);
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	TAILQ_INSERT_TAIL(&channel->queued_resets, bdev_io, internal.link);
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
@@ -5668,7 +5675,7 @@ spdk_bdev_get_device_stat(struct spdk_bdev *bdev, struct spdk_bdev_io_stat *stat
 	bdev_iostat_ctx->cb_arg = cb_arg;
 
 	/* Start with the statistics from previously deleted channels. */
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	bdev_io_stat_add(bdev_iostat_ctx->stat, &bdev->internal.stat);
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
@@ -6199,7 +6206,7 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 		if (status == SPDK_BDEV_IO_STATUS_NOMEM) {
 			SPDK_ERRLOG("NOMEM returned for reset\n");
 		}
-		spdk_spin_lock(&bdev->internal.spinlock);
+		BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 		if (bdev_io == bdev->internal.reset_in_progress) {
 			bdev->internal.reset_in_progress = NULL;
 			unlock_channels = true;
@@ -6653,7 +6660,7 @@ bdev_unregister(struct spdk_bdev *bdev, void *_ctx, int status)
 	int rc;
 
 	spdk_spin_lock(&g_bdev_mgr.spinlock);
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	/*
 	 * Set the status to REMOVING after completing to abort channels. Otherwise,
 	 * the last spdk_bdev_close() may call spdk_io_device_unregister() while
@@ -6698,7 +6705,7 @@ spdk_bdev_unregister(struct spdk_bdev *bdev, spdk_bdev_unregister_cb cb_fn, void
 		return;
 	}
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	bdev->internal.status = SPDK_BDEV_STATUS_UNREGISTERING;
 	bdev->internal.unregister_cb = cb_fn;
 	bdev->internal.unregister_ctx = cb_arg;
@@ -6781,7 +6788,7 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 	desc->thread = thread;
 	desc->write = write;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	if (bdev->internal.status == SPDK_BDEV_STATUS_UNREGISTERING ||
 	    bdev->internal.status == SPDK_BDEV_STATUS_REMOVING) {
 		spdk_spin_unlock(&bdev->internal.spinlock);
@@ -6899,7 +6906,7 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 {
 	int rc;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	spdk_spin_lock(&desc->spinlock);
 
 	TAILQ_REMOVE(&bdev->internal.open_descs, desc, link);
@@ -7296,7 +7303,7 @@ bdev_write_zero_buffer_done(struct spdk_bdev_io *bdev_io, bool success, void *cb
 static void
 bdev_set_qos_limit_done(struct set_qos_limit_ctx *ctx, int status)
 {
-	spdk_spin_lock(&ctx->bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&ctx->bdev->internal.spinlock);
 	ctx->bdev->internal.qos_mod_in_progress = false;
 	spdk_spin_unlock(&ctx->bdev->internal.spinlock);
 
@@ -7314,7 +7321,7 @@ bdev_disable_qos_done(void *cb_arg)
 	struct spdk_bdev_io *bdev_io;
 	struct spdk_bdev_qos *qos;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	qos = bdev->internal.qos;
 	bdev->internal.qos = NULL;
 	spdk_spin_unlock(&bdev->internal.spinlock);
@@ -7353,7 +7360,7 @@ bdev_disable_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
 	struct set_qos_limit_ctx *ctx = _ctx;
 	struct spdk_thread *thread;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	thread = bdev->internal.qos->thread;
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
@@ -7381,7 +7388,7 @@ bdev_update_qos_rate_limit_msg(void *cb_arg)
 	struct set_qos_limit_ctx *ctx = cb_arg;
 	struct spdk_bdev *bdev = ctx->bdev;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	bdev_qos_update_max_quota_per_timeslice(bdev->internal.qos);
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
@@ -7394,7 +7401,7 @@ bdev_enable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	bdev_enable_qos(bdev, bdev_ch);
 	spdk_spin_unlock(&bdev->internal.spinlock);
 	spdk_bdev_for_each_channel_continue(i, 0);
@@ -7475,7 +7482,7 @@ spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
 	ctx->cb_arg = cb_arg;
 	ctx->bdev = bdev;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	if (bdev->internal.qos_mod_in_progress) {
 		spdk_spin_unlock(&bdev->internal.spinlock);
 		free(ctx);
@@ -7549,7 +7556,7 @@ bdev_histogram_disable_channel_cb(struct spdk_bdev *bdev, void *_ctx, int status
 {
 	struct spdk_bdev_histogram_ctx *ctx = _ctx;
 
-	spdk_spin_lock(&ctx->bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&ctx->bdev->internal.spinlock);
 	ctx->bdev->internal.histogram_in_progress = false;
 	spdk_spin_unlock(&ctx->bdev->internal.spinlock);
 	ctx->cb_fn(ctx->cb_arg, ctx->status);
@@ -7580,7 +7587,7 @@ bdev_histogram_enable_channel_cb(struct spdk_bdev *bdev, void *_ctx, int status)
 		spdk_bdev_for_each_channel(ctx->bdev, bdev_histogram_disable_channel, ctx,
 					   bdev_histogram_disable_channel_cb);
 	} else {
-		spdk_spin_lock(&ctx->bdev->internal.spinlock);
+		BDEV_INTERNAL_LOCK(&ctx->bdev->internal.spinlock);
 		ctx->bdev->internal.histogram_in_progress = false;
 		spdk_spin_unlock(&ctx->bdev->internal.spinlock);
 		ctx->cb_fn(ctx->cb_arg, ctx->status);
@@ -7624,7 +7631,7 @@ spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_status_cb
 	ctx->cb_fn = cb_fn;
 	ctx->cb_arg = cb_arg;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	if (bdev->internal.histogram_in_progress) {
 		spdk_spin_unlock(&bdev->internal.spinlock);
 		free(ctx);
@@ -7755,7 +7762,7 @@ spdk_bdev_push_media_events(struct spdk_bdev *bdev, const struct spdk_bdev_media
 
 	assert(bdev->media_events);
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
 		if (desc->write) {
 			break;
@@ -7791,7 +7798,7 @@ spdk_bdev_notify_media_management(struct spdk_bdev *bdev)
 
 	BDEV_MUST_BE_ON_APP_THREAD();
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
 		if (!TAILQ_EMPTY(&desc->pending_media_events)) {
 			desc->callback.event_fn(SPDK_BDEV_EVENT_MEDIA_MANAGEMENT, bdev,
@@ -7976,7 +7983,7 @@ bdev_lock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_channel *_ch,
 	ctx->cb_fn = cb_fn;
 	ctx->cb_arg = cb_arg;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	if (bdev_lba_range_overlaps_tailq(&ctx->range, &bdev->internal.locked_ranges)) {
 		/* There is an active lock overlapping with this range.
 		 * Put it on the pending list until this range no
@@ -8006,7 +8013,7 @@ bdev_unlock_lba_range_cb(struct spdk_bdev *bdev, void *_ctx, int status)
 	struct locked_lba_range_ctx *pending_ctx;
 	struct lba_range *range, *tmp;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	/* Check if there are any pending locked ranges that overlap with this range
 	 * that was just unlocked.  If there are, check that it doesn't overlap with any
 	 * other locked ranges before calling bdev_lock_lba_range_ctx which will start
@@ -8099,7 +8106,7 @@ bdev_unlock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_channel *_ch,
 		return -EINVAL;
 	}
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	BDEV_INTERNAL_LOCK(&bdev->internal.spinlock);
 	/* We confirmed that this channel has locked the specified range.  To
 	 * start the unlock the process, we find the range in the bdev's locked_ranges
 	 * and remove it.  This ensures new channels don't inherit the locked range.
