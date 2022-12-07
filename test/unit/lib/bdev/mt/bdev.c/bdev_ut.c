@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_cunit.h"
@@ -16,7 +17,6 @@ static struct spdk_thread *bdev_ut_thread_get_app_thread(void);
 #define spdk_thread_get_app_thread bdev_ut_thread_get_app_thread
 
 #include "bdev/bdev.c"
-#include "spdk_cu_log.c"
 
 #define BDEV_UT_NUM_THREADS 3
 
@@ -2303,11 +2303,23 @@ bdev_init_wt_cb(void *done, int rc)
 {
 }
 
+
+static uint64_t
+get_wrong_thread_hits(void)
+{
+	static uint64_t previous = 0;
+	uint64_t ret, current;
+
+	current = spdk_deprecation_get_hits(_deprecated_bdev_mgmt_wrong_thread);
+	ret = current - previous;
+	previous = current;
+
+	return ret;
+}
+
 static int
 wrong_thread_setup(void)
 {
-	int rc;
-
 	allocate_cores(1);
 	allocate_threads(2);
 	set_thread(0);
@@ -2321,10 +2333,10 @@ wrong_thread_setup(void)
 
 	set_thread(1);
 
-	rc = spdk_cu_log_remaining();
-	spdk_log_open(spdk_cu_logfunc);
+	/* Ignore return, just setting the base for the next time it is called. */
+	get_wrong_thread_hits();
 
-	return rc;
+	return 0;
 }
 
 static int
@@ -2332,8 +2344,7 @@ wrong_thread_teardown(void)
 {
 	int rc;
 
-	rc = spdk_cu_log_remaining();
-	spdk_log_open(spdk_cu_log_stderr);
+	rc = get_wrong_thread_hits();
 
 	set_thread(0);
 
@@ -2359,13 +2370,6 @@ wrong_thread_teardown(void)
 	return rc;
 }
 
-#define WT_TAG		"bdev_mgmt_wrong_thread"
-#define WT_DESC		"bdev management on non-app thread"
-#define WT_REMOVAL	"SPDK 23.05"
-#define WT_MSG		WT_TAG ": deprecated feature " WT_DESC " to be removed in " WT_REMOVAL "\n"
-#define BDEV_UT_EXPECT_LOG_WRONG_THREAD(func) \
-	CU_ASSERT(spdk_cu_log_expect(SPDK_LOG_WARN, "bdev.c", # func, NULL, WT_MSG))
-
 static void
 wait_for_examine_cb(void *arg)
 {
@@ -2379,17 +2383,14 @@ spdk_bdev_examine_wt(void)
 
 	rc = spdk_bdev_wait_for_examine(wait_for_examine_cb, NULL);
 	CU_ASSERT(rc == 0);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_wait_for_examine);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
 
 	g_bdev_opts.bdev_auto_examine = true;
 	rc = spdk_bdev_examine("");
 	CU_ASSERT(rc == -EINVAL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_examine);
-	SPDK_CU_LOG_EXPECT(SPDK_LOG_ERROR, "bdev.c", "spdk_bdev_examine", NULL,
-			   "Manual examine is not allowed if auto examine is enabled");
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	g_bdev_opts.bdev_auto_examine = save_auto_examine;
 }
@@ -2408,37 +2409,29 @@ spdk_bdev_iter_wt(void)
 
 	bdev = spdk_bdev_first();
 	CU_ASSERT(bdev == &g_bdev.bdev);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_first);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	bdev = spdk_bdev_next(bdev);
 	CU_ASSERT(bdev == NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_next);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	bdev = spdk_bdev_first_leaf();
 	CU_ASSERT(bdev == &g_bdev.bdev);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_first_leaf);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	bdev = spdk_bdev_next_leaf(bdev);
 	CU_ASSERT(bdev == NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_next_leaf);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	rc = spdk_for_each_bdev(NULL, for_each_bdev_cb);
 	CU_ASSERT(rc == 0);
-	spdk_cu_log_ignore_func("spdk_bdev_first");
-	spdk_cu_log_ignore_func("spdk_bdev_next");
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_for_each_bdev);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	/* for_each, first, next */
+	CU_ASSERT(get_wrong_thread_hits() == 3);
 
 	rc = spdk_for_each_bdev_leaf(NULL, for_each_bdev_cb);
 	CU_ASSERT(rc == 0);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_for_each_bdev_leaf);
-	spdk_cu_log_ignore_func("spdk_bdev_first_leaf");
-	spdk_cu_log_ignore_func("spdk_bdev_next_leaf");
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	/* for_each, first, next */
+	CU_ASSERT(get_wrong_thread_hits() == 3);
 }
 
 static void
@@ -2450,12 +2443,10 @@ spdk_bdev_json_wt(void)
 	json = (struct spdk_json_write_ctx *)&dummy;
 
 	spdk_bdev_subsystem_config_json(json);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_subsystem_config_json);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_dump_info_json(&g_bdev.bdev, json);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_dump_info_json);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2465,20 +2456,14 @@ spdk_bdev_alias_wt(void)
 
 	rc = spdk_bdev_alias_add(&g_bdev.bdev, NULL);
 	CU_ASSERT(rc == -EINVAL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_alias_add);
-	SPDK_CU_LOG_EXPECT(SPDK_LOG_ERROR, "bdev.c", "spdk_bdev_alias_add", NULL,
-			   "Empty alias passed\n");
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	rc = spdk_bdev_alias_del(&g_bdev.bdev, "");
 	CU_ASSERT(rc == -ENOENT);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_alias_del);
-	spdk_cu_log_ignore_level(SPDK_LOG_INFO, true);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_alias_del_all(&g_bdev.bdev);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_alias_del_all);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2497,25 +2482,22 @@ spdk_bdev_qos_wt(void)
 	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 
 	spdk_bdev_get_qos_rate_limits(&g_bdev.bdev, limits);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_get_qos_rate_limits);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_set_qos_rate_limits(&g_bdev.bdev, limits, set_qos_rate_limit_cb, NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_set_qos_rate_limits);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
 spdk_bdev_qd_wt(void)
 {
 	spdk_bdev_set_qd_sampling_period(&g_bdev.bdev, 0);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_set_qd_sampling_period);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_get_current_qd(&g_bdev.bdev, get_current_qd, NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_get_current_qd);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
 }
 
 static void
@@ -2525,18 +2507,15 @@ spdk_bdev_notify_wt(void)
 
 	rc = spdk_bdev_notify_blockcnt_change(&g_bdev.bdev, g_bdev.bdev.blockcnt);
 	CU_ASSERT(rc == 0);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_notify_blockcnt_change);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_notify_media_management(&g_bdev.bdev);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_notify_media_management);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	g_bdev.bdev.media_events = true;
 	rc = spdk_bdev_push_media_events(&g_bdev.bdev, NULL, 0);
 	CU_ASSERT(rc == -ENODEV);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_push_media_events);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2550,8 +2529,7 @@ spdk_bdev_get_device_stat_wt(void)
 	struct spdk_bdev_io_stat stat = { 0 };
 
 	spdk_bdev_get_device_stat(&g_bdev.bdev, &stat, get_device_stat_cb, NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_get_device_stat);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2560,8 +2538,7 @@ spdk_bdev_destruct_done_wt(void)
 	struct spdk_bdev bdev = { 0 };
 
 	spdk_bdev_destruct_done(&bdev, 0);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_destruct_done);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2577,23 +2554,17 @@ spdk_bdev_register_wt(void)
 	/* register on wrong thread, with other problems */
 	rc = spdk_bdev_register(&bdev);
 	CU_ASSERT(rc == -EINVAL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_register);
-	spdk_cu_log_ignore_func("bdev_register");
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	/* unregister by bdev on wrong thread */
 	spdk_bdev_unregister(&bdev, NULL, NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_unregister);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	/* unregister by bdev name on wrong thread */
 	rc = spdk_bdev_unregister_by_name("", NULL, NULL, NULL);
 	CU_ASSERT(rc == -ENODEV);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_unregister_by_name);
-	SPDK_CU_LOG_EXPECT(SPDK_LOG_ERROR, "bdev.c", "spdk_bdev_unregister_by_name",
-			   "Failed to open bdev with name: %s\n", NULL);
-	spdk_cu_log_ignore_func("spdk_bdev_open_ext");
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	/* Once in spdk_bdev_unregister_by_name(), once in spdk_bdev_open_ext() */
+	CU_ASSERT(get_wrong_thread_hits() == 2);
 }
 
 static void
@@ -2606,12 +2577,10 @@ spdk_bdev_open_close_wt(void)
 	rc = spdk_bdev_open_ext(bdev->name, false, _bdev_event_cb, NULL, &desc);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(desc != NULL);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_open_ext);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_close(desc);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_close);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2622,12 +2591,10 @@ spdk_bdev_module_claim_wt(void)
 
 	rc = spdk_bdev_module_claim_bdev(bdev, NULL, &bdev_ut_if);
 	CU_ASSERT(rc == 0);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_module_claim_bdev);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_module_release_bdev(bdev);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_module_release_bdev);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2636,13 +2603,12 @@ spdk_bdev_histogram_wt(void)
 	struct spdk_histogram_data histogram = { 0 };
 
 	spdk_bdev_histogram_enable(&g_bdev.bdev, histogram_status_cb, NULL, false);
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_histogram_enable);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_histogram_get(&g_bdev.bdev, &histogram, histogram_data_cb, NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 	poll_threads();
-	BDEV_UT_EXPECT_LOG_WRONG_THREAD(spdk_bdev_histogram_get);
-	CU_ASSERT(spdk_cu_log_remaining() == 0);
+	CU_ASSERT(get_wrong_thread_hits() == 0);
 }
 
 int
