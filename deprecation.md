@@ -25,13 +25,3 @@ The tags can be matched with the level 4 headers below.
 
 Deprecated `spdk_nvme_ctrlr_prepare_for_reset` API, which will be removed in SPDK 22.01.
 For PCIe transport, `spdk_nvme_ctrlr_disconnect` should be used before freeing I/O qpairs.
-
-### bdev
-
-#### `bdev_mgmt_wrong_thread``
-
-Using a thread other than the SPDK app thread for bdev management operations is deprecated and will
-be removed in SPDK 23.03. This deprecation should have no impact for applications that are
-configured via a JSON configuration file and/or through the RPC interface. Applications that make
-bdev management operations must perform them from the SPDK app thread, which may be accomplished
-using `spdk_thread_send_msg(spdk_thread_get_app_thread(), ...)`.

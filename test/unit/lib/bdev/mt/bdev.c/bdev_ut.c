@@ -2303,16 +2303,21 @@ bdev_init_wt_cb(void *done, int rc)
 {
 }
 
+uint64_t g_bdev_ut_wrong_thread_hits = 0;
+
+static void
+count_wrong_thread_hits(void)
+{
+	g_bdev_ut_wrong_thread_hits++;
+}
 
 static uint64_t
 get_wrong_thread_hits(void)
 {
-	static uint64_t previous = 0;
-	uint64_t ret, current;
+	uint64_t ret;
 
-	current = spdk_deprecation_get_hits(_deprecated_bdev_mgmt_wrong_thread);
-	ret = current - previous;
-	previous = current;
+	ret = g_bdev_ut_wrong_thread_hits;
+	g_bdev_ut_wrong_thread_hits = 0;
 
 	return ret;
 }
@@ -2334,6 +2339,7 @@ wrong_thread_setup(void)
 	set_thread(1);
 
 	/* Ignore return, just setting the base for the next time it is called. */
+	g_bdev_mgmt_wrong_thread_abort_fn = count_wrong_thread_hits;
 	get_wrong_thread_hits();
 
 	return 0;
@@ -2345,6 +2351,7 @@ wrong_thread_teardown(void)
 	int rc;
 
 	rc = get_wrong_thread_hits();
+	g_bdev_mgmt_wrong_thread_abort_fn = bdev_assert_false;
 
 	set_thread(0);
 
@@ -2382,7 +2389,7 @@ spdk_bdev_examine_wt(void)
 	bool save_auto_examine = g_bdev_opts.bdev_auto_examine;
 
 	rc = spdk_bdev_wait_for_examine(wait_for_examine_cb, NULL);
-	CU_ASSERT(rc == 0);
+	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 	poll_threads();
 	CU_ASSERT(get_wrong_thread_hits() == 0);
@@ -2408,30 +2415,28 @@ spdk_bdev_iter_wt(void)
 	int rc;
 
 	bdev = spdk_bdev_first();
-	CU_ASSERT(bdev == &g_bdev.bdev);
+	CU_ASSERT(bdev == NULL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
-	bdev = spdk_bdev_next(bdev);
+	bdev = spdk_bdev_next(NULL);
 	CU_ASSERT(bdev == NULL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	bdev = spdk_bdev_first_leaf();
-	CU_ASSERT(bdev == &g_bdev.bdev);
+	CU_ASSERT(bdev == NULL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
-	bdev = spdk_bdev_next_leaf(bdev);
+	bdev = spdk_bdev_next_leaf(NULL);
 	CU_ASSERT(bdev == NULL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	rc = spdk_for_each_bdev(NULL, for_each_bdev_cb);
-	CU_ASSERT(rc == 0);
-	/* for_each, first, next */
-	CU_ASSERT(get_wrong_thread_hits() == 3);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	rc = spdk_for_each_bdev_leaf(NULL, for_each_bdev_cb);
-	CU_ASSERT(rc == 0);
-	/* for_each, first, next */
-	CU_ASSERT(get_wrong_thread_hits() == 3);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
 static void
@@ -2459,7 +2464,7 @@ spdk_bdev_alias_wt(void)
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	rc = spdk_bdev_alias_del(&g_bdev.bdev, "");
-	CU_ASSERT(rc == -ENOENT);
+	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_alias_del_all(&g_bdev.bdev);
@@ -2506,7 +2511,7 @@ spdk_bdev_notify_wt(void)
 	int rc;
 
 	rc = spdk_bdev_notify_blockcnt_change(&g_bdev.bdev, g_bdev.bdev.blockcnt);
-	CU_ASSERT(rc == 0);
+	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_notify_media_management(&g_bdev.bdev);
@@ -2514,7 +2519,7 @@ spdk_bdev_notify_wt(void)
 
 	g_bdev.bdev.media_events = true;
 	rc = spdk_bdev_push_media_events(&g_bdev.bdev, NULL, 0);
-	CU_ASSERT(rc == -ENODEV);
+	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 }
 
@@ -2542,9 +2547,17 @@ spdk_bdev_destruct_done_wt(void)
 }
 
 static void
+bdev_unregistered_save_rc(void *arg, int rc)
+{
+	int *rcp = arg;
+	*rcp = rc;
+}
+
+static void
 spdk_bdev_register_wt(void)
 {
 	struct spdk_bdev bdev = { 0 };
+	int cb_rc;
 	int rc;
 
 	bdev.module = &bdev_ut_if;
@@ -2557,14 +2570,21 @@ spdk_bdev_register_wt(void)
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	/* unregister by bdev on wrong thread */
-	spdk_bdev_unregister(&bdev, NULL, NULL);
+	cb_rc = 0xbad;
+	spdk_bdev_unregister(&bdev, bdev_unregistered_save_rc, &cb_rc);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
+	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+	CU_ASSERT(cb_rc == -EINVAL);
 
 	/* unregister by bdev name on wrong thread */
-	rc = spdk_bdev_unregister_by_name("", NULL, NULL, NULL);
-	CU_ASSERT(rc == -ENODEV);
-	/* Once in spdk_bdev_unregister_by_name(), once in spdk_bdev_open_ext() */
-	CU_ASSERT(get_wrong_thread_hits() == 2);
+	cb_rc = 0xbad;
+	rc = spdk_bdev_unregister_by_name("", NULL, bdev_unregistered_save_rc, &cb_rc);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+	poll_threads();
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+	CU_ASSERT(cb_rc == 0xbad);
 }
 
 static void
@@ -2574,13 +2594,32 @@ spdk_bdev_open_close_wt(void)
 	struct spdk_bdev *bdev = &g_bdev.bdev;
 	int rc;
 
+	/* Fail to open on the wrong thread */
+	rc = spdk_bdev_open_ext(bdev->name, false, _bdev_event_cb, NULL, &desc);
+	CU_ASSERT(rc == -EINVAL);
+	CU_ASSERT(desc == NULL);
+	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	/* Open on the right thread so that we can try a close on the wrong thread */
+	set_thread(0);
 	rc = spdk_bdev_open_ext(bdev->name, false, _bdev_event_cb, NULL, &desc);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(desc != NULL);
-	CU_ASSERT(get_wrong_thread_hits() == 1);
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+	set_thread(1);
 
+	/*
+	 * Aside from closing on the non-app thread, this violates the long-standing requirement of
+	 * closing from the same thread where it was opened. The non-app thread check comes first.
+	 */
 	spdk_bdev_close(desc);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
+
+	/* Clean up */
+	set_thread(0);
+	spdk_bdev_close(desc);
+	CU_ASSERT(get_wrong_thread_hits() == 0);
+	set_thread(1);
 }
 
 static void
@@ -2590,7 +2629,7 @@ spdk_bdev_module_claim_wt(void)
 	int rc;
 
 	rc = spdk_bdev_module_claim_bdev(bdev, NULL, &bdev_ut_if);
-	CU_ASSERT(rc == 0);
+	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(get_wrong_thread_hits() == 1);
 
 	spdk_bdev_module_release_bdev(bdev);
