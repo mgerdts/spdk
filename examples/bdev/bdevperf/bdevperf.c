@@ -446,7 +446,11 @@ bdevperf_test_done(void *ctx)
 static void
 bdevperf_job_end(void *ctx)
 {
+	struct spdk_bdev_desc *desc = ctx;
+
 	assert(g_main_thread == spdk_get_thread());
+
+	spdk_bdev_close(desc);
 
 	if (--g_bdevperf.running_jobs == 0) {
 		bdevperf_test_done(NULL);
@@ -465,8 +469,7 @@ bdevperf_end_task(struct bdevperf_task *task)
 			end_tsc = spdk_get_ticks() - g_start_tsc;
 			job->run_time_in_usec = end_tsc * 1000000 / spdk_get_ticks_hz();
 			spdk_put_io_channel(job->ch);
-			spdk_bdev_close(job->bdev_desc);
-			spdk_thread_send_msg(g_main_thread, bdevperf_job_end, NULL);
+			spdk_thread_send_msg(g_main_thread, bdevperf_job_end, job->bdev_desc);
 		}
 	}
 }
@@ -1049,8 +1052,6 @@ bdevperf_job_run(void *ctx)
 							10 * 1000000);
 	}
 
-	spdk_bdev_set_timeout(job->bdev_desc, g_timeout_in_sec, bdevperf_timeout_cb, job);
-
 	for (i = 0; i < job->queue_depth; i++) {
 		task = bdevperf_job_get_task(job);
 		bdevperf_submit_single(job, task);
@@ -1147,8 +1148,15 @@ bdevperf_test(void)
 	/* Iterate jobs to start all I/O */
 	TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
 		g_bdevperf.running_jobs++;
+		spdk_bdev_set_timeout(job->bdev_desc, g_timeout_in_sec, bdevperf_timeout_cb, job);
 		spdk_thread_send_msg(job->thread, bdevperf_job_run, job);
 	}
+}
+
+static void
+_bdevperf_job_drain(void *ctx)
+{
+	bdevperf_job_drain(ctx);
 }
 
 static void
@@ -1157,7 +1165,7 @@ bdevperf_bdev_removed(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, vo
 	struct bdevperf_job *job = event_ctx;
 
 	if (SPDK_BDEV_EVENT_REMOVE == type) {
-		bdevperf_job_drain(job);
+		spdk_thread_send_msg(job->thread, _bdevperf_job_drain, job);
 	}
 }
 
@@ -1234,15 +1242,6 @@ static void
 _bdevperf_construct_job(void *ctx)
 {
 	struct bdevperf_job *job = ctx;
-	int rc;
-
-	rc = spdk_bdev_open_ext(spdk_bdev_get_name(job->bdev), true, bdevperf_bdev_removed, job,
-				&job->bdev_desc);
-	if (rc != 0) {
-		SPDK_ERRLOG("Could not open leaf bdev %s, error=%d\n", spdk_bdev_get_name(job->bdev), rc);
-		g_run_rc = -EINVAL;
-		goto end;
-	}
 
 	if (g_zcopy) {
 		if (!spdk_bdev_io_type_supported(job->bdev, SPDK_BDEV_IO_TYPE_ZCOPY)) {
@@ -1254,8 +1253,8 @@ _bdevperf_construct_job(void *ctx)
 
 	job->ch = spdk_bdev_get_io_channel(job->bdev_desc);
 	if (!job->ch) {
-		SPDK_ERRLOG("Could not get io_channel for device %s, error=%d\n", spdk_bdev_get_name(job->bdev),
-			    rc);
+		SPDK_ERRLOG("Could not get io_channel for device %s\n",
+			    spdk_bdev_get_name(job->bdev));
 		spdk_bdev_close(job->bdev_desc);
 		TAILQ_REMOVE(&g_bdevperf.jobs, job, link);
 		g_run_rc = -ENOMEM;
@@ -1264,6 +1263,21 @@ _bdevperf_construct_job(void *ctx)
 
 end:
 	spdk_thread_send_msg(g_main_thread, _bdevperf_construct_job_done, NULL);
+}
+
+static void
+_bdevperf_construct_job_open(void *ctx)
+{
+	struct bdevperf_job *job = ctx;
+	int rc;
+
+	rc = spdk_bdev_open_ext(spdk_bdev_get_name(job->bdev), true, bdevperf_bdev_removed, job,
+				&job->bdev_desc);
+	if (rc != 0) {
+		SPDK_ERRLOG("Could not open leaf bdev %s, error=%d\n", spdk_bdev_get_name(job->bdev), rc);
+		g_run_rc = -EINVAL;
+	}
+	spdk_thread_send_msg(job->thread, _bdevperf_construct_job, ctx);
 }
 
 static void
@@ -1444,7 +1458,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 
 	g_construct_job_count++;
 
-	rc = spdk_thread_send_msg(thread, _bdevperf_construct_job, job);
+	rc = spdk_thread_send_msg(spdk_thread_get_app_thread(), _bdevperf_construct_job_open, job);
 	assert(rc == 0);
 
 	return rc;
@@ -1925,6 +1939,7 @@ bdevperf_run(void *arg1)
 	uint32_t i;
 
 	g_main_thread = spdk_get_thread();
+	assert(g_main_thread == spdk_thread_get_app_thread());
 
 	spdk_cpuset_zero(&g_all_cpuset);
 	SPDK_ENV_FOREACH_CORE(i) {
@@ -1987,12 +2002,6 @@ rpc_perform_tests(struct spdk_jsonrpc_request *request, const struct spdk_json_v
 	}
 }
 SPDK_RPC_REGISTER("perform_tests", rpc_perform_tests, SPDK_RPC_RUNTIME)
-
-static void
-_bdevperf_job_drain(void *ctx)
-{
-	bdevperf_job_drain(ctx);
-}
 
 static void
 spdk_bdevperf_shutdown_cb(void)
