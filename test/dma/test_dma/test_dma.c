@@ -169,7 +169,11 @@ print_periodic_stats(void)
 static void
 dma_test_task_complete(void *ctx)
 {
+	struct dma_test_task *task = ctx;
+
 	assert(g_num_complete_tasks > 0);
+
+	spdk_bdev_close(task->desc);
 
 	if (--g_num_complete_tasks == 0) {
 		spdk_poller_unregister(&g_runtime_poller);
@@ -183,7 +187,6 @@ dma_test_check_and_signal_task_done(struct dma_test_task *task)
 {
 	if (task->io_inflight == 0) {
 		spdk_put_io_channel(task->channel);
-		spdk_bdev_close(task->desc);
 		spdk_thread_send_msg(g_main_thread, dma_test_task_complete, task);
 		spdk_thread_exit(spdk_get_thread());
 	}
@@ -475,10 +478,13 @@ dma_test_run_time_poller(void *ctx)
 static void
 dma_test_construct_task_done(void *ctx)
 {
-	struct dma_test_task *task;
+	struct dma_test_task *task = ctx;
 
 	assert(g_num_construct_tasks > 0);
 	--g_num_construct_tasks;
+
+	spdk_bdev_close(task->desc);
+	task->desc = NULL;
 
 	if (g_num_construct_tasks != 0) {
 		return;
@@ -506,10 +512,29 @@ dma_test_construct_task_done(void *ctx)
 	}
 }
 
+
 static void
 dma_test_construct_task_on_thread(void *ctx)
 {
 	struct dma_test_task *task = ctx;
+
+	task->channel = spdk_bdev_get_io_channel(task->desc);
+	if (!task->channel) {
+		fprintf(stderr, "Failed to open bdev %s\n", task->bdev_name);
+		g_run_rc = -ENOMEM;
+		spdk_thread_send_msg(g_main_thread, dma_test_construct_task_done, task);
+		return;
+	}
+
+	task->max_offset_in_ios = spdk_bdev_get_num_blocks(spdk_bdev_desc_get_bdev(
+					  task->desc)) / task->num_blocks_per_io;
+
+	spdk_thread_send_msg(g_main_thread, dma_test_construct_task_done, task);
+}
+
+static void
+dma_test_construct_task(struct dma_test_task *task)
+{
 	int rc;
 
 	rc = spdk_bdev_open_ext(task->bdev_name, true, dma_test_bdev_event_cb, task, &task->desc);
@@ -520,20 +545,7 @@ dma_test_construct_task_on_thread(void *ctx)
 		return;
 	}
 
-	task->channel = spdk_bdev_get_io_channel(task->desc);
-	if (!task->channel) {
-		spdk_bdev_close(task->desc);
-		task->desc = NULL;
-		fprintf(stderr, "Failed to open bdev %s, rc %d\n", task->bdev_name, rc);
-		g_run_rc = rc;
-		spdk_thread_send_msg(g_main_thread, dma_test_construct_task_done, NULL);
-		return;
-	}
-
-	task->max_offset_in_ios = spdk_bdev_get_num_blocks(spdk_bdev_desc_get_bdev(
-					  task->desc)) / task->num_blocks_per_io;
-
-	spdk_thread_send_msg(g_main_thread, dma_test_construct_task_done, task);
+	spdk_thread_send_msg(task->thread, dma_test_construct_task_on_thread, task);
 }
 
 static bool
@@ -754,6 +766,7 @@ dma_test_start(void *arg)
 	}
 
 	g_main_thread = spdk_get_thread();
+	assert(g_main_thread == spdk_thread_get_app_thread());
 
 	block_size = spdk_bdev_get_block_size(bdev);
 	if (g_io_size < block_size || g_io_size % block_size != 0) {
@@ -792,7 +805,7 @@ dma_test_start(void *arg)
 	}
 
 	TAILQ_FOREACH(task, &g_tasks, link) {
-		spdk_thread_send_msg(task->thread, dma_test_construct_task_on_thread, task);
+		dma_test_construct_task(task);
 	}
 
 	spdk_bdev_close(desc);
