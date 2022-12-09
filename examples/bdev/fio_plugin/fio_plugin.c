@@ -93,6 +93,7 @@ static size_t spdk_fio_poll_thread(struct spdk_fio_thread *fio_thread);
 static int spdk_fio_handle_options(struct thread_data *td, struct fio_file *f,
 				   struct spdk_bdev *bdev);
 static int spdk_fio_handle_options_per_target(struct thread_data *td, struct fio_file *f);
+static void spdk_fio_bdev_close_at(struct spdk_bdev_desc *desc);
 
 static pthread_t g_init_thread_id = 0;
 static pthread_mutex_t g_init_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -163,7 +164,7 @@ spdk_fio_bdev_close_targets(void *arg)
 	TAILQ_FOREACH_SAFE(target, &fio_thread->targets, link, tmp) {
 		TAILQ_REMOVE(&fio_thread->targets, target, link);
 		spdk_put_io_channel(target->ch);
-		spdk_bdev_close(target->desc);
+		spdk_fio_bdev_close_at(target->desc);
 		free(target);
 	}
 }
@@ -464,7 +465,16 @@ fio_redirected_to_dev_null(void)
 }
 
 struct spdk_fio_poller_data {
-	struct thread_data *td;
+	union {
+		struct spdk_fio_setup_args {
+			struct thread_data *td;
+		} sa;
+		struct spdk_fio_bdev_open_args {
+			const char *bdev_name;
+			bool write;
+			struct spdk_bdev_desc **desc;
+		} oa;
+	} u;
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
 	int ret;
@@ -504,7 +514,7 @@ static void
 setup_on_app_thread(void *arg)
 {
 	struct spdk_fio_poller_data *data = arg;
-	struct thread_data *td = data->td;
+	struct thread_data *td = data->u.sa.td;
 	unsigned int i;
 	struct fio_file *f;
 
@@ -590,7 +600,7 @@ spdk_fio_setup(struct thread_data *td)
 		g_spdk_env_initialized = true;
 	}
 
-	data.td = td;
+	data.u.sa.td = td;
 	data.ret = -EAGAIN;
 
 	spdk_fio_sync_run_on_app_thread(setup_on_app_thread, &data);
@@ -603,6 +613,43 @@ fio_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 		  void *event_ctx)
 {
 	SPDK_WARNLOG("Unsupported bdev event: type %d\n", type);
+}
+
+static void
+spdk_fio_bdev_open_helper(void *arg)
+{
+	struct spdk_fio_poller_data *data = arg;
+	struct spdk_fio_bdev_open_args *oa = &data->u.oa;
+
+	data->ret = spdk_bdev_open_ext(oa->bdev_name, oa->write, fio_bdev_event_cb, NULL, oa->desc);
+	spdk_fio_wake_waiter(data);
+}
+
+static int
+spdk_fio_bdev_open_at(const char *bdev_name, bool write, struct spdk_bdev_desc **desc)
+{
+	struct spdk_fio_poller_data data = { 0 };
+
+	data.u.oa.bdev_name = bdev_name;
+	data.u.oa.write = write;
+	data.u.oa.desc = desc;
+	data.ret = -EAGAIN;
+
+	spdk_fio_sync_run_on_app_thread(spdk_fio_bdev_open_helper, &data);
+	return data.ret;
+}
+
+static void
+spdk_fio_bdev_close_helper(void *desc)
+{
+	spdk_bdev_close(desc);
+}
+
+static void
+spdk_fio_bdev_close_at(struct spdk_bdev_desc *desc)
+{
+	/* Callers don't care how soon this completes, skip spdk_fio_sync_run_on_app_thread(). */
+	spdk_thread_send_msg(spdk_thread_get_app_thread(), spdk_fio_bdev_close_helper, desc);
 }
 
 static void
@@ -630,8 +677,7 @@ spdk_fio_bdev_open(void *arg)
 			return;
 		}
 
-		rc = spdk_bdev_open_ext(f->file_name, true, fio_bdev_event_cb, NULL,
-					&target->desc);
+		rc = spdk_fio_bdev_open_at(f->file_name, true, &target->desc);
 		if (rc) {
 			SPDK_ERRLOG("Unable to open bdev %s\n", f->file_name);
 			free(target);
@@ -644,7 +690,7 @@ spdk_fio_bdev_open(void *arg)
 		target->ch = spdk_bdev_get_io_channel(target->desc);
 		if (!target->ch) {
 			SPDK_ERRLOG("Unable to get I/O channel for bdev.\n");
-			spdk_bdev_close(target->desc);
+			spdk_fio_bdev_close_at(target->desc);
 			free(target);
 			fio_thread->failed = true;
 			return;
@@ -657,7 +703,7 @@ spdk_fio_bdev_open(void *arg)
 			SPDK_ERRLOG("Failed to handle options for: %s\n", f->file_name);
 			f->engine_data = NULL;
 			spdk_put_io_channel(target->ch);
-			spdk_bdev_close(target->desc);
+			spdk_fio_bdev_close_at(target->desc);
 			free(target);
 			fio_thread->failed = true;
 			return;
