@@ -7037,18 +7037,17 @@ bdev_start_qos(struct spdk_bdev *bdev)
 }
 
 static int
-bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
+bdev_open_for_thread(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc,
+		     struct spdk_thread *thread)
 {
-	struct spdk_thread *thread;
 	int rc = 0;
 
-	thread = spdk_get_thread();
 	if (!thread) {
 		SPDK_ERRLOG("Cannot open bdev from non-SPDK thread.\n");
 		return -ENOTSUP;
 	}
 
-	SPDK_DEBUGLOG(bdev, "Opening descriptor %p for bdev %s on thread %p\n", desc, bdev->name,
+	SPDK_DEBUGLOG(bdev, "Opening descriptor %p for bdev %s for thread %p\n", desc, bdev->name,
 		      spdk_get_thread());
 
 	desc->bdev = bdev;
@@ -7081,6 +7080,12 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
 	return 0;
+}
+
+static int
+bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
+{
+	return bdev_open_for_thread(bdev, write, desc, spdk_get_thread());
 }
 
 static int
@@ -7124,15 +7129,13 @@ bdev_desc_alloc(struct spdk_bdev *bdev, spdk_bdev_event_cb_t event_cb, void *eve
 	return 0;
 }
 
-int
-spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
-		   void *event_ctx, struct spdk_bdev_desc **_desc)
+static int
+bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
+	      void *event_ctx, struct spdk_thread *thread, struct spdk_bdev_desc **_desc)
 {
 	struct spdk_bdev_desc *desc;
 	struct spdk_bdev *bdev;
 	int rc;
-
-	BDEV_MGMT_ON_APP_THREAD_OR_RETURN(-EINVAL);
 
 	if (event_cb == NULL) {
 		SPDK_ERRLOG("Missing event callback function\n");
@@ -7155,7 +7158,7 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 		return rc;
 	}
 
-	rc = bdev_open(bdev, write, desc);
+	rc = bdev_open_for_thread(bdev, write, desc, thread);
 	if (rc != 0) {
 		bdev_desc_free(desc);
 		desc = NULL;
@@ -7166,6 +7169,92 @@ spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event
 	spdk_spin_unlock(&g_bdev_mgr.spinlock);
 
 	return rc;
+}
+
+int
+spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
+		   void *event_ctx, struct spdk_bdev_desc **_desc)
+{
+	BDEV_MGMT_ON_APP_THREAD_OR_RETURN(-EINVAL);
+
+	return bdev_open_ext(bdev_name, write, event_cb, event_ctx, spdk_get_thread(), _desc);
+}
+
+struct bdev_open_data {
+	char *bdev_name;
+	bool write;
+	spdk_bdev_event_cb_t event_cb;
+	void *event_ctx;
+	spdk_bdev_open_cb_t open_cb;
+	void *open_ctx;
+	struct spdk_thread *thread;
+	struct spdk_bdev_desc *desc;
+	int rc;
+};
+
+static void
+bdev_open_done(void *ctx)
+{
+	struct bdev_open_data *data = ctx;
+
+	assert(spdk_get_thread() == data->thread);
+
+	data->open_cb(data->open_ctx, data->desc, data->rc);
+	free(data->bdev_name);
+	free(data);
+}
+
+static void
+bdev_open_for_any_thread(void *ctx)
+{
+	struct bdev_open_data *data = ctx;
+
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
+
+	data->rc = bdev_open_ext(data->bdev_name, data->write, data->event_cb, data->event_ctx,
+				 data->thread, &data->desc);
+	spdk_thread_exec_msg(data->thread, bdev_open_done, data);
+}
+
+int
+spdk_bdev_open_from_any_thread(const char *bdev_name, bool write,
+			       spdk_bdev_event_cb_t event_cb, void *event_ctx,
+			       spdk_bdev_open_cb_t open_cb, void *open_ctx)
+{
+	struct spdk_thread *app_thread = spdk_thread_get_app_thread();
+	struct spdk_thread *thread = spdk_get_thread();
+	struct bdev_open_data *data;
+
+	if (thread == NULL) {
+		SPDK_ERRLOG("Must be called from an SPDK thread\n");
+		return -EINVAL;
+	}
+	/* If thread is not NULL, the app thread must have been initialized. */
+	assert(app_thread != NULL);
+
+	data = calloc(1, sizeof(*data));
+	if (data == NULL) {
+		SPDK_ERRLOG("Failed to allocate memory for bdev_open_data\n");
+		return -ENOMEM;
+	}
+
+	data->bdev_name = strdup(bdev_name);
+	if (data->bdev_name == NULL) {
+		SPDK_ERRLOG("Failed to allocate memory for bdev_name\n");
+		free(data);
+		return -ENOMEM;
+	}
+
+	data->write = write;
+	data->event_cb = event_cb;
+	data->event_ctx = event_ctx;
+	data->open_cb = open_cb;
+	data->open_ctx = open_ctx;
+	data->thread = thread;
+
+	spdk_thread_exec_msg(app_thread, bdev_open_for_any_thread, data);
+
+	return 0;
 }
 
 static void
@@ -7212,13 +7301,27 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 	}
 }
 
+static void
+_bdev_close(void *arg)
+{
+	struct spdk_bdev_desc *desc = arg;
+	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
+
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
+
+	spdk_spin_lock(&g_bdev_mgr.spinlock);
+
+	bdev_close(bdev, desc);
+
+	spdk_spin_unlock(&g_bdev_mgr.spinlock);
+}
+
 void
 spdk_bdev_close(struct spdk_bdev_desc *desc)
 {
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
 
-	BDEV_MGMT_ON_APP_THREAD_OR_RETURN_VOID();
-
+	(void)bdev;
 	SPDK_DEBUGLOG(bdev, "Closing descriptor %p for bdev %s on thread %p\n", desc, bdev->name,
 		      spdk_get_thread());
 
@@ -7226,11 +7329,7 @@ spdk_bdev_close(struct spdk_bdev_desc *desc)
 
 	spdk_poller_unregister(&desc->io_timeout_poller);
 
-	spdk_spin_lock(&g_bdev_mgr.spinlock);
-
-	bdev_close(bdev, desc);
-
-	spdk_spin_unlock(&g_bdev_mgr.spinlock);
+	spdk_thread_exec_msg(spdk_thread_get_app_thread(), _bdev_close, desc);
 }
 
 static void

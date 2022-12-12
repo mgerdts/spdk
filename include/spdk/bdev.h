@@ -57,6 +57,11 @@ struct spdk_bdev_media_event {
 struct spdk_bdev;
 
 /**
+ * \brief Handle to an opened SPDK block device.
+ */
+struct spdk_bdev_desc;
+
+/**
  * Block device remove callback.
  *
  * \param remove_ctx Context for the removed block device.
@@ -72,6 +77,15 @@ typedef void (*spdk_bdev_remove_cb_t)(void *remove_ctx);
  */
 typedef void (*spdk_bdev_event_cb_t)(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 				     void *event_ctx);
+
+/**
+ * Block device open callback.
+ *
+ * \param open_ctx Context passed to the caller of this callback.
+ * \param desc Descriptor for the opened bdev. Will be NULL if rc is non-zero.
+ * \param rc Error code: same as return from spdk_bdev_open_ext().
+ */
+typedef void (*spdk_bdev_open_cb_t)(void *open_ctx, struct spdk_bdev_desc *desc, int rc);
 
 /**
  * Block device I/O
@@ -92,11 +106,6 @@ enum spdk_bdev_status {
 	SPDK_BDEV_STATUS_UNREGISTERING,
 	SPDK_BDEV_STATUS_REMOVING,
 };
-
-/**
- * \brief Handle to an opened SPDK block device.
- */
-struct spdk_bdev_desc;
 
 /** bdev I/O type */
 enum spdk_bdev_io_type {
@@ -379,6 +388,32 @@ struct spdk_bdev *spdk_bdev_next_leaf(struct spdk_bdev *prev);
  */
 int spdk_bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
 		       void *event_ctx, struct spdk_bdev_desc **desc);
+
+/**
+ * Open a block device for I/O operations from any SPDK thread.
+ *
+ * This opens a bdev similarly to how spdk_bdev_open_ext() opens a bdev, but can
+ * be performed from any SPDK thread. This allows the SPDK thread associated with
+ * the descriptor to be a thread other than the SPDK app thread which makes other
+ * bdev API functions that must happen on the bdev descriptor's thread eaiser to
+ * use.
+ *
+ * \param bdev_name Block device name to open.
+ * \param write true is read/write access requested, false if read-only
+ * \param event_cb notification callback to be called when the bdev triggers
+ * asynchronous event such as bdev removal. This will always be called on the
+ * same thread that spdk_bdev_open_ext() was called on. In case of removal event
+ * the descriptor will have to be manually closed to make the bdev unregister
+ * proceed.
+ * \param event_ctx param for event_cb.
+ * \param open_cb callback used to pass the opened descriptor back to the
+ * calling thread.
+ * \param open_ctx param for open_cb.
+ * \return 0 if operation is successful, suitable errno value otherwise
+ */
+int spdk_bdev_open_from_any_thread(const char *bdev_name, bool write,
+				   spdk_bdev_event_cb_t event_cb, void *event_ctx,
+				   spdk_bdev_open_cb_t open_cb, void *open_ctx);
 
 /**
  * Close a previously opened block device.
