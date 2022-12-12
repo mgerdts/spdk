@@ -357,11 +357,9 @@ spdk_init_thread_poll(void *arg)
 		rc = pthread_cond_timedwait(&g_init_cond, &g_init_mtx, &ts);
 		pthread_mutex_unlock(&g_init_mtx);
 
-		if (rc != ETIMEDOUT) {
+		if (rc != 0 && rc != ETIMEDOUT) {
 			break;
 		}
-
-
 	}
 
 	spdk_fio_cleanup_thread(fio_thread);
@@ -465,6 +463,91 @@ fio_redirected_to_dev_null(void)
 	return true;
 }
 
+struct spdk_fio_poller_data {
+	struct thread_data *td;
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
+	int ret;
+};
+
+static void
+spdk_fio_sync_run_on_app_thread(void (*msg_fn)(void *), struct spdk_fio_poller_data *data)
+{
+	pthread_mutex_init(&data->mutex, NULL);
+	pthread_cond_init(&data->cond, NULL);
+	pthread_mutex_lock(&data->mutex);
+
+	spdk_thread_send_msg(spdk_thread_get_app_thread(), msg_fn, data);
+
+	/* Wake up the poll loop in spdk_init_thread_poll() */
+	pthread_mutex_lock(&g_init_mtx);
+	pthread_cond_signal(&g_init_cond);
+	pthread_mutex_unlock(&g_init_mtx);
+
+	/* Wait for msg_fn() to call spdk_fio_wake_waiter() */
+	pthread_cond_wait(&data->cond, &data->mutex);
+	pthread_mutex_unlock(&data->mutex);
+
+	pthread_mutex_destroy(&data->mutex);
+	pthread_cond_destroy(&data->cond);
+}
+
+static void
+spdk_fio_wake_waiter(struct spdk_fio_poller_data *data)
+{
+	pthread_mutex_lock(&data->mutex);
+	pthread_cond_signal(&data->cond);
+	pthread_mutex_unlock(&data->mutex);
+}
+
+static void
+setup_on_app_thread(void *arg)
+{
+	struct spdk_fio_poller_data *data = arg;
+	struct thread_data *td = data->td;
+	unsigned int i;
+	struct fio_file *f;
+
+	if (td->o.nr_files == 1 && strcmp(td->files[0]->file_name, "*") == 0) {
+		struct spdk_bdev *bdev;
+
+		/* add all available bdevs as fio targets */
+		for (bdev = spdk_bdev_first_leaf(); bdev; bdev = spdk_bdev_next_leaf(bdev)) {
+			add_file(td, spdk_bdev_get_name(bdev), 0, 1);
+		}
+	}
+
+	for_each_file(td, f, i) {
+		struct spdk_bdev *bdev;
+		int rc;
+
+		if (strcmp(f->file_name, "*") == 0) {
+			continue;
+		}
+
+		bdev = spdk_bdev_get_by_name(f->file_name);
+		if (!bdev) {
+			SPDK_ERRLOG("Unable to find bdev with name %s\n", f->file_name);
+			data->ret = -1;
+			goto out;
+		}
+
+		f->real_file_size = spdk_bdev_get_num_blocks(bdev) *
+				    spdk_bdev_get_block_size(bdev);
+		f->filetype = FIO_TYPE_BLOCK;
+		fio_file_set_size_known(f);
+
+		rc = spdk_fio_handle_options(td, f, bdev);
+		if (rc) {
+			data->ret = rc;
+			goto out;
+		}
+	}
+	data->ret = 0;
+out:
+	spdk_fio_wake_waiter(data);
+}
+
 /* Called for each thread to fill in the 'real_file_size' member for
  * each file associated with this thread. This is called prior to
  * the init operation (spdk_fio_init()) below. This call will occur
@@ -475,9 +558,7 @@ fio_redirected_to_dev_null(void)
 static int
 spdk_fio_setup(struct thread_data *td)
 {
-	unsigned int i;
-	struct fio_file *f;
-	int rc;
+	struct spdk_fio_poller_data data = {};
 
 	/*
 	 * If we're running in a daemonized FIO instance, it's possible
@@ -509,48 +590,12 @@ spdk_fio_setup(struct thread_data *td)
 		g_spdk_env_initialized = true;
 	}
 
-	rc = spdk_fio_init(td);
-	if (rc) {
-		return rc;
-	}
+	data.td = td;
+	data.ret = -EAGAIN;
 
-	if (td->o.nr_files == 1 && strcmp(td->files[0]->file_name, "*") == 0) {
-		struct spdk_bdev *bdev;
+	spdk_fio_sync_run_on_app_thread(setup_on_app_thread, &data);
 
-		/* add all available bdevs as fio targets */
-		for (bdev = spdk_bdev_first_leaf(); bdev; bdev = spdk_bdev_next_leaf(bdev)) {
-			add_file(td, spdk_bdev_get_name(bdev), 0, 1);
-		}
-	}
-
-	for_each_file(td, f, i) {
-		struct spdk_bdev *bdev;
-
-		if (strcmp(f->file_name, "*") == 0) {
-			continue;
-		}
-
-		bdev = spdk_bdev_get_by_name(f->file_name);
-		if (!bdev) {
-			SPDK_ERRLOG("Unable to find bdev with name %s\n", f->file_name);
-			spdk_fio_cleanup(td);
-			return -1;
-		}
-
-		f->real_file_size = spdk_bdev_get_num_blocks(bdev) *
-				    spdk_bdev_get_block_size(bdev);
-		f->filetype = FIO_TYPE_BLOCK;
-		fio_file_set_size_known(f);
-
-		rc = spdk_fio_handle_options(td, f, bdev);
-		if (rc) {
-			spdk_fio_cleanup(td);
-			return rc;
-		}
-	}
-
-	spdk_fio_cleanup(td);
-	return 0;
+	return data.ret;
 }
 
 static void
@@ -625,14 +670,11 @@ spdk_fio_bdev_open(void *arg)
 /* Called for each thread, on that thread, shortly after the thread
  * starts.
  *
- * Called by spdk_fio_report_zones(), since we need an I/O channel
+ * Also called by spdk_fio_report_zones(), since we need an I/O channel
  * in order to get the zone report. (fio calls the .report_zones callback
  * before it calls the .init callback.)
  * Therefore, if fio was run with --zonemode=zbd, the thread will already
  * be initialized by the time that fio calls the .init callback.
- *
- * Called by other ioengine ops that call library functions that use SPDK
- * spinlocks.
  */
 static int
 spdk_fio_init(struct thread_data *td)
@@ -891,22 +933,15 @@ static int
 spdk_fio_get_zoned_model(struct thread_data *td, struct fio_file *f, enum zbd_zoned_model *model)
 {
 	struct spdk_bdev *bdev;
-	int rc;
 
 	if (f->filetype != FIO_TYPE_BLOCK) {
 		SPDK_ERRLOG("Unsupported filetype: %d\n", f->filetype);
 		return -EINVAL;
 	}
 
-	rc = spdk_fio_init(td);
-	if (rc) {
-		return rc;
-	}
-
 	bdev = spdk_bdev_get_by_name(f->file_name);
 	if (!bdev) {
 		SPDK_ERRLOG("Cannot get zoned model, no bdev with name: %s\n", f->file_name);
-		spdk_fio_cleanup(td);
 		return -ENODEV;
 	}
 
@@ -915,8 +950,6 @@ spdk_fio_get_zoned_model(struct thread_data *td, struct fio_file *f, enum zbd_zo
 	} else {
 		*model = ZBD_NONE;
 	}
-
-	spdk_fio_cleanup(td);
 
 	return 0;
 }
@@ -1161,23 +1194,15 @@ spdk_fio_get_max_open_zones(struct thread_data *td, struct fio_file *f,
 			    unsigned int *max_open_zones)
 {
 	struct spdk_bdev *bdev;
-	int rc;
-
-	rc = spdk_fio_init(td);
-	if (rc) {
-		return rc;
-	}
 
 	bdev = spdk_bdev_get_by_name(f->file_name);
 	if (!bdev) {
 		SPDK_ERRLOG("Cannot get max open zones, no bdev with name: %s\n", f->file_name);
-		spdk_fio_cleanup(td);
 		return -ENODEV;
 	}
 
 	*max_open_zones = spdk_bdev_get_max_open_zones(bdev);
 
-	spdk_fio_cleanup(td);
 	return 0;
 }
 #endif
@@ -1189,12 +1214,15 @@ spdk_fio_handle_options(struct thread_data *td, struct fio_file *f, struct spdk_
 
 	if (fio_options->initial_zone_reset && spdk_bdev_is_zoned(bdev)) {
 #if FIO_HAS_ZBD
-		int rc;
-
+		int rc = spdk_fio_init(td);
+		if (rc) {
+			return rc;
+		}
 		/* offset used to indicate conventional zones that need to be skipped (reset not allowed) */
 		rc = spdk_fio_reset_zones(td->io_ops_data, f->engine_data, td->o.start_offset,
 					  f->real_file_size - td->o.start_offset);
 		if (rc) {
+			spdk_fio_cleanup(td);
 			return rc;
 		}
 #else
