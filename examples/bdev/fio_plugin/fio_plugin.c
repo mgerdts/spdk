@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -104,6 +105,75 @@ static TAILQ_HEAD(, spdk_fio_thread) g_threads = TAILQ_HEAD_INITIALIZER(g_thread
 
 static __thread bool g_internal_thread = false;
 
+static pthread_mutex_t g_app_thread_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void
+spdk_fio_start_app_thread(void)
+{
+	struct spdk_thread *thread, *app_thread;
+
+	if (spdk_thread_get_app_thread() != NULL) {
+		return;
+	}
+
+	thread = spdk_thread_create("fio_app_thread", NULL);
+	assert(thread != NULL);
+
+	app_thread = spdk_thread_get_app_thread();
+	assert(app_thread != NULL);
+
+	/* If we lost a race to create the app thread, delete the thread that was just created. */
+	if (thread != app_thread) {
+		spdk_set_thread(thread);
+		spdk_thread_exit(thread);
+		spdk_set_thread(NULL);
+		spdk_thread_destroy(thread);
+	}
+}
+
+#define SPDK_FIO_SWITCH_TO_APP_THREAD(thread) \
+	do { \
+		thread = spdk_get_thread(); \
+		pthread_mutex_lock(&g_app_thread_lock); \
+		spdk_set_thread(spdk_thread_get_app_thread()); \
+	} while (0) \
+
+#define SPDK_FIO_SWITCH_FROM_APP_THREAD(thread) \
+	do { \
+		spdk_set_thread(thread); \
+		pthread_mutex_unlock(&g_app_thread_lock); \
+	} while (0) \
+
+static void
+fio_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
+		  void *event_ctx)
+{
+	SPDK_WARNLOG("Unsupported bdev event: type %d\n", type);
+}
+
+static int
+spdk_fio_bdev_open_at(const char *path, bool write, struct spdk_bdev_desc **desc)
+{
+	struct spdk_thread *start_thread;
+	int rc;
+
+	SPDK_FIO_SWITCH_TO_APP_THREAD(start_thread);
+	rc = spdk_bdev_open_ext(path, write, fio_bdev_event_cb, NULL, desc);
+	SPDK_FIO_SWITCH_FROM_APP_THREAD(start_thread);
+
+	return rc;
+}
+
+static void
+spdk_fio_bdev_close_at(struct spdk_bdev_desc *desc)
+{
+	struct spdk_thread *start_thread;
+
+	SPDK_FIO_SWITCH_TO_APP_THREAD(start_thread);
+	spdk_bdev_close(desc);
+	SPDK_FIO_SWITCH_FROM_APP_THREAD(start_thread);
+}
+
 static int
 spdk_fio_schedule_thread(struct spdk_thread *thread)
 {
@@ -162,7 +232,7 @@ spdk_fio_bdev_close_targets(void *arg)
 	TAILQ_FOREACH_SAFE(target, &fio_thread->targets, link, tmp) {
 		TAILQ_REMOVE(&fio_thread->targets, target, link);
 		spdk_put_io_channel(target->ch);
-		spdk_bdev_close(target->desc);
+		spdk_fio_bdev_close_at(target->desc);
 		free(target);
 	}
 }
@@ -476,6 +546,7 @@ spdk_fio_setup(struct thread_data *td)
 {
 	unsigned int i;
 	struct fio_file *f;
+	struct spdk_thread *start_thread;
 
 	/*
 	 * If we're running in a daemonized FIO instance, it's possible
@@ -507,13 +578,19 @@ spdk_fio_setup(struct thread_data *td)
 		g_spdk_env_initialized = true;
 	}
 
+	spdk_fio_start_app_thread();
+
 	if (td->o.nr_files == 1 && strcmp(td->files[0]->file_name, "*") == 0) {
 		struct spdk_bdev *bdev;
 
 		/* add all available bdevs as fio targets */
+		SPDK_FIO_SWITCH_TO_APP_THREAD(start_thread);
 		for (bdev = spdk_bdev_first_leaf(); bdev; bdev = spdk_bdev_next_leaf(bdev)) {
+			SPDK_FIO_SWITCH_FROM_APP_THREAD(start_thread);
 			add_file(td, spdk_bdev_get_name(bdev), 0, 1);
+			SPDK_FIO_SWITCH_TO_APP_THREAD(start_thread);
 		}
+		SPDK_FIO_SWITCH_FROM_APP_THREAD(start_thread);
 	}
 
 	for_each_file(td, f, i) {
@@ -524,7 +601,13 @@ spdk_fio_setup(struct thread_data *td)
 			continue;
 		}
 
+		/*
+		 * spdk_bdev_get_by_name() needs to happen on some SPDK thread: the app thread is
+		 * the only one that is reliably available at this time.
+		 */
+		SPDK_FIO_SWITCH_TO_APP_THREAD(start_thread);
 		bdev = spdk_bdev_get_by_name(f->file_name);
+		SPDK_FIO_SWITCH_FROM_APP_THREAD(start_thread);
 		if (!bdev) {
 			SPDK_ERRLOG("Unable to find bdev with name %s\n", f->file_name);
 			return -1;
@@ -542,13 +625,6 @@ spdk_fio_setup(struct thread_data *td)
 	}
 
 	return 0;
-}
-
-static void
-fio_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
-		  void *event_ctx)
-{
-	SPDK_WARNLOG("Unsupported bdev event: type %d\n", type);
 }
 
 static void
@@ -576,8 +652,7 @@ spdk_fio_bdev_open(void *arg)
 			return;
 		}
 
-		rc = spdk_bdev_open_ext(f->file_name, true, fio_bdev_event_cb, NULL,
-					&target->desc);
+		rc = spdk_fio_bdev_open_at(f->file_name, true, &target->desc);
 		if (rc) {
 			SPDK_ERRLOG("Unable to open bdev %s\n", f->file_name);
 			free(target);
@@ -590,7 +665,7 @@ spdk_fio_bdev_open(void *arg)
 		target->ch = spdk_bdev_get_io_channel(target->desc);
 		if (!target->ch) {
 			SPDK_ERRLOG("Unable to get I/O channel for bdev.\n");
-			spdk_bdev_close(target->desc);
+			spdk_fio_bdev_close_at(target->desc);
 			free(target);
 			fio_thread->failed = true;
 			return;
@@ -603,7 +678,7 @@ spdk_fio_bdev_open(void *arg)
 			SPDK_ERRLOG("Failed to handle options for: %s\n", f->file_name);
 			f->engine_data = NULL;
 			spdk_put_io_channel(target->ch);
-			spdk_bdev_close(target->desc);
+			spdk_fio_bdev_close_at(target->desc);
 			free(target);
 			fio_thread->failed = true;
 			return;
