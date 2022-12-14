@@ -374,6 +374,10 @@ struct set_qos_limit_ctx {
 	void (*cb_fn)(void *cb_arg, int status);
 	void *cb_arg;
 	struct spdk_bdev *bdev;
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
+	/* The thread that called spdk_set_qos_limits(). cb_fn() called from here. */
+	struct spdk_thread *thread;
+	int rc;
 };
 
 struct spdk_bdev_channel_iter {
@@ -3276,7 +3280,7 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 	struct spdk_bdev_qos	*qos = bdev->internal.qos;
 	int			i;
 
-	assert(spdk_spin_held(&bdev->internal.spinlock));
+	assert(spdk_get_thread() == spdk_io_channel_get_thread(ch->channel));
 
 	/* Rate limiting on this bdev enabled */
 	if (qos) {
@@ -7302,7 +7306,7 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 }
 
 static void
-_bdev_close(void *arg)
+_bdev_close_on_app_thread(void *arg)
 {
 	struct spdk_bdev_desc *desc = arg;
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
@@ -7316,6 +7320,18 @@ _bdev_close(void *arg)
 	spdk_spin_unlock(&g_bdev_mgr.spinlock);
 }
 
+static void
+_bdev_close_on_desc_thread(void *arg)
+{
+	struct spdk_bdev_desc *desc = arg;
+
+	assert(spdk_get_thread() == desc->thread);
+
+	spdk_poller_unregister(&desc->io_timeout_poller);
+
+	spdk_thread_exec_msg(spdk_thread_get_app_thread(), _bdev_close_on_app_thread, desc);
+}
+
 void
 spdk_bdev_close(struct spdk_bdev_desc *desc)
 {
@@ -7325,11 +7341,7 @@ spdk_bdev_close(struct spdk_bdev_desc *desc)
 	SPDK_DEBUGLOG(bdev, "Closing descriptor %p for bdev %s on thread %p\n", desc, bdev->name,
 		      spdk_get_thread());
 
-	assert(desc->thread == spdk_get_thread());
-
-	spdk_poller_unregister(&desc->io_timeout_poller);
-
-	spdk_thread_exec_msg(spdk_thread_get_app_thread(), _bdev_close, desc);
+	spdk_thread_exec_msg(desc->thread, _bdev_close_on_desc_thread, desc);
 }
 
 static void
@@ -7666,17 +7678,33 @@ bdev_write_zero_buffer_done(struct spdk_bdev_io *bdev_io, bool success, void *cb
 	bdev_write_zero_buffer_next(parent_io);
 }
 
+/* Done, on calling thread (oct) */
+static void
+bdev_set_qos_done_oct(void *_ctx)
+{
+	struct set_qos_limit_ctx	*ctx = _ctx;
+
+	assert(ctx->thread == spdk_get_thread());
+
+	ctx->cb_fn(ctx->cb_arg, ctx->rc);
+	free(ctx);
+}
+
 static void
 bdev_set_qos_limit_done(struct set_qos_limit_ctx *ctx, int status)
 {
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
+
 	spdk_spin_lock(&ctx->bdev->internal.spinlock);
 	ctx->bdev->internal.qos_mod_in_progress = false;
 	spdk_spin_unlock(&ctx->bdev->internal.spinlock);
 
 	if (ctx->cb_fn) {
-		ctx->cb_fn(ctx->cb_arg, status);
+		ctx->rc = status;
+		spdk_thread_exec_msg(ctx->thread, bdev_set_qos_done_oct, ctx);
+	} else {
+		free(ctx);
 	}
-	free(ctx);
 }
 
 static void
@@ -7686,6 +7714,8 @@ bdev_disable_qos_done(void *cb_arg)
 	struct spdk_bdev *bdev = ctx->bdev;
 	struct spdk_bdev_io *bdev_io;
 	struct spdk_bdev_qos *qos;
+
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	qos = bdev->internal.qos;
@@ -7726,6 +7756,8 @@ bdev_disable_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
 	struct set_qos_limit_ctx *ctx = _ctx;
 	struct spdk_thread *thread;
 
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
+
 	spdk_spin_lock(&bdev->internal.spinlock);
 	thread = bdev->internal.qos->thread;
 	spdk_spin_unlock(&bdev->internal.spinlock);
@@ -7743,6 +7775,8 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 
+	assert(spdk_get_thread() == spdk_io_channel_get_thread(ch));
+
 	bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
 
 	spdk_bdev_for_each_channel_continue(i, 0);
@@ -7753,6 +7787,8 @@ bdev_update_qos_rate_limit_msg(void *cb_arg)
 {
 	struct set_qos_limit_ctx *ctx = cb_arg;
 	struct spdk_bdev *bdev = ctx->bdev;
+
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	bdev_qos_update_max_quota_per_timeslice(bdev->internal.qos);
@@ -7767,9 +7803,9 @@ bdev_enable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 
-	spdk_spin_lock(&bdev->internal.spinlock);
+	assert(spdk_get_thread() == spdk_io_channel_get_thread(ch));
+
 	bdev_enable_qos(bdev, bdev_ch);
-	spdk_spin_unlock(&bdev->internal.spinlock);
 	spdk_bdev_for_each_channel_continue(i, 0);
 }
 
@@ -7777,6 +7813,8 @@ static void
 bdev_enable_qos_done(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct set_qos_limit_ctx *ctx = _ctx;
+
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 
 	bdev_set_qos_limit_done(ctx, status);
 }
@@ -7786,6 +7824,7 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits)
 {
 	int i;
 
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 	assert(bdev->internal.qos != NULL);
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
@@ -7800,17 +7839,18 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits)
 	}
 }
 
-void
-spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
-			      void (*cb_fn)(void *cb_arg, int status), void *cb_arg)
+static void
+_bdev_set_qos_rate_limits(void *_ctx)
 {
-	struct set_qos_limit_ctx	*ctx;
+	struct set_qos_limit_ctx	*ctx = _ctx;
+	uint64_t			*limits = ctx->limits;
+	struct spdk_bdev		*bdev = ctx->bdev;
 	uint32_t			limit_set_complement;
 	uint64_t			min_limit_per_sec;
 	int				i;
 	bool				disable_rate_limit = true;
 
-	BDEV_MGMT_ON_APP_THREAD_OR_CB_AND_RETURN(cb_fn, (cb_arg, -EINVAL));
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		if (limits[i] == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
@@ -7831,28 +7871,18 @@ spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
 
 		limit_set_complement = limits[i] % min_limit_per_sec;
 		if (limit_set_complement) {
-			SPDK_ERRLOG("Requested rate limit %" PRIu64 " is not a multiple of %" PRIu64 "\n",
-				    limits[i], min_limit_per_sec);
+			SPDK_ERRLOG("Requested rate limit %" PRIu64 " is not a multiple of %"
+				    PRIu64 "\n", limits[i], min_limit_per_sec);
 			limits[i] += min_limit_per_sec - limit_set_complement;
 			SPDK_ERRLOG("Round up the rate limit to %" PRIu64 "\n", limits[i]);
 		}
 	}
 
-	ctx = calloc(1, sizeof(*ctx));
-	if (ctx == NULL) {
-		cb_fn(cb_arg, -ENOMEM);
-		return;
-	}
-
-	ctx->cb_fn = cb_fn;
-	ctx->cb_arg = cb_arg;
-	ctx->bdev = bdev;
-
 	spdk_spin_lock(&bdev->internal.spinlock);
 	if (bdev->internal.qos_mod_in_progress) {
 		spdk_spin_unlock(&bdev->internal.spinlock);
-		free(ctx);
-		cb_fn(cb_arg, -EAGAIN);
+		ctx->rc = -EAGAIN;
+		spdk_thread_exec_msg(ctx->thread, bdev_set_qos_done_oct, ctx);
 		return;
 	}
 	bdev->internal.qos_mod_in_progress = true;
@@ -7910,23 +7940,57 @@ spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
 	spdk_spin_unlock(&bdev->internal.spinlock);
 }
 
+void
+spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
+			      void (*cb_fn)(void *cb_arg, int status), void *cb_arg)
+{
+	struct set_qos_limit_ctx	*ctx;
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+
+	ctx->cb_fn = cb_fn;
+	ctx->cb_arg = cb_arg;
+	ctx->bdev = bdev;
+	memcpy(&ctx->limits[0], limits, sizeof(ctx->limits));
+	ctx->thread = spdk_get_thread();
+
+	spdk_thread_exec_msg(spdk_thread_get_app_thread(), _bdev_set_qos_rate_limits, ctx);
+}
+
 struct spdk_bdev_histogram_ctx {
 	spdk_bdev_histogram_status_cb cb_fn;
 	void *cb_arg;
 	struct spdk_bdev *bdev;
+	bool enable;
 	int status;
+	struct spdk_thread *thread;
 };
+
+/* Done, on calling thread (oct) */
+static void
+bdev_histogram_enable_done_oct(void *_ctx)
+{
+	struct spdk_bdev_histogram_ctx *ctx = _ctx;
+
+	assert(spdk_get_thread() == ctx->thread);
+	ctx->cb_fn(ctx->cb_arg, ctx->status);
+	free(ctx);
+}
 
 static void
 bdev_histogram_disable_channel_cb(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct spdk_bdev_histogram_ctx *ctx = _ctx;
 
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
+
 	spdk_spin_lock(&ctx->bdev->internal.spinlock);
 	ctx->bdev->internal.histogram_in_progress = false;
 	spdk_spin_unlock(&ctx->bdev->internal.spinlock);
-	ctx->cb_fn(ctx->cb_arg, ctx->status);
-	free(ctx);
 }
 
 static void
@@ -7934,6 +7998,8 @@ bdev_histogram_disable_channel(struct spdk_bdev_channel_iter *i, struct spdk_bde
 			       struct spdk_io_channel *_ch, void *_ctx)
 {
 	struct spdk_bdev_channel *ch = __io_ch_to_bdev_ch(_ch);
+
+	assert(spdk_get_thread() == spdk_io_channel_get_thread(_ch));
 
 	if (ch->histogram != NULL) {
 		spdk_histogram_data_free(ch->histogram);
@@ -7947,6 +8013,8 @@ bdev_histogram_enable_channel_cb(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct spdk_bdev_histogram_ctx *ctx = _ctx;
 
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
+
 	if (status != 0) {
 		ctx->status = status;
 		ctx->bdev->internal.histogram_enabled = false;
@@ -7956,8 +8024,7 @@ bdev_histogram_enable_channel_cb(struct spdk_bdev *bdev, void *_ctx, int status)
 		spdk_spin_lock(&ctx->bdev->internal.spinlock);
 		ctx->bdev->internal.histogram_in_progress = false;
 		spdk_spin_unlock(&ctx->bdev->internal.spinlock);
-		ctx->cb_fn(ctx->cb_arg, ctx->status);
-		free(ctx);
+		spdk_thread_exec_msg(ctx->thread, bdev_histogram_enable_done_oct, ctx);
 	}
 }
 
@@ -7978,30 +8045,20 @@ bdev_histogram_enable_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev
 	spdk_bdev_for_each_channel_continue(i, status);
 }
 
-void
-spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_status_cb cb_fn,
-			   void *cb_arg, bool enable)
+static void
+_spdk_bdev_histogram_enable(void *_ctx)
 {
-	struct spdk_bdev_histogram_ctx *ctx;
+	struct spdk_bdev_histogram_ctx *ctx = _ctx;
+	struct spdk_bdev *bdev = ctx->bdev;
+	bool enable = ctx->enable;
 
-	BDEV_MGMT_ON_APP_THREAD_OR_CB_AND_RETURN(cb_fn, (cb_arg, -EINVAL));
-
-	ctx = calloc(1, sizeof(struct spdk_bdev_histogram_ctx));
-	if (ctx == NULL) {
-		cb_fn(cb_arg, -ENOMEM);
-		return;
-	}
-
-	ctx->bdev = bdev;
-	ctx->status = 0;
-	ctx->cb_fn = cb_fn;
-	ctx->cb_arg = cb_arg;
+	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	if (bdev->internal.histogram_in_progress) {
 		spdk_spin_unlock(&bdev->internal.spinlock);
-		free(ctx);
-		cb_fn(cb_arg, -EAGAIN);
+		ctx->status = -EAGAIN;
+		spdk_thread_send_msg(ctx->thread, bdev_histogram_enable_done_oct, ctx);
 		return;
 	}
 
@@ -8020,6 +8077,29 @@ spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_status_cb
 	}
 }
 
+/* May be called from any SPDK thread */
+void
+spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_status_cb cb_fn,
+			   void *cb_arg, bool enable)
+{
+	struct spdk_bdev_histogram_ctx *ctx;
+
+	ctx = calloc(1, sizeof(struct spdk_bdev_histogram_ctx));
+	if (ctx == NULL) {
+		cb_fn(cb_arg, -ENOMEM);
+		return;
+	}
+
+	ctx->bdev = bdev;
+	ctx->status = 0;
+	ctx->cb_fn = cb_fn;
+	ctx->cb_arg = cb_arg;
+	ctx->enable = enable;
+	ctx->thread = spdk_get_thread();
+
+	spdk_thread_exec_msg(spdk_thread_get_app_thread(), _spdk_bdev_histogram_enable, ctx);
+}
+
 struct spdk_bdev_histogram_data_ctx {
 	spdk_bdev_histogram_data_cb cb_fn;
 	void *cb_arg;
@@ -8028,6 +8108,7 @@ struct spdk_bdev_histogram_data_ctx {
 	struct spdk_histogram_data	*histogram;
 };
 
+/* On same thread as spdk_bdev_histogram_get() */
 static void
 bdev_histogram_get_channel_cb(struct spdk_bdev *bdev, void *_ctx, int status)
 {
@@ -8045,6 +8126,8 @@ bdev_histogram_get_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *b
 	struct spdk_bdev_histogram_data_ctx *ctx = _ctx;
 	int status = 0;
 
+	assert(spdk_get_thread() == spdk_io_channel_get_thread(_ch));
+
 	if (ch->histogram == NULL) {
 		status = -EFAULT;
 	} else {
@@ -8054,14 +8137,13 @@ bdev_histogram_get_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *b
 	spdk_bdev_for_each_channel_continue(i, status);
 }
 
+/* May be called from any thread */
 void
 spdk_bdev_histogram_get(struct spdk_bdev *bdev, struct spdk_histogram_data *histogram,
 			spdk_bdev_histogram_data_cb cb_fn,
 			void *cb_arg)
 {
 	struct spdk_bdev_histogram_data_ctx *ctx;
-
-	BDEV_MGMT_ON_APP_THREAD_OR_CB_AND_RETURN(cb_fn, (cb_arg, -EINVAL, NULL));
 
 	ctx = calloc(1, sizeof(struct spdk_bdev_histogram_data_ctx));
 	if (ctx == NULL) {

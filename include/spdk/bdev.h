@@ -591,8 +591,6 @@ void spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits);
 /**
  * Set the quality of service rate limits on a bdev.
  *
- * This function must be called from the SPDK app thread.
- *
  * \param bdev Block device.
  * \param limits Pointer to the QoS rate limits array which holding the limits.
  * \param cb_fn Callback function to be called when the QoS limit has been updated.
@@ -1989,8 +1987,6 @@ uint64_t spdk_bdev_io_get_seek_offset(const struct spdk_bdev_io *bdev_io);
 /**
  * Enable or disable collecting histogram data on a bdev.
  *
- * This function must be called from the SPDK app thread.
- *
  * \param bdev Block device.
  * \param cb_fn Callback function to be called when histograms are enabled.
  * \param cb_arg Argument to pass to cb_fn.
@@ -2002,8 +1998,6 @@ void spdk_bdev_histogram_enable(struct spdk_bdev *bdev, spdk_bdev_histogram_stat
 /**
  * Get aggregated histogram data from a bdev. Callback provides merged histogram
  * for specified bdev.
- *
- * This function must be called from the SPDK app thread.
  *
  * \param bdev Block device.
  * \param histogram Histogram for aggregated data
