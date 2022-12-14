@@ -1832,7 +1832,7 @@ blob_persist_clear_clusters_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 		return;
 	}
 
-	pthread_mutex_lock(&bs->used_clusters_mutex);
+	spdk_spin_lock(&bs->used_clusters_lock);
 	/* Release all clusters that were truncated */
 	for (i = blob->active.num_clusters; i < blob->active.cluster_array_size; i++) {
 		uint32_t cluster_num = bs_lba_to_cluster(bs, blob->active.clusters[i]);
@@ -1842,7 +1842,7 @@ blob_persist_clear_clusters_cpl(spdk_bs_sequence_t *seq, void *cb_arg, int bserr
 			bs_release_cluster(bs, cluster_num);
 		}
 	}
-	pthread_mutex_unlock(&bs->used_clusters_mutex);
+	spdk_spin_unlock(&bs->used_clusters_lock);
 
 	if (blob->active.num_clusters == 0) {
 		free(blob->active.clusters);
@@ -2145,12 +2145,12 @@ blob_resize(struct spdk_blob *blob, uint64_t sz)
 	if (spdk_blob_is_thin_provisioned(blob) == false) {
 		cluster = 0;
 		lfmd = 0;
-		pthread_mutex_lock(&blob->bs->used_clusters_mutex);
+		spdk_spin_lock(&blob->bs->used_clusters_lock);
 		for (i = num_clusters; i < sz; i++) {
 			bs_allocate_cluster(blob, i, &cluster, &lfmd, true);
 			lfmd++;
 		}
-		pthread_mutex_unlock(&blob->bs->used_clusters_mutex);
+		spdk_spin_unlock(&blob->bs->used_clusters_lock);
 	}
 
 	blob->active.num_clusters = sz;
@@ -2444,9 +2444,9 @@ blob_insert_cluster_cpl(void *cb_arg, int bserrno)
 			 * but continue without error. */
 			bserrno = 0;
 		}
-		pthread_mutex_lock(&ctx->blob->bs->used_clusters_mutex);
+		spdk_spin_lock(&ctx->blob->bs->used_clusters_lock);
 		bs_release_cluster(ctx->blob->bs, ctx->new_cluster);
-		pthread_mutex_unlock(&ctx->blob->bs->used_clusters_mutex);
+		spdk_spin_unlock(&ctx->blob->bs->used_clusters_lock);
 		if (ctx->new_extent_page != 0) {
 			bs_release_md_page(ctx->blob->bs, ctx->new_extent_page);
 		}
@@ -2549,10 +2549,10 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 		}
 	}
 
-	pthread_mutex_lock(&blob->bs->used_clusters_mutex);
+	spdk_spin_lock(&blob->bs->used_clusters_lock);
 	rc = bs_allocate_cluster(blob, cluster_number, &ctx->new_cluster, &ctx->new_extent_page,
 				 false);
-	pthread_mutex_unlock(&blob->bs->used_clusters_mutex);
+	spdk_spin_unlock(&blob->bs->used_clusters_lock);
 	if (rc != 0) {
 		spdk_free(ctx->buf);
 		free(ctx);
@@ -2566,9 +2566,9 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 
 	ctx->seq = bs_sequence_start_external(_ch, &cpl, blob);
 	if (!ctx->seq) {
-		pthread_mutex_lock(&blob->bs->used_clusters_mutex);
+		spdk_spin_lock(&blob->bs->used_clusters_lock);
 		bs_release_cluster(blob->bs, ctx->new_cluster);
-		pthread_mutex_unlock(&blob->bs->used_clusters_mutex);
+		spdk_spin_unlock(&blob->bs->used_clusters_lock);
 		spdk_free(ctx->buf);
 		free(ctx);
 		bs_user_op_abort(op, -ENOMEM);
@@ -3271,7 +3271,7 @@ bs_dev_destroy(void *io_device)
 		blob_free(blob);
 	}
 
-	pthread_mutex_destroy(&bs->used_clusters_mutex);
+	spdk_spin_destroy(&bs->used_clusters_lock);
 
 	spdk_bit_array_free(&bs->open_blobids);
 	spdk_bit_array_free(&bs->used_blobids);
@@ -3557,14 +3557,14 @@ bs_alloc(struct spdk_bs_dev *dev, struct spdk_bs_opts *opts, struct spdk_blob_st
 	bs->used_blobids = spdk_bit_array_create(0);
 	bs->open_blobids = spdk_bit_array_create(0);
 
-	pthread_mutex_init(&bs->used_clusters_mutex, NULL);
+	spdk_spin_init(&bs->used_clusters_lock);
 
 	spdk_io_device_register(bs, bs_channel_create, bs_channel_destroy,
 				sizeof(struct spdk_bs_channel), "blobstore");
 	rc = bs_register_md_thread(bs);
 	if (rc == -1) {
 		spdk_io_device_unregister(bs, NULL);
-		pthread_mutex_destroy(&bs->used_clusters_mutex);
+		spdk_spin_destroy(&bs->used_clusters_lock);
 		spdk_bit_array_free(&bs->open_blobids);
 		spdk_bit_array_free(&bs->used_blobids);
 		spdk_bit_array_free(&bs->used_md_pages);
