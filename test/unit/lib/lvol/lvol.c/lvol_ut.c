@@ -2154,6 +2154,8 @@ lvol_esnap_create_bad_args(void)
 	struct ut_cb_res lvres1, lvres2;
 	struct spdk_lvol *lvol;
 
+	init_dev(&dev);
+
 	spdk_lvs_opts_init(&opts);
 	snprintf(opts.name, sizeof(opts.name), "lvs");
 	g_lvserrno = -1;
