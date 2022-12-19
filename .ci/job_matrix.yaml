@@ -24,8 +24,8 @@ volumes:
 runs_on_dockers:
   - {file: '.ci/Dockerfile.ubuntu20.04', name: 'ubuntu2004ofed58', arch: 'x86_64', tag: '5.8-0.4.6.0'}
   - {file: '.ci/Dockerfile.ubuntu20.04', name: 'ubuntu2004ofed58', arch: 'aarch64', tag: '5.8-0.4.6.0'}
-  - {file: '.ci/Dockerfile.ubuntu22.04', name: 'ubuntu2204ofed58', arch: 'x86_64', tag: '5.8-0.4.6.0'}
-  - {file: '.ci/Dockerfile.ubuntu22.04', name: 'ubuntu2204ofed58', arch: 'aarch64', tag: '5.8-0.4.6.0'}
+  - {file: '.ci/Dockerfile.ubuntu22.04', name: 'ubuntu2204ofed59', arch: 'x86_64', tag: '5.9-0.1.9.0'}
+  - {file: '.ci/Dockerfile.ubuntu22.04', name: 'ubuntu2204ofed59', arch: 'aarch64', tag: '5.9-0.1.9.0'}
   - {file: '.ci/Dockerfile.centos7.9.2009', name: 'centos79ofed58', arch: 'x86_64', tag: '5.8-0.4.6.0'}
   - {file: '.ci/Dockerfile.centos7.9.2009', name: 'centos79ofed58', arch: 'aarch64', tag: '5.8-0.4.6.0'}
   - {file: '.ci/Dockerfile.centos8.2.2004', name: 'centos82ofed58', arch: 'x86_64', tag: '5.8-0.4.6.0'}
@@ -52,7 +52,7 @@ steps:
     resource: actions/nexus.py
     containerSelector:
       - "{name: 'ubuntu2004ofed58', variant:1}"
-      - "{name: 'ubuntu2204ofed58', variant:1}"
+      - "{name: 'ubuntu2204ofed59', variant:1}"
       - "{name: 'centos79ofed58', variant:1}"
       - "{name: 'centos82ofed58', variant:1}"
     run: |
@@ -64,7 +64,7 @@ steps:
     resource: actions/nexus.py
     containerSelector:
       - "{name: 'ubuntu2004ofed58', variant:1}"
-      - "{name: 'ubuntu2204ofed58', variant:1}"
+      - "{name: 'ubuntu2204ofed59', variant:1}"
       - "{name: 'centos79ofed58', variant:1}"
       - "{name: 'centos82ofed58', variant:1}"
     run: |
