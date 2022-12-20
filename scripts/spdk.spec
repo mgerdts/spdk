@@ -26,7 +26,7 @@ Source0:	spdk-%{version}.tar.gz
 
 # It is somewhat hard to get SPDK RPC working with python 2.7
 # Distros that don't support python3 will use python2
-%if 0%{rhel} >= 7
+%if 0%{?rhel} >= 7
 # So, let's switch to Python36 from IUS repo - https://github.com/iusrepo/python36
 %define use_python python3.6
 %define python_ver 3.6
@@ -74,7 +74,7 @@ BuildRequires:	make gcc gcc-c++
 BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel 
 BuildRequires:	libiscsi-devel
 
-%if 0%{rhel} >= 8
+%if 0%{?rhel} >= 8
 BuildRequires:  git-core
 %else
 BuildRequires:  git
@@ -102,7 +102,7 @@ Requires: %{name}%{?_isa} = %{package_version} python3 python3-pexpect
 BuildRequires:	python3-pep8 python3-configshell
 %endif
 
-%if 0%{rhel} > 7
+%if 0%{?rhel} > 7
 Requires: python3-configshell
 BuildRequires: python3-configshell
 %endif
