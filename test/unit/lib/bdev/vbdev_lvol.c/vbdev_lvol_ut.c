@@ -42,6 +42,7 @@ DEFINE_STUB(spdk_bdev_get_memory_domains, int, (struct spdk_bdev *bdev,
 DEFINE_STUB(spdk_blob_get_esnap_id, int,
 	    (struct spdk_blob *blob, const void **id, size_t *len), -ENOTSUP);
 DEFINE_STUB(spdk_blob_is_esnap_clone, bool, (const struct spdk_blob *blob), false);
+DEFINE_STUB(spdk_blob_get_esnap_bs_dev, struct spdk_bs_dev *, (const struct spdk_blob *blob), NULL);
 
 struct spdk_blob_store {
 	spdk_bs_esnap_dev_create esnap_bs_dev_create;

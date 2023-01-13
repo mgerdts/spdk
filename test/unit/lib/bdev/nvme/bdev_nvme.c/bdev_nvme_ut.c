@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -19,6 +19,9 @@
 #include "bdev/nvme/bdev_mdns_client.c"
 
 static void *g_accel_p = (void *)0xdeadbeaf;
+
+struct spdk_blob {
+};
 
 DEFINE_STUB(spdk_nvme_probe_async, struct spdk_nvme_probe_ctx *,
 	    (const struct spdk_nvme_transport_id *trid, void *cb_ctx,
@@ -51,6 +54,7 @@ DEFINE_RETURN_MOCK(spdk_nvme_ctrlr_get_memory_domains, int);
 
 DEFINE_STUB_V(spdk_jsonrpc_send_error_response, (struct spdk_jsonrpc_request *request,
 		int error_code, const char *msg));
+DEFINE_STUB(spdk_blob_is_esnap_clone, bool, (const struct spdk_blob *blob), false);
 
 DEFINE_STUB_V(spdk_nvme_transport_get_opts, (struct spdk_nvme_transport_opts *opts,
 		size_t opts_size));
