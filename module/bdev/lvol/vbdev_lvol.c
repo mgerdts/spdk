@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/blob_bdev.h"
@@ -26,7 +26,7 @@ static int vbdev_lvs_get_ctx_size(void);
 static void vbdev_lvs_examine(struct spdk_bdev *bdev);
 static bool g_shutdown_started = false;
 
-static struct spdk_bdev_module g_lvol_if = {
+struct spdk_bdev_module g_lvol_if = {
 	.name = "lvol",
 	.module_init = vbdev_lvs_init,
 	.fini_start = vbdev_lvs_fini_start,
@@ -240,6 +240,7 @@ vbdev_lvs_create(const char *base_bdev_name, const char *name, uint32_t cluster_
 		return -EINVAL;
 	}
 	snprintf(opts.name, sizeof(opts.name), "%s", name);
+	opts.esnap_bs_dev_create = vbdev_lvol_esnap_dev_create;
 
 	lvs_req = calloc(1, sizeof(*lvs_req));
 	if (!lvs_req) {
@@ -1513,6 +1514,17 @@ vbdev_lvs_examine_done(void *arg, int lvserrno)
 }
 
 static void
+vbdev_lvs_load_esnap(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn,
+		     void *cb_arg)
+{
+	struct spdk_lvs_opts lvs_opts;
+
+	spdk_lvs_opts_init(&lvs_opts);
+	lvs_opts.esnap_bs_dev_create = vbdev_lvol_esnap_dev_create;
+	spdk_lvs_load_ext(bs_dev, &lvs_opts, cb_fn, cb_arg);
+}
+
+static void
 vbdev_lvs_examine(struct spdk_bdev *bdev)
 {
 	struct spdk_lvs_req *req;
@@ -1534,7 +1546,7 @@ vbdev_lvs_examine(struct spdk_bdev *bdev)
 	req->cb_fn = vbdev_lvs_examine_done;
 	req->cb_arg = req;
 
-	_vbdev_lvs_examine(bdev, req, spdk_lvs_load);
+	_vbdev_lvs_examine(bdev, req, vbdev_lvs_load_esnap);
 }
 
 struct spdk_lvol *

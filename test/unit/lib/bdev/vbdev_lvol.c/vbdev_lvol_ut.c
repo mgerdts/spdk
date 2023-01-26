@@ -42,6 +42,10 @@ DEFINE_STUB(spdk_blob_get_esnap_id, int,
 	    (struct spdk_blob *blob, const void **id, size_t *len), -ENOTSUP);
 DEFINE_STUB(spdk_blob_is_esnap_clone, bool, (const struct spdk_blob *blob), false);
 
+struct spdk_blob_store {
+	spdk_bs_esnap_dev_create esnap_bs_dev_create;
+};
+
 const struct spdk_bdev_aliases_list *
 spdk_bdev_get_aliases(const struct spdk_bdev *bdev)
 {
@@ -245,11 +249,20 @@ spdk_blob_is_thin_provisioned(struct spdk_blob *blob)
 	return false;
 }
 
+int
+vbdev_lvol_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+			    const void *esnap_id, uint32_t id_len,
+			    struct spdk_bs_dev **_bs_dev)
+{
+	CU_ASSERT(false);
+	return -ENOTSUP;
+}
+
 static struct spdk_lvol *_lvol_create(struct spdk_lvol_store *lvs);
 
-void
-spdk_lvs_load(struct spdk_bs_dev *dev,
-	      spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
+static void
+lvs_load(struct spdk_bs_dev *dev, const struct spdk_lvs_opts *lvs_opts,
+	 spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
 {
 	struct spdk_lvol_store *lvs = NULL;
 	int i;
@@ -267,6 +280,9 @@ spdk_lvs_load(struct spdk_bs_dev *dev,
 
 	lvs = calloc(1, sizeof(*lvs));
 	SPDK_CU_ASSERT_FATAL(lvs != NULL);
+	lvs->blobstore = calloc(1, sizeof(*lvs->blobstore));
+	lvs->blobstore->esnap_bs_dev_create = lvs_opts->esnap_bs_dev_create;
+	SPDK_CU_ASSERT_FATAL(lvs->blobstore != NULL);
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
 	spdk_uuid_generate(&lvs->uuid);
@@ -276,6 +292,20 @@ spdk_lvs_load(struct spdk_bs_dev *dev,
 	}
 
 	cb_fn(cb_arg, lvs, lvserrno);
+}
+
+void
+spdk_lvs_load(struct spdk_bs_dev *dev,
+	      spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	lvs_load(dev, NULL, cb_fn, cb_arg);
+}
+
+void
+spdk_lvs_load_ext(struct spdk_bs_dev *bs_dev, const struct spdk_lvs_opts *lvs_opts,
+		  spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	lvs_load(bs_dev, lvs_opts, cb_fn, cb_arg);
 }
 
 int
@@ -409,6 +439,7 @@ spdk_lvs_unload(struct spdk_lvol_store *lvs, spdk_lvs_op_complete cb_fn, void *c
 	g_lvol_store = NULL;
 
 	lvs->bs_dev->destroy(lvs->bs_dev);
+	free(lvs->blobstore);
 	free(lvs);
 
 	if (cb_fn != NULL) {
@@ -441,6 +472,7 @@ spdk_lvs_destroy(struct spdk_lvol_store *lvs, spdk_lvs_op_complete cb_fn,
 	g_lvol_store = NULL;
 
 	lvs->bs_dev->destroy(lvs->bs_dev);
+	free(lvs->blobstore);
 	free(lvs);
 
 	if (cb_fn != NULL) {
@@ -983,6 +1015,8 @@ ut_lvs_examine_check(bool success)
 		SPDK_CU_ASSERT_FATAL(lvs_bdev != NULL);
 		g_lvol_store = lvs_bdev->lvs;
 		SPDK_CU_ASSERT_FATAL(g_lvol_store != NULL);
+		SPDK_CU_ASSERT_FATAL(g_lvol_store->blobstore != NULL);
+		CU_ASSERT(g_lvol_store->blobstore->esnap_bs_dev_create != NULL);
 		CU_ASSERT(g_lvol_store->bs_dev != NULL);
 	} else {
 		SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&g_spdk_lvol_pairs));

@@ -9,7 +9,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 SO_VER := 4
 SO_MINOR := 0
 
-C_SRCS = vbdev_lvol.c vbdev_lvol_rpc.c
+C_SRCS = vbdev_lvol.c vbdev_lvol_rpc.c vbdev_lvol_esnap.c
 LIBNAME = bdev_lvol
 
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
