@@ -1167,6 +1167,71 @@ vbdev_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 	spdk_lvol_create_clone(lvol, clone_name, _vbdev_lvol_create_cb, req);
 }
 
+void
+vbdev_lvol_create_bdev_clone(const char *esnap_uuid,
+			     struct spdk_lvol_store *lvs, const char *clone_name,
+			     spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg)
+{
+	struct spdk_lvol_with_handle_req *req;
+	struct spdk_bdev *bdev;
+	char bdev_uuid[SPDK_UUID_STRING_LEN];
+	struct spdk_uuid uuid;
+	uint64_t sz;
+	int rc;
+
+	if (lvs == NULL) {
+		SPDK_ERRLOG("lvol store not specified\n");
+		cb_fn(cb_arg, NULL, -EINVAL);
+		return;
+	}
+
+	rc = spdk_uuid_parse(&uuid, esnap_uuid);
+	if (rc != 0) {
+		SPDK_ERRLOG("Invalid UUID '%s'\n", esnap_uuid);
+		cb_fn(cb_arg, NULL, -EINVAL);
+		return;
+	}
+
+	bdev = spdk_bdev_get_by_name(esnap_uuid);
+	if (bdev == NULL) {
+		SPDK_ERRLOG("bdev '%s' does not exist\n", esnap_uuid);
+		cb_fn(cb_arg, NULL, -ENODEV);
+		return;
+	}
+
+	rc = spdk_uuid_fmt_lower(bdev_uuid, sizeof(bdev_uuid), spdk_bdev_get_uuid(bdev));
+	if (rc != 0) {
+		SPDK_ERRLOG("bdev %s: unable to parse UUID\n", esnap_uuid);
+		assert(false);
+		cb_fn(cb_arg, NULL, -ENODEV);
+		return;
+	}
+
+	/* Verify the bdev name or alias isn't a UUID that is different from the bdev's UUID. */
+	if (spdk_uuid_compare(&uuid, spdk_bdev_get_uuid(bdev)) != 0) {
+		SPDK_ERRLOG("bdev with name or alias %s has UUID %s\n", esnap_uuid, bdev_uuid);
+		cb_fn(cb_arg, NULL, -EINVAL);
+		return;
+	}
+
+	req = calloc(1, sizeof(*req));
+	if (req == NULL) {
+		cb_fn(cb_arg, NULL, -ENOMEM);
+		return;
+	}
+
+	req->cb_fn = cb_fn;
+	req->cb_arg = cb_arg;
+
+	sz = spdk_bdev_get_num_blocks(bdev) * spdk_bdev_get_block_size(bdev);
+	rc = spdk_lvol_create_esnap_clone(bdev_uuid, sizeof(bdev_uuid), sz, lvs, clone_name,
+					  _vbdev_lvol_create_cb, req);
+	if (rc != 0) {
+		cb_fn(cb_arg, NULL, rc);
+		free(req);
+	}
+}
+
 static void
 _vbdev_lvol_rename_cb(void *cb_arg, int lvolerrno)
 {
