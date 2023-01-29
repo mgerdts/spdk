@@ -96,6 +96,7 @@ BDEV_DEPS_THREAD = $(BDEV_DEPS) thread
 
 # module/blob
 DEPDIRS-blob_bdev := log thread bdev
+DEPDIRS-blob_eio := log thread
 
 # module/blobfs
 DEPDIRS-blobfs_bdev := $(BDEV_DEPS_THREAD) blob_bdev blobfs

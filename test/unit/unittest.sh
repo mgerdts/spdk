@@ -39,6 +39,7 @@ function unittest_blob() {
 		$valgrind $testdir/lib/blob/blob.c/blob_ut
 	fi
 	$valgrind $testdir/lib/blob/blob_bdev.c/blob_bdev_ut
+	$valgrind $testdir/lib/blob/blob_eio.c/blob_eio_ut
 	$valgrind $testdir/lib/blobfs/tree.c/tree_ut
 	$valgrind $testdir/lib/blobfs/blobfs_async_ut/blobfs_async_ut
 	# blobfs_sync_ut hangs when run under valgrind, so don't use $valgrind

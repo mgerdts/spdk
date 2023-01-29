@@ -1,0 +1,8 @@
+{
+	global:
+
+	# public functions
+	spdk_bs_dev_eio_create;
+
+	local: *;
+};
