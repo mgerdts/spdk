@@ -109,6 +109,7 @@ function verify_esnap_clone() {
 	local bdev=$1
 	local parent=$2
 	local writable=true
+	local present=true
 	local arg
 	shift 2
 
@@ -116,6 +117,9 @@ function verify_esnap_clone() {
 		case $arg in
 			ro)
 				writable=false
+				;;
+			missing)
+				present=false
 				;;
 			*)
 				echo "invalid arg '$arg'" 1>&2
@@ -131,7 +135,7 @@ function verify_esnap_clone() {
 	test "${jq_out["supported_io_types.write"]}" == "$writable"
 	test "${jq_out["driver_specific.lvol.esnap_clone"]}" == true
 	test "${jq_out["driver_specific.lvol.external_snapshot_name"]}" == "$parent"
-	test "${jq_out["driver_specific.lvol.external_snapshot_present"]}" == true
+	test "${jq_out["driver_specific.lvol.external_snapshot_present"]}" == "$present"
 }
 
 function test_esnap_clones() {
@@ -236,6 +240,49 @@ function test_esnap_clones() {
 	rpc_cmd bdev_malloc_delete "$esnap_dev"
 }
 
+function test_esnap_late_arrival() {
+	local bs_dev esnap_dev
+	local block_size=512
+	local esnap_size_mb=1
+	local lvs_cluster_size=$((16 * 1024))
+	local lvs_uuid esnap_uuid eclone_uuid snap_uuid clone_uuid uuid
+	local aio_bdev=test_esnap_reload_aio0
+
+	# Create the lvstore on an aio device. Can't use malloc because we need to remove
+	# the device and re-add it to trigger an lvstore unload and then load.
+	rm -f $testdir/aio_bdev_0
+	truncate -s "${AIO_SIZE_MB}M" $testdir/aio_bdev_0
+	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
+	lvs_uuid=$(rpc_cmd bdev_lvol_create_lvstore -c "$lvs_cluster_size" "$bs_dev" lvs_test)
+
+	# Create a bdev that will be the external snapshot
+	esnap_uuid=e4b40d8b-f623-416d-8234-baf5a4c83cbd
+	esnap_dev=$(rpc_cmd bdev_malloc_create -u "$esnap_uuid" "$esnap_size_mb" "$block_size")
+	eclone_uuid=$(rpc_cmd bdev_lvol_clone_bdev "$esnap_uuid" lvs_test "eclone1")
+
+	# Unload the lvstore
+	rpc_cmd bdev_aio_delete "$aio_bdev"
+	NOT rpc_cmd bdev_lvol_get_lvstores -l lvs_test
+
+	# Delete the external snapshot device then reload the lvstore.
+	rpc_cmd bdev_malloc_delete "$esnap_dev"
+	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
+	lvs_uuid=$(rpc_cmd bdev_lvol_get_lvstores -l lvs_test)
+
+	# Verify that the esnap clone exists but does not have the esnap loaded.
+	verify_esnap_clone "$eclone_uuid" "$esnap_uuid" missing
+
+	# Create the esnap device and verify that the esnap clone finds it.
+	esnap_dev=$(rpc_cmd bdev_malloc_create -u "$esnap_uuid" "$esnap_size_mb" "$block_size")
+	rpc_cmd bdev_wait_for_examine
+	if ! verify_esnap_clone "$eclone_uuid" "$esnap_uuid"; then
+		sleep 99999
+	fi
+
+	rpc_cmd bdev_aio_delete "$aio_bdev"
+	rpc_cmd bdev_malloc_delete "$esnap_dev"
+}
+
 $SPDK_BIN_DIR/spdk_tgt &
 spdk_pid=$!
 trap 'killprocess "$spdk_pid"; rm -f "$testdir/aio_bdev_0"; exit 1' SIGINT SIGTERM SIGPIPE EXIT
@@ -245,6 +292,7 @@ shopt -s extglob
 
 run_test "test_esnap_reload" test_esnap_reload
 run_test "test_esnap_clones" test_esnap_clones
+run_test "test_esnap_late_arrival" test_esnap_late_arrival
 
 trap - SIGINT SIGTERM SIGPIPE EXIT
 killprocess $spdk_pid

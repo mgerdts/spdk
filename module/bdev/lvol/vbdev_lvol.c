@@ -23,7 +23,8 @@ static TAILQ_HEAD(, lvol_store_bdev) g_spdk_lvol_pairs = TAILQ_HEAD_INITIALIZER(
 static int vbdev_lvs_init(void);
 static void vbdev_lvs_fini_start(void);
 static int vbdev_lvs_get_ctx_size(void);
-static void vbdev_lvs_examine(struct spdk_bdev *bdev);
+static void vbdev_lvs_examine_config(struct spdk_bdev *bdev);
+static void vbdev_lvs_examine_disk(struct spdk_bdev *bdev);
 static bool g_shutdown_started = false;
 
 struct spdk_bdev_module g_lvol_if = {
@@ -31,7 +32,8 @@ struct spdk_bdev_module g_lvol_if = {
 	.module_init = vbdev_lvs_init,
 	.fini_start = vbdev_lvs_fini_start,
 	.async_fini_start = true,
-	.examine_disk = vbdev_lvs_examine,
+	.examine_config = vbdev_lvs_examine_config,
+	.examine_disk = vbdev_lvs_examine_disk,
 	.get_ctx_size = vbdev_lvs_get_ctx_size,
 
 };
@@ -1476,6 +1478,20 @@ end:
 }
 
 static void
+vbdev_lvs_examine_config(struct spdk_bdev *bdev)
+{
+	char uuid_str[SPDK_UUID_STRING_LEN];
+
+	spdk_uuid_fmt_lower(uuid_str, sizeof(uuid_str), &bdev->uuid);
+
+	if (spdk_lvs_esnap_notify_hotplug(uuid_str, sizeof(uuid_str))) {
+		SPDK_INFOLOG(vbdev_lvol, "bdev %s: claimed by one ore more esnap clones\n",
+			     uuid_str);
+	}
+	spdk_bdev_module_examine_done(&g_lvol_if);
+}
+
+static void
 _vbdev_lvs_examine_cb(void *arg, struct spdk_lvol_store *lvol_store, int lvserrno)
 {
 	struct lvol_store_bdev *lvs_bdev;
@@ -1590,7 +1606,7 @@ vbdev_lvs_load_esnap(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complet
 }
 
 static void
-vbdev_lvs_examine(struct spdk_bdev *bdev)
+vbdev_lvs_examine_disk(struct spdk_bdev *bdev)
 {
 	struct spdk_lvs_req *req;
 
