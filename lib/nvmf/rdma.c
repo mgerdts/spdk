@@ -2499,6 +2499,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	uint32_t			min_shared_buffers;
 	uint32_t			min_in_capsule_data_size;
 	int				max_device_sge = SPDK_NVMF_MAX_SGL_ENTRIES;
+	uint16_t			data_wr_pool_size = opts->max_queue_depth * SPDK_NVMF_MAX_SGL_ENTRIES;
 
 	rtransport = calloc(1, sizeof(*rtransport));
 	if (!rtransport) {
@@ -2602,8 +2603,14 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		return NULL;
 	}
 
+	if (data_wr_pool_size < SPDK_NVMF_MAX_SGL_ENTRIES * 2 * spdk_env_get_core_count()) {
+		data_wr_pool_size = SPDK_NVMF_MAX_SGL_ENTRIES * 2 * spdk_env_get_core_count();
+		SPDK_WARNLOG("data_wr_pool_size is changed to %u to guarantee enough cache for handling at least one IO in each core\n",
+			     data_wr_pool_size);
+	}
+
 	rtransport->data_wr_pool = spdk_mempool_create("spdk_nvmf_rdma_wr_data",
-				   opts->max_queue_depth * SPDK_NVMF_MAX_SGL_ENTRIES,
+				   data_wr_pool_size,
 				   sizeof(struct spdk_nvmf_rdma_request_data),
 				   SPDK_MEMPOOL_DEFAULT_CACHE_SIZE,
 				   SPDK_ENV_SOCKET_ID_ANY);
@@ -2930,6 +2937,21 @@ nvmf_rdma_qpair_process_pending(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 	if (!STAILQ_EMPTY(&resources->incoming_queue) && STAILQ_EMPTY(&resources->free_queue)) {
 		rqpair->poller->stat.pending_free_request++;
+	}
+}
+
+static void
+nvmf_rdma_qpair_process_pending_buf_queue(struct spdk_nvmf_rdma_transport *rtransport,
+		struct spdk_nvmf_rdma_poller *rpoller)
+{
+	struct spdk_nvmf_request *req, *tmp;
+	struct spdk_nvmf_rdma_request *rdma_req;
+
+	STAILQ_FOREACH_SAFE(req, &rpoller->group->group.pending_buf_queue, buf_link, tmp) {
+		rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
+		if (nvmf_rdma_request_process(rtransport, rdma_req) == false) {
+			break;
+		}
 	}
 }
 
@@ -4194,6 +4216,11 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 
 	if (error == true) {
 		return -1;
+	}
+
+	/* Some requests may still be pending even though nothing can be reaped */
+	if (!reaped) {
+		nvmf_rdma_qpair_process_pending_buf_queue(rtransport, rpoller);
 	}
 
 	/* submit outstanding work requests. */
