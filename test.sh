@@ -1,29 +1,70 @@
 #!/usr/bin/env bash
 
-# Change default setup here or run as 'SETUP=2 ./test.sh'
-SETUP=${SETUP:-1}
-
 # Adjust paths according to your setup or add new setup
 if [ "1" == $SETUP ]; then
-    # Test setup via SNAP on spdk-perf-01/02
-    TGT_MASK=0xFF00000
-    TGT_HOST=${TGT_HOST:-spdk-perf-02}
-    TGT_ADDR=${TGT_ADDR:-1.1.102.1}
+    # Test setup via SNAP on swx-astra05/06
+    # Bluefield
+    BF_HOSTNAME=swx-astra05-bf2
+    SNAP_SSH=${SNAP_SSH:-$BF_HOSTNAME}
+    SNIC_SNAP_PATH=${SNIC_SNAP_PATH:-$PWD/../nvmx}
+    SNAP_BIN_PATH=${SNAP_BIN_PATH:-$SNIC_SNAP_PATH/build-$BF_HOSTNAME/service}
+    SNIC_SPDK_PATH=${SNIC_SPDK_PATH:-$PWD}
+    SNAP_SPDK_LIB_PATH=${SNAP_SPDK_LIB_PATH:-$SNIC_SPDK_PATH/install-$BF_HOSTNAME/lib}
+    SNAP_DPDK_LIB_PATH=${SNAP_DPDK_LIB_PATH:-$SNIC_SPDK_PATH/dpdk/build/lib}
+    LIBXLIO=${LIBXLIO:-$PWD/../libxlio/install-$BF_HOSTNAME/lib/libxlio.so}
+    #SNIC_RDMA_CORE_PATH=${SNIC_RDMA_CORE_PATH:-$PWD/../rdma-core/build/lib}
+    SNAP_ENV_OPTS="LD_LIBRARY_PATH=$SNAP_SPDK_LIB_PATH:$SNAP_DPDK_LIB_PATH:$SNIC_RDMA_CORE_PATH"
+    #SNAP_ENV_OPTS="LD_PRELOAD=/usr/lib/gcc/aarch64-linux-gnu/11/libasan.so $SNAP_ENV_OPTS"
+    # Host
+    SPDK_MASTER_PATH=${SPDK_MASTER_PATH:-$PWD/../spdk-master}
+    PCI_ADDR=${PCI_ADDR:-0000:9e:00.2}
+
+    ###### run fio on Host
+    PERF_SSH=${PERF_SSH:-}
+    PERF_SPDK_PATH=${PERF_SPDK_PATH:-$SPDK_MASTER_PATH}
+
+    ###### run bdevperf on BF
+    #PERF_SSH=${PERF_SSH:-$BF_HOSTNAME}
+    #PERF_SPDK_PATH=${PERF_SPDK_PATH:-$PWD}
+
+    PERF_BIN_PATH=${PERF_BIN_PATH:-$PERF_SPDK_PATH/install-$HOSTNAME/bin}
+    FIO=${FIO:-$PWD/../fio/install-$HOSTNAME/bin/fio}
+    # Target
+    TGT_MASK=${TGT_MASK:-0x3F000000}
+    TGT_HOST=${TGT_HOST:-swx-astra06}
+    TGT_ADDR=${TGT_ADDR:-1.1.16.1}
     TGT_PORT=${TGT_PORT:-4420}
     #TGT_SECOND_ADDR=${TGT_SECOND_ADDR:-2.2.102.1}
     #TGT_SECOND_PORT=${TGT_SECOND_PORT:-4421}
-    PCI_ADDR=${PCI_ADDR:-0000:3d:00.2}
-    SNAP_SSH=${SNAP_SSH:-ubuntu@snic}
-    SNAP_BIN_PATH=${SNAP_BIN_PATH:-/mnt/allenzhu/nvmx/install-snic/bin}
-    SNAP_DPDK_PATH=${SNAP_DPDK_PATH:-/mnt/allenzhu/spdk/dpdk/build/lib}
-    SNIC_SPDK_PATH=${SNIC_SPDK_PATH:-/mnt/allenzhu/spdk}
-    PERF_SSH=${PERF_SSH:-ubuntu@snic}
-    PERF_BIN_PATH=${PERF_BIN_PATH:-$PWD/install-$HOSTNAME/bin}
-    PERF_SPDK_PATH=${PERF_SPDK_PATH:-$PWD}
-    LIBXLIO=${LIBXLIO:-/usr/lib/libxlio.so}
-    TGT_BIN_PATH=${TGT_BIN_PATH:-$PWD/install-$TGT_HOST/bin}
-    TGT_SPDK_PATH=${TGT_SPDK_PATH:-$PWD}
-    SNAP_ENV_OPTS="LD_LIBRARY_PATH=$SNAP_DPDK_PATH NVME_SNAP_LOGFILE_PATH=stderr"
+    TGT_SPDK_PATH=${TGT_SPDK_PATH:-$SPDK_MASTER_PATH}
+    TGT_BIN_PATH=${TGT_BIN_PATH:-$TGT_SPDK_PATH/install-$TGT_HOST/bin}
+elif [ "perf" == $SETUP ]; then
+    # Reference performance test setup on spdk-03/04
+    # Bluefield
+    BF_HOSTNAME=spdk-03-bf1
+    SNAP_SSH=${SNAP_SSH:-$BF_HOSTNAME}
+    SNIC_SNAP_PATH=${SNIC_SNAP_PATH:-$PWD/../nvmx}
+    SNAP_BIN_PATH=${SNAP_BIN_PATH:-$SNIC_SNAP_PATH/build-$BF_HOSTNAME/service}
+    SNIC_SPDK_PATH=${SNIC_SPDK_PATH:-$PWD}
+    SNAP_SPDK_LIB_PATH=${SNAP_SPDK_LIB_PATH:-$SNIC_SPDK_PATH/install-$BF_HOSTNAME/lib}
+    SNAP_DPDK_LIB_PATH=${SNAP_DPDK_LIB_PATH:-$SNIC_SPDK_PATH/dpdk/build/lib}
+    LIBXLIO=${LIBXLIO:-$PWD/../libxlio/install-$BF_HOSTNAME/lib/libxlio.so}
+    SNIC_RDMA_CORE_PATH=${SNIC_RDMA_CORE_PATH:-$PWD/../rdma-core/build/lib}
+    SNAP_ENV_OPTS="LD_LIBRARY_PATH=$SNAP_SPDK_LIB_PATH:$SNAP_DPDK_LIB_PATH:$SNIC_RDMA_CORE_PATH"
+    # Host
+    SPDK_MASTER_PATH=${SPDK_MASTER_PATH:-$PWD/../spdk-master}
+    PCI_ADDR=${PCI_ADDR:-0000:85:00.2}
+    PERF_SSH=${PERF_SSH:-}
+    PERF_SPDK_PATH=${PERF_SPDK_PATH:-$SPDK_MASTER_PATH}
+    PERF_BIN_PATH=${PERF_BIN_PATH:-$PERF_SPDK_PATH/install-$HOSTNAME/bin}
+    FIO=${FIO:-$PWD/../fio/install-$HOSTNAME/bin/fio}
+    # Target
+    TGT_MASK=${TGT_MASK:-0x3F0}
+    TGT_HOST=${TGT_HOST:-spdk-04}
+    TGT_ADDR=${TGT_ADDR:-1.1.4.1}
+    TGT_PORT=${TGT_PORT:-4420}
+    TGT_SPDK_PATH=${TGT_SPDK_PATH:-$SPDK_MASTER_PATH}
+    TGT_BIN_PATH=${TGT_BIN_PATH:-$TGT_SPDK_PATH/install-$TGT_HOST/bin}
 else
     echo "Unknown setup"
     exit 1
@@ -32,45 +73,71 @@ fi
 TGT_LIBXLIO=${TGT_LIBXLIO:-}
 
 XLIO_OPTS="
-xXLIO_TSO=1
-xXLIO_INTERNAL_THREAD_ARM_CQ=1
-xXLIO_GRO_STREAMS_MAX=0
-xXLIO_RX_POLL_ON_TX_TCP=1
-xXLIO_MEM_ALLOC_TYPE=2
-xXLIO_TX_BUFS=4096
-xXLIO_TX_BUF_SIZE=8192
-xXLIO_RX_BUFS=70000
-xXLIO_RX_WRE=4096
 XLIO_RING_ALLOCATION_LOGIC_TX=30
 XLIO_RING_ALLOCATION_LOGIC_RX=30
-xXLIO_TCP_NODELAY=1
-xXLIO_TRACELEVEL=4
-xXLIO_INTERNAL_THREAD_AFFINITY=0x80
-xXLIO_SELECT_POLL=0
-xXLIO_RX_POLL=0
 XLIO_RX_BUFS=200
 XLIO_RX_WRE=16
 XLIO_QP_COMPENSATION_LEVEL=8
 XLIO_STRQ_NUM_STRIDES=8192
 XLIO_STRQ_STRIDES_COMPENSATION_LEVEL=32768
 XLIO_LRO=on
-xXLIO_STRQ=regular_rq
-xXLIO_RX_BUF_SIZE=16000
 XLIO_FORK=0
+XLIO_TCP_ABORT_ON_CLOSE=1
 "
+
+XLIO_OPTS="
+XLIO_STATS_FD_NUM=1000
+XLIO_RING_ALLOCATION_LOGIC_TX=30
+XLIO_RING_ALLOCATION_LOGIC_RX=30
+XLIO_RX_BUFS=2048
+XLIO_STRQ_STRIDE_SIZE_BYTES=1024
+XLIO_STRQ_NUM_STRIDES=1024
+XLIO_RX_WRE=2
+XLIO_QP_COMPENSATION_LEVEL=8
+XLIO_STRQ_STRIDES_COMPENSATION_LEVEL=32768
+XLIO_FORK=0
+XLIO_SPEC=latency
+XLIO_INTERNAL_THREAD_AFFINITY=0x01
+XLIO_LRO=on
+XLIO_TX_WRE=1024
+XLIO_RX_WRE_BATCHING=1
+XLIO_GRO_STREAMS_MAX=10000
+XLIO_THREAD_MODE=1
+XLIO_TX_WRE_BATCHING=128
+XLIO_TSO=1
+XLIO_RX_POLL=-1
+XLIO_RX_PREFETCH_BYTES_BEFORE_POLL=256
+XLIO_RING_DEV_MEM_TX=16384
+XLIO_MEM_ALLOC_TYPE=1
+XLIO_AVOID_SYS_CALLS_ON_TCP_FD=1
+XLIO_CQ_KEEP_QP_FULL=0
+XLIO_CQ_AIM_INTERVAL_MSEC=0
+XLIO_CQ_AIM_MAX_COUNT=64
+XLIO_CQ_MODERATION_ENABLE=1
+XLIO_PROGRESS_ENGINE_INTERVAL=0
+XLIO_SELECT_POLL_OS_FORCE=1
+XLIO_SELECT_POLL_OS_RATIO=1
+XLIO_SELECT_SKIP_OS=1
+XLIO_TCP_NODELAY=1
+XLIO_TCP_ABORT_ON_CLOSE=1
+"
+
 SOCK_IMPL=${SOCK_IMPL:-xlio}
 TCP=${TCP:-NVDA_TCP}
 DATA_DGST=${DATA_DGST:-}
-FIO_IO_ENGINE=${FIO_IO_ENGINE:-$PWD/fio/spdk_nvme}
-NUM_JOBS=${NUM_JOBS:-8}
-CPUS_ALLOWED=${CPUS_ALLOWED:-1-8}
+FIO_JOBS=${FIO_JOBS:-8}
+FIO_CPUS=${FIO_CPUS:-1-8}
 MDTS=${MDTS:-4}
+SUBSYS=${SUBSYS:-1}
+PATHS=${PATHS:-1}
+CONNECT_TIMEOUT=${CONNECT_TIMEOUT:-500000}
 
 TGT_MASK=${TGT_MASK:-0xFF}
 SNAP_MASK=${SNAP_MASK:-0xFF}
 PERF_TIME=${PERF_TIME:-60}
+WARMUP_TIME=${WARMUP_TIME:-5}
 PERF_MASKS=${PERF_MASKS:-0x10 0x30 0xF0 0xFF 0xFC}
-QUEUE_DEPTHS=${QUEUE_DEPTHS:-8 16 32 64 128}
+QUEUE_DEPTHS=${QUEUE_DEPTHS:-1 2 4 8 16 32 64 128}
 IO_SIZES=${IO_SIZES:-4096 8192 16384 32768 65536 131072}
 RW=${RW:-randread}
 REPEAT=${REPEAT:-1}
@@ -78,33 +145,57 @@ REPEAT=${REPEAT:-1}
 #BDEV_PERF_EXTRA_OPTS="-L xlio -L nvme"
 SSH_EXTRA_OPTS=${SSH_EXTRA_OPTS:-}
 BDEV_NULL_OPTS="8192 512"
+MULTIPATH_OPTS="-p active_active -s round_robin -r 16"
+#ACCEL_OPTS="--qp-size 128 --num-requests 1024"
 #SOCK_EXTRA_OPTS="--disable-recv-pipe"
+SNAP_DEBUG=${SNAP_DEBUG:-}
+
+function ssh_prefix() {
+    local SSH=""
+    local HOST=$1
+    if [ -n "$HOST" ]; then
+	SSH="ssh $SSH_EXTRA_OPTS $HOST"
+    fi
+    echo "$SSH"
+}
 
 function rpc_tgt() {
-    local SSH=""
-    if [ -n "$TGT_HOST" ]; then
-	SSH="ssh $SSH_EXTRA_OPTS $TGT_HOST"
-    fi
-    $SSH sudo $TGT_SPDK_PATH/scripts/rpc.py $@ >> rpc_tgt.log 2>&1
+    $(ssh_prefix $TGT_HOST) sudo $TGT_SPDK_PATH/scripts/rpc.py -v $@ >> rpc_tgt.log 2>&1
+}
+
+function rpc_tgt_batch() {
+    echo -e "$@" | $(ssh_prefix $TGT_HOST) sudo $TGT_SPDK_PATH/scripts/rpc.py -v >> rpc_tgt.log 2>&1
 }
 
 function rpc_perf() {
-    local SSH=""
-    if [ -n "$PERF_SSH" ]; then
-	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
-    fi
-    $SSH sudo $PERF_SPDK_PATH/scripts/rpc.py -s /var/tmp/bdevperf.sock $@ 2>&1 | tee -a perf.log
+    $(ssh_prefix $PERF_SSH) sudo $PERF_SPDK_PATH/scripts/rpc.py -s /var/tmp/bdevperf.sock -v $@ 2>&1 | tee -a perf.log
+}
+
+function rpc_perf_batch() {
+    echo -e "$@" | $(ssh_prefix $PERF_SSH) sudo $PERF_SPDK_PATH/scripts/rpc.py -s /var/tmp/bdevperf.sock -v >> perf.log 2>&1
+}
+
+function rpc_snap_spdk() {
+    $(ssh_prefix $SNAP_SSH) sudo $SNIC_SPDK_PATH/scripts/rpc.py -v $@ 2>&1 | tee -a rpc_snap.log
+}
+
+function rpc_snap_spdk_batch() {
+    echo -e "$@" | $(ssh_prefix $SNAP_SSH) sudo $SNIC_SPDK_PATH/scripts/rpc.py -v 2>&1 | tee -a rpc_snap.log
+}
+
+function rpc_snap_snap() {
+    $(ssh_prefix $SNAP_SSH) sudo $SNIC_SNAP_PATH/snap_rpc.py $@ 2>&1 | tee -a rpc_snap.log
+}
+
+function rpc_snap_snap_batch() {
+    echo -e "$@" | $(ssh_prefix $SNAP_SSH) sudo $SNIC_SNAP_PATH/snap_rpc.py 2>&1 | tee -a rpc_snap.log
 }
 
 function start_tgt() {
-    local SSH=""
-    if [ -n "$TGT_HOST" ]; then
-	SSH="ssh $SSH_EXTRA_OPTS $TGT_HOST"
-    fi
     if [ -n "$TGT_LIBXLIO" ]; then
-	$SSH sudo $XLIO_OPTS LD_PRELOAD=$TGT_LIBXLIO $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
+	$(ssh_prefix $TGT_HOST) sudo $XLIO_OPTS LD_PRELOAD=$TGT_LIBXLIO $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK 2>&1 | tee tgt.log > /dev/null &
     else
-	$SSH sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK --wait-for-rpc 2>&1 | tee tgt.log > /dev/null &
+	$(ssh_prefix $TGT_HOST) sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK --wait-for-rpc 2>&1 | tee tgt.log > /dev/null &
     fi
     sleep 7
 }
@@ -145,147 +236,242 @@ function config_tgt_multipath() {
 }
 
 function config_tgt() {
-    #rpc_tgt sock_impl_set_options -i posix --enable-zerocopy-send
+    local CONFIG=""
+
     rpc_tgt framework_start_init
-    rpc_tgt nvmf_create_transport -t tcp -n 2048 -b 128
-    rpc_tgt nvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode1
-    rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $TGT_PORT nqn.2016-06.io.spdk:cnode1
-    rpc_tgt bdev_null_create Null0 $BDEV_NULL_OPTS
-    rpc_tgt nvmf_subsystem_add_ns -n 1 nqn.2016-06.io.spdk:cnode1 Null0
+    CONFIG="$CONFIG\nnvmf_create_transport -t tcp -n 8192 -b 128"
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	CONFIG="$CONFIG\nnvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode$i"
+	for ((j=0; j<PATHS; j++)); do
+	    CONFIG="$CONFIG\nnvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $((TGT_PORT+j)) nqn.2016-06.io.spdk:cnode$i"
+	    if [ -n "$TGT_SECOND_PORT" ]; then
+		CONFIG="$CONFIG\nnvmf_subsystem_add_listener -t tcp -a $TGT_SECOND_ADDR -f ipv4 -s $((TGT_SECOND_PORT+j)) nqn.2016-06.io.spdk:cnode$i"
+	    fi
+	done
+	if [ -n "$VERIFY" ]; then
+		CONFIG="$CONFIG\nbdev_malloc_create -b Null$i 8192 512"
+	else
+		CONFIG="$CONFIG\nbdev_null_create Null$i $BDEV_NULL_OPTS"
+	fi
+	CONFIG="$CONFIG\nnvmf_subsystem_add_ns -n 1 nqn.2016-06.io.spdk:cnode$i Null$i"
+    done
+    rpc_tgt_batch "$CONFIG"
+    rpc_tgt save_config
+}
+
+function config_tgt_delay() {
+    #rpc_tgt sock_impl_set_options -i posix #--disable-zerocopy-send-server --enable-quickack --disable-recv-pipe
+    rpc_tgt framework_start_init
+    rpc_tgt nvmf_create_transport -t tcp -n 8192 -b 512 --max-queue-depth 512
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	rpc_tgt nvmf_create_subsystem -a nqn.2016-06.io.spdk:cnode$i
+	rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_ADDR -f ipv4 -s $TGT_PORT nqn.2016-06.io.spdk:cnode$i
+	if [ -n "$TGT_SECOND_PORT" ]; then
+		rpc_tgt nvmf_subsystem_add_listener -t tcp -a $TGT_SECOND_ADDR -f ipv4 -s $TGT_SECOND_PORT nqn.2016-06.io.spdk:cnode$i
+	fi
+	rpc_tgt bdev_null_create Null0 $BDEV_NULL_OPTS
+	rpc_tgt bdev_delay_create -b Null0 -d Delay$i -r 300 -t 300 -w 300 -n 300
+	rpc_tgt nvmf_subsystem_add_ns -n 1 nqn.2016-06.io.spdk:cnode$i Delay$i
+    done
     rpc_tgt save_config
 }
 
 function start_snap_service() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
-
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
-
-    $SSH sudo systemctl start mlnx_snap
+    $(ssh_prefix $SNAP_SSH) sudo systemctl start mlnx_snap
 }
 
 function stop_snap_service() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
-
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
-
-    $SSH sudo systemctl stop mlnx_snap
+    $(ssh_prefix $SNAP_SSH) sudo systemctl stop mlnx_snap
 }
 
 function start_snap() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
-
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
-
-    $SSH sudo $XLIO_OPTS \
-	 $SNAP_ENV_OPTS LD_LIBRARY_PATH=$SNAP_DPDK_PATH NVME_SNAP_LOGFILE_PATH=stderr \
-	 $SNAP_BIN_PATH/mlnx_snap_emu -m $SNAP_MASK -u --mem-size 1200 --wait-for-rpc \
+    $(ssh_prefix $SNAP_SSH) sudo $XLIO_OPTS \
+	 $SNAP_ENV_OPTS \
+	 $SNAP_BIN_PATH/snap_service -m $SNAP_MASK -u --wait-for-rpc \
 	 2>&1 | tee snap.log &
     sleep 5
 }
 
 function stop_snap() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
-
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
-
-    $SSH sudo spdk_rpc.py spdk_kill_instance 15
+    $(ssh_prefix $SNAP_SSH) sudo spdk_rpc.py spdk_kill_instance 15
     sleep 3
 }
 
 function snap_enable_debug() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
+    if [ -z "$SNAP_DEBUG" ]; then return; fi
 
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
-
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag bdev
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag bdev_nvme
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag sock
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_flag xlio
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_level DEBUG
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py log_set_print_level DEBUG
-}
-
-function config_snap_multipath() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
-
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
-
-    #snap_enable_debug
-
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_set_default_impl -i $SOCK_IMPL
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL $SOCK_EXTRA_OPTS
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py framework_start_init
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_set_options --bdev-retry-count 5 --transport-retry-count 7 --transport-ack-timeout 0 --timeout-us 30000000 --timeout-admin-us 60000000 --action-on-timeout reset --reconnect-delay-sec 10 --ctrlr-loss-timeout-sec -1 --fast-io-fail-timeout-sec 0
-
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t $TCP -f ipv4 -a $TGT_ADDR -s $TGT_PORT -n nqn.2016-06.io.spdk:cnode1 $DATA_DGST
-    if [ -n "$TGT_SECOND_PORT" ]; then
-	    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t $TCP -f ipv4 -a $TGT_SECOND_ADDR -s $TGT_SECOND_PORT -n nqn.2016-06.io.spdk:cnode1 -x multipath $DATA_DGST 
-    fi
-    $SSH sudo snap_rpc.py subsystem_nvme_create --nqn nqn.2020-12.mlnx.snap Mellanox_NVMe_SNAP \"Mellanox NVMe SNAP Controller\"
-    $SSH sudo snap_rpc.py controller_nvme_create --nqn nqn.2020-12.mlnx.snap mlx5_0 --pf_id 0 --mdts $MDTS
-    $SSH sudo snap_rpc.py controller_nvme_namespace_attach -c NvmeEmu0pf0 spdk Nvme0n1 1
+    local CONFIG=""
+    CONFIG="$CONFIG\nlog_set_flag bdev"
+    CONFIG="$CONFIG\nlog_set_flag bdev_nvme"
+    CONFIG="$CONFIG\nlog_set_flag nvme"
+    CONFIG="$CONFIG\nlog_set_flag vbdev_crypto"
+    #CONFIG="$CONFIG\nlog_set_flag sock"
+    #CONFIG="$CONFIG\nlog_set_flag xlio"
+    CONFIG="$CONFIG\nlog_set_flag accel"
+    CONFIG="$CONFIG\nlog_set_flag accel_mlx5"
+    CONFIG="$CONFIG\nlog_set_flag mlx5"
+    CONFIG="$CONFIG\nlog_set_level DEBUG"
+    CONFIG="$CONFIG\nlog_set_print_level DEBUG"
+    rpc_snap_spdk_batch "$CONFIG"
 }
 
 function config_snap() {
-    local SSH=""
-    if [ -z "$SNAP_SSH" ]; then
-	echo "SNAP_SSH is not set. Can not start SNAP"
-	return
-    fi
+    local CONFIG=""
 
-    SSH="ssh $SSH_EXTRA_OPTS $SNAP_SSH"
+    snap_enable_debug
+    CONFIG="$CONFIG\nsock_set_default_impl -i $SOCK_IMPL"
+    CONFIG="$CONFIG\nsock_impl_set_options -i $SOCK_IMPL $SOCK_EXTRA_OPTS"
+    CONFIG="$CONFIG\nmlx5_scan_accel_module $ACCEL_OPTS"
+    rpc_snap_spdk_batch "$CONFIG"
 
-    #snap_enable_debug
+    rpc_snap_spdk framework_start_init
 
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_set_default_impl -i $SOCK_IMPL
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py sock_impl_set_options -i $SOCK_IMPL $SOCK_EXTRA_OPTS
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py framework_start_init
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_set_options -k 0
-    $SSH sudo $SNIC_SPDK_PATH/scripts/rpc.py bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t $TCP -f ipv4 -a $TGT_ADDR -s 4420 -n nqn.2016-06.io.spdk:cnode1
-    $SSH sudo snap_rpc.py subsystem_nvme_create --nqn nqn.2020-12.mlnx.snap Mellanox_NVMe_SNAP \"Mellanox NVMe SNAP Controller\"
-    $SSH sudo snap_rpc.py controller_nvme_create --nqn nqn.2020-12.mlnx.snap mlx5_0 --pf_id 0 --mdts $MDTS
-    $SSH sudo snap_rpc.py controller_nvme_namespace_attach -c NvmeEmu0pf0 spdk Nvme0n1 1
+    CONFIG=""
+    CONFIG="$CONFIG\naccel_get_module_info"
+    CONFIG="$CONFIG\naccel_get_opc_assignments"
+    CONFIG="$CONFIG\nbdev_nvme_set_options -k 0"
+
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	for ((j=0; j<PATHS; j++)); do
+	    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+		    -a $TGT_ADDR -s $((TGT_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	    if [ -n "$TGT_SECOND_PORT" ]; then
+		    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+			    -a $TGT_SECOND_ADDR -s $((TGT_SECOND_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	    fi
+	done
+	if [ -n "$MULTIPATH_OPTS" ]; then
+	    CONFIG="$CONFIG\nbdev_nvme_set_multipath_policy -b Nvme${i}n1 $MULTIPATH_OPTS"
+	fi
+    done
+
+    rpc_snap_spdk_batch "$CONFIG"
+
+    CONFIG=""
+    CONFIG="$CONFIG\nnvme_subsystem_create --nqn nqn.2020-12.mlnx.snap --model_number Mellanox_NVMe_SNAP"
+    CONFIG="$CONFIG\nnvme_controller_create --nqn nqn.2020-12.mlnx.snap --pf_id 0 --num_queues 31 --mdts $MDTS"
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	    CONFIG="$CONFIG\nspdk_bdev_create Nvme${i}n1"
+	    nsid=$((i+1))
+	    CONFIG="$CONFIG\nnvme_namespace_create --nqn nqn.2020-12.mlnx.snap --bdev_name Nvme${i}n1 --nsid $nsid --uuid $(uuidgen -r)"
+	    CONFIG="$CONFIG\nnvme_controller_attach_ns --ctrl NVMeCtrl1 --nsid $nsid"
+    done
+
+    rpc_snap_snap_batch "$CONFIG"
+}
+
+function config_snap_crypto() {
+    local CONFIG=""
+
+    snap_enable_debug
+    CONFIG="$CONFIG\nsock_set_default_impl -i $SOCK_IMPL"
+    CONFIG="$CONFIG\nsock_impl_set_options -i $SOCK_IMPL $SOCK_EXTRA_OPTS"
+    CONFIG="$CONFIG\nmlx5_scan_accel_module $ACCEL_OPTS --enable-crypto"
+    CONFIG="$CONFIG\nframework_start_init"
+    rpc_snap_spdk_batch "$CONFIG"
+
+    CONFIG=""
+    CONFIG="$CONFIG\naccel_get_module_info"
+    CONFIG="$CONFIG\naccel_get_opc_assignments"
+    CONFIG="$CONFIG\nbdev_nvme_set_options -k 0"
+    CONFIG="$CONFIG\naccel_crypto_key_create --name Key0 --cipher AES_XTS \
+		  --key 00112233445566778899001122334455 \
+		  --key2 11223344556677889900112233445500"
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	for ((j=0; j<PATHS; j++)); do
+	    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+		    -a $TGT_ADDR -s $((TGT_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	    if [ -n "$TGT_SECOND_PORT" ]; then
+		    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+			    -a $TGT_SECOND_ADDR -s $((TGT_SECOND_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	    fi
+	done
+	if [ -n "$MULTIPATH_OPTS" ]; then
+	    CONFIG="$CONFIG\nbdev_nvme_set_multipath_policy -b Nvme${i}n1 $MULTIPATH_OPTS"
+	fi
+	CONFIG="$CONFIG\nbdev_crypto_create --key-name Key0 Nvme${i}n1 Crypto${i}"
+    done
+    rpc_snap_spdk_batch "$CONFIG"
+
+    CONFIG=""
+    CONFIG="$CONFIG\nnvme_subsystem_create --nqn nqn.2020-12.mlnx.snap --model_number Mellanox_NVMe_SNAP"
+    CONFIG="$CONFIG\nnvme_controller_create --nqn nqn.2020-12.mlnx.snap --pf_id 0 --num_queues 31 --mdts $MDTS"
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	    CONFIG="$CONFIG\nspdk_bdev_create Crypto${i}"
+	    nsid=$((i+1))
+	    CONFIG="$CONFIG\nnvme_namespace_create --nqn nqn.2020-12.mlnx.snap --bdev_name Crypto${i} --nsid $nsid --uuid $(uuidgen -r)"
+	    CONFIG="$CONFIG\nnvme_controller_attach_ns --ctrl NVMeCtrl1 --nsid $nsid"
+    done
+    rpc_snap_snap_batch "$CONFIG"
+}
+
+function config_snap_crypto_sw() {
+    local CONFIG=""
+
+    snap_enable_debug
+    CONFIG="$CONFIG\nsock_set_default_impl -i $SOCK_IMPL"
+    CONFIG="$CONFIG\nsock_impl_set_options -i $SOCK_IMPL $SOCK_EXTRA_OPTS"
+    CONFIG="$CONFIG\naccel_assign_opc -o encrypt -m software"
+    CONFIG="$CONFIG\naccel_assign_opc -o decrypt -m software"
+    CONFIG="$CONFIG\nframework_start_init"
+    rpc_snap_spdk_batch "$CONFIG"
+
+    CONFIG=""
+    CONFIG="$CONFIG\naccel_get_module_info"
+    CONFIG="$CONFIG\naccel_get_opc_assignments"
+    CONFIG="$CONFIG\nbdev_nvme_set_options -k 0"
+    CONFIG="$CONFIG\naccel_crypto_key_create --name Key0 --cipher AES_XTS \
+		  --key 00112233445566778899001122334455 \
+		  --key2 11223344556677889900112233445500"
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	for ((j=0; j<PATHS; j++)); do
+	    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+		    -a $TGT_ADDR -s $((TGT_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	    if [ -n "$TGT_SECOND_PORT" ]; then
+		    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+			    -a $TGT_SECOND_ADDR -s $((TGT_SECOND_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	    fi
+	done
+	if [ -n "$MULTIPATH_OPTS" ]; then
+	    CONFIG="$CONFIG\nbdev_nvme_set_multipath_policy -b Nvme${i}n1 $MULTIPATH_OPTS"
+	fi
+	CONFIG="$CONFIG\nbdev_crypto_create --key-name Key0 Nvme${i}n1 Crypto${i}"
+    done
+    rpc_snap_spdk_batch "$CONFIG"
+
+    CONFIG=""
+    CONFIG="$CONFIG\nnvme_subsystem_create --nqn nqn.2020-12.mlnx.snap --model_number Mellanox_NVMe_SNAP"
+    CONFIG="$CONFIG\nnvme_controller_create --nqn nqn.2020-12.mlnx.snap --pf_id 0 --num_queues 31 --mdts $MDTS"
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	    CONFIG="$CONFIG\nspdk_bdev_create Crypto${i}"
+	    nsid=$((i+1))
+	    CONFIG="$CONFIG\nnvme_namespace_create --nqn nqn.2020-12.mlnx.snap --bdev_name Crypto${i} --nsid $nsid --uuid $(uuidgen -r)"
+	    CONFIG="$CONFIG\nnvme_controller_attach_ns --ctrl NVMeCtrl1 --nsid $nsid"
+    done
+    rpc_snap_snap_batch "$CONFIG"
 }
 
 function run_nvmeperf() {
     local ADDR=${ADDR:-$TGT_ADDR}
     local PORT=${PORT:-$TGT_PORT}
-    local SSH=""
 
     if [ -n "$PERF_SSH" ]; then
-	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
-	$SSH sudo $PERF_ENV_OPTS $XLIO_OPTS $PERF_BIN_PATH/spdk_nvme_perf \
+	$(ssh_prefix $PERF_SSH) sudo $PERF_ENV_OPTS $XLIO_OPTS $PERF_BIN_PATH/spdk_nvme_perf \
 	     -S $SOCK_IMPL -r \"trtype:$TCP adrfam:ipv4 traddr:$ADDR trsvcid:$PORT\" \
-	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
+	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -M 50 -t $PERF_TIME \
 	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     else
 	sudo $PERF_ENV_OPTS $XLIO_OPTS $PERF_BIN_PATH/spdk_nvme_perf \
 	     -S $SOCK_IMPL -r "trtype:$TCP adrfam:ipv4 traddr:$ADDR trsvcid:$PORT" \
-	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
+	     -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -M 50 -t $PERF_TIME \
 	     $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     fi
 
@@ -298,7 +484,7 @@ function run_nvmeperf_snap() {
 
     sudo $PERF_BIN_PATH/spdk_nvme_perf \
 	 -r "trtype:pcie traddr:$ADDR" \
-	 -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
+	 -c $PERF_MASK -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -M 50 -t $PERF_TIME \
 	 -A 4096 $NVME_PERF_EXTRA_OPTS 2>&1 | tee perf.log&
     PERF_PID=$!
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
@@ -311,21 +497,80 @@ function wait_nvmeperf() {
 
 function report_nvmeperf() {
     local OUT=$(grep "Total" perf.log | awk '{ print $3 " | " $4 " | " $5 " | " }')
-    echo "| $TEST | $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+    echo "| $TEST | $PERF_MASK | $TGT_MASK | $SNAP_MASK | $RW | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
 }
 
-function run_fio() {
+function run_fio_nvme() {
     local DEV=${DEV:-Snap}
     local ADDR=${ADDR:-$PCI_ADDR}
 
-    sudo fio --stats=1 --thread=1 --group_reporting=1 --ioengine=$FIO_IO_ENGINE --direct=1 --norandommap \
+    sudo LD_PRELOAD=$PERF_SPDK_PATH/build/fio/spdk_nvme $FIO --stats=1 --thread=1 \
+	 --group_reporting=1 --ioengine=spdk_nvme --direct=1 --norandommap \
          --name=$DEV --filename="trtype=PCIe traddr=${ADDR//:/.}" \
          --readwrite=$RW --bs=$IO_SIZE --iodepth=$QUEUE_DEPTH --ramp_time=20 \
-         --numjobs=$NUM_JOBS --cpus_allowed=$CPUS_ALLOWED --cpus_allowed_policy=split \
+         --numjobs=$FIO_JOBS --cpus_allowed=$FIO_CPUS --cpus_allowed_policy=split \
          --iomem_align=4096 --time_based=1 --runtime=${PERF_TIME}s 2>&1 | tee fio.log &
 
     FIO_PID=$!
     echo "Fio PID is $FIO_PID" 2>&1 | tee -a perf.log
+}
+
+function generate_fio_config_nvme_pci() {
+    cat <<EOF > fio_spdk_conf.json
+{
+  "subsystems": [ {
+    "subsystem": "bdev",
+    "config": [ {
+      "method": "bdev_nvme_attach_controller",
+      "params": {
+        "trtype": "pcie",
+        "name":"Nvme0",
+        "traddr":"$PCI_ADDR"
+      }
+    } ]
+  } ]
+}
+EOF
+}
+
+function generate_fio_job() {
+    cat <<EOF > fio.job
+[global]
+direct=1
+thread=1
+ioengine=spdk_bdev
+spdk_json_conf=fio_spdk_conf.json
+norandommap
+stats=1
+group_reporting
+time_based
+runtime=$PERF_TIME
+ramp_time=$WARMUP_TIME
+numjobs=$FIO_JOBS
+cpus_allowed=$FIO_CPUS
+cpus_allowed_policy=split
+rw=$RW
+bs=$IO_SIZE
+iodepth=$QUEUE_DEPTH
+
+[job1]
+EOF
+
+    for ((i=1;i<=$SUBSYS;i++)); do
+	echo "filename=Nvme0n$i" >> fio.job
+    done
+    echo "file_service_type=random:16" >> fio.job
+}
+
+function run_fio_bdev() {
+    generate_fio_config_nvme_pci
+    generate_fio_job
+    $(ssh_prefix $PERF_SSH) sudo LD_PRELOAD=$PERF_SPDK_PATH/build/fio/spdk_bdev $FIO fio.job \
+	 --output-format=json --output=fio_result.json \
+	 $FIO_EXTRA_OPTS 2>&1 | tee fio.log &
+    FIO_PID=$!
+    echo "Fio PID is $FIO_PID" 2>&1 | tee -a fio.log
+
 }
 
 function wait_fio() {
@@ -334,49 +579,74 @@ function wait_fio() {
 }
 
 function report_fio() {
-    cat fio.log
-    local IOPS=$(cat fio.log | grep IOPS= | cut -d ',' -f 1 | grep -oE "[0-9.]+" | xargs | awk '{ print $1 }')
-    local BW=$(cat fio.log | grep IOPS= | cut -d ',' -f 2 | grep -oE "[0-9.]+" | xargs | awk '{ print $1 }')
-    local GiBstr=$(cat fio.log | grep IOPS= | cut -d ',' -f 2 | grep GiB/s)
-    if [ -n "$GiBstr" ]; then
-	    BW=`echo $BW*1024|bc`
-    fi
+    local IOPS_R=$(jq ".jobs[0].read.iops / 1000 | round" fio_result.json)
+    local BW_R=$(jq ".jobs[0].read.bw / 1024 | round" fio_result.json)
+    local LAT_AVG_R=$(jq ".jobs[0].read.clat_ns.mean / 1000 | round" fio_result.json)
+    local LAT9900_R=$(jq ".jobs[0].read.clat_ns.percentile[\"99.000000\"] / 100 | round / 10" fio_result.json)
+    local LAT9999_R=$(jq ".jobs[0].read.clat_ns.percentile[\"99.990000\"] / 100 | round / 10" fio_result.json)
 
-    local LAT9900=$(cat fio.log | grep 99.00th= | cut -d ',' -f 1 | grep -oE "[0-9.]+" | xargs | awk '{ print $2 }')
-    local LAT9999=$(cat fio.log | grep 99.99th= | cut -d ',' -f 1 | grep -oE "[0-9.]+" | xargs | awk '{ print $2 }')
-    local LAT_AVG=$(cat fio.log | grep " lat (usec):" | cut -d ',' -f 3 | grep -oE "[0-9.]+")
-    echo "| $TEST | $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $IOPS | $BW | $LAT_AVG | $LAT9900 | $LAT9999" >> report.log
+    local IOPS_W=$(jq ".jobs[0].write.iops / 1000 | round" fio_result.json)
+    local BW_W=$(jq ".jobs[0].write.bw / 1024 | round" fio_result.json)
+    local LAT_AVG_W=$(jq ".jobs[0].write.clat_ns.mean / 1000 | round" fio_result.json)
+    local LAT9900_W=$(jq ".jobs[0].write.clat_ns.percentile[\"99.000000\"] / 100 | round / 10" fio_result.json)
+    local LAT9999_W=$(jq ".jobs[0].write.clat_ns.percentile[\"99.990000\"] / 100 | round / 10" fio_result.json)
+
+    case "$RW" in
+	*"read")
+	    echo "| $TEST | $FIO_JOBS@$FIO_CPUS | $TGT_MASK | $SNAP_MASK | $RW | $IO_SIZE | $QUEUE_DEPTH | $IOPS_R | $BW_R | $LAT_AVG_R | $LAT9900_R | $LAT9999_R" >> report.log
+	    ;;
+	*"write")
+	    echo "| $TEST | $FIO_JOBS@$FIO_CPUS | $TGT_MASK | $SNAP_MASK | $RW | $IO_SIZE | $QUEUE_DEPTH | $IOPS_W | $BW_W | $LAT_AVG_W | $LAT9900_W | $LAT9999_W" >> report.log
+	    ;;
+	*"rw")
+	    echo "| $TEST | $FIO_JOBS@$FIO_CPUS | $TGT_MASK | $SNAP_MASK | $RW | $IO_SIZE | $QUEUE_DEPTH | $IOPS_R+$IOPS_W | $BW_R+$BW_W | $LAT_AVG_R/$LAT_AVG_W | $LAT9900_R/$LAT9900_W | $LAT9999_R/$LAT9999_W" >> report.log
+	    ;;
+    esac
 }
-
 
 function run_bdevperf() {
     local ADDR=${ADDR:-$TGT_ADDR}
     local PORT=${PORT:-$TGT_PORT}
-    local SSH=""
+    local CONFIG=""
 
-    if [ -n "$PERF_SSH" ]; then
-	SSH="ssh $SSH_EXTRA_OPTS $PERF_SSH"
-    fi
-
-    $SSH sudo $PERF_ENV_OPTS $XLIO_OPTS $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf \
+    $(ssh_prefix $PERF_SSH) sudo $PERF_ENV_OPTS $XLIO_OPTS $PERF_SPDK_PATH/build/examples/bdevperf \
 	 -r /var/tmp/bdevperf.sock --wait-for-rpc -m $PERF_MASK -C \
 	 -q $QUEUE_DEPTH -o $IO_SIZE -w $RW -t $PERF_TIME \
 	 $BDEV_PERF_EXTRA_OPTS 2>&1 | tee perf.log &
     PERF_PID=$!
     echo "Perf PID is $PERF_PID" 2>&1 | tee -a perf.log
     sleep 3
-    rpc_perf sock_set_default_impl -i $SOCK_IMPL
-    rpc_perf sock_impl_set_options -i $SOCK_IMPL \
+    CONFIG="$CONFIG\nsock_set_default_impl -i $SOCK_IMPL"
+    CONFIG="$CONFIG\nsock_impl_set_options -i $SOCK_IMPL \
 	     --enable-zerocopy-recv \
 	     --disable-zerocopy-send-server \
 	     --disable-zerocopy-send-client \
-	     $SOCK_EXTRA_OPTS
-    rpc_perf framework_start_init
-    rpc_perf bdev_nvme_set_options -k 0
-    rpc_perf bdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme0 -t $TCP -f ipv4 -a $ADDR -s $PORT \
-	     -n nqn.2016-06.io.spdk:cnode1
-    $SSH sudo PYTHONPATH="$PYTHONPATH:$PERF_SPDK_PATH/scripts" \
-	 $PERF_SPDK_PATH/test/bdev/bdevperf/bdevperf.py \
+	     $SOCK_EXTRA_OPTS"
+
+    CONFIG="$CONFIG\nmlx5_scan_accel_module --qp-size 1024 --num-requests 8192"
+    CONFIG="$CONFIG\nframework_start_init"
+    rpc_perf_batch "$CONFIG"
+
+    CONFIG=""
+    CONFIG="$CONFIG\naccel_get_module_info"
+    CONFIG="$CONFIG\naccel_get_opc_assignments"
+    CONFIG="$CONFIG\nbdev_nvme_set_options -k 0"
+
+    for ((i=0;i<$SUBSYS;i++))
+    do
+	for ((j=0; j<PATHS; j++)); do
+	    CONFIG="$CONFIG\nbdev_nvme_attach_controller $BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS -b Nvme$i -t $TCP -f ipv4 \
+		    -a $TGT_ADDR -s $((TGT_PORT + j)) -n nqn.2016-06.io.spdk:cnode$i -x multipath $DATA_DGST --fabrics-timeout $CONNECT_TIMEOUT"
+	done
+	if [ -n "$MULTIPATH_OPTS" ]; then
+	    CONFIG="$CONFIG\nbdev_nvme_set_multipath_policy -b Nvme${i}n1 $MULTIPATH_OPTS"
+	fi
+    done
+
+    rpc_perf_batch "$CONFIG"
+
+    $(ssh_prefix $PERF_SSH) sudo PYTHONPATH="$PYTHONPATH:$PERF_SPDK_PATH/scripts" \
+	 $PERF_SPDK_PATH/examples/bdev/bdevperf/bdevperf.py \
 	 -s /var/tmp/bdevperf.sock -t 3600 perform_tests 2>&1 | tee -a perf.log &
     RPC_TASK_PID=$!
     echo "RPC task PID is $RPC_TASK_PID" 2>&1 | tee -a perf.log
@@ -392,8 +662,8 @@ function wait_bdevperf() {
 }
 
 function report_bdevperf() {
-    local OUT=$(grep "Total" perf.log | tail -1 | awk '{ print $4 " | " $6 " | " }')
-    echo "| $TEST | $PERF_MASK | $TGT_MASK | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
+    local OUT=$(grep "Total" perf.log | tail -2 | head -1 | awk '{ print $4 " | " $8 " | " }')
+    echo "| $TEST | $PERF_MASK | $TGT_MASK | $SNAP_MASK | $RW | $IO_SIZE | $QUEUE_DEPTH | $OUT" >> report.log
 }
 
 function basic_test_nvme() {
@@ -424,6 +694,8 @@ function basic_test_nvme_snap_service() {
 		    run_nvmeperf_snap # > /dev/null 2>&1
 		    wait_nvmeperf
 		    report_nvmeperf
+		    rpc_snap_spdk bdev_nvme_get_transport_statistics
+		    rpc_snap_spdk bdev_get_iostat
 		done
 	    done
 	done
@@ -444,6 +716,37 @@ function basic_test_nvme_snap() {
 		    run_nvmeperf_snap # > /dev/null 2>&1
 		    wait_nvmeperf
 		    report_nvmeperf
+		    rpc_snap_spdk bdev_nvme_get_transport_statistics
+		    rpc_snap_spdk bdev_get_iostat
+		done
+	    done
+	done
+    done
+    stop_snap
+    stop_tgt
+}
+
+function basic_test_fio_snap() {
+    local TGT_CONFIG=${TGT_CONFIG:-config_tgt}
+    local SNAP_CONFIG=${SNAP_CONFIG:-config_snap}
+    start_tgt
+    $TGT_CONFIG
+    start_snap
+    if [ -n "$SNAP_DEBUG" ]; then
+	echo "You have 10 seconds to attach debugger"
+	echo 'gdb -p $(pidof snap_service)'
+	sleep 10
+    fi
+    $SNAP_CONFIG
+    for PERF_MASK in $PERF_MASKS; do
+	for QUEUE_DEPTH in $QUEUE_DEPTHS; do
+	    for IO_SIZE in $IO_SIZES; do
+		for REP in $(seq $REPEAT); do
+		    run_fio_bdev # > /dev/null 2>&1
+		    wait_fio
+		    report_fio
+		    rpc_snap_spdk bdev_nvme_get_transport_statistics
+		    rpc_snap_spdk bdev_get_iostat
 		done
 	    done
 	done
@@ -461,7 +764,7 @@ function basic_test_fio_snap_multipath() {
         for QUEUE_DEPTH in $QUEUE_DEPTHS; do
             for IO_SIZE in $IO_SIZES; do
         	for REP in $(seq $REPEAT); do
-        	    run_fio # > /dev/null 2>&1
+        	    run_fio_nvme # > /dev/null 2>&1
         	    wait_fio
         	    report_fio
         	done
@@ -489,219 +792,328 @@ function basic_test_bdev() {
     stop_tgt
 }
 
-# Test with spdk_nvme_perf XLIO non zcopy
-function test1() {
-    SOCK_IMPL=xlio \
-	     NVME_PERF_EXTRA_OPTS="-z xlio -P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
-
-# Test with bdevperf XLIO non zcopy
-function test2() {
-    SOCK_IMPL=xlio \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_bdev
-}
-
-# Test with spdk_nvme_perf XLIO zcopy
-function test3() {
-    SOCK_IMPL=xlio \
-	     NVME_PERF_EXTRA_OPTS="-n -z xlio --enable-zcopy-recv xlio -P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
-
-# Test with bdevperf XLIO zcopy
-function test4() {
+function test_bdev_perf() {
     SOCK_IMPL=xlio \
 	     BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_bdev
+	     PERF_ENV_OPTS="LD_LIBRARY_PATH=$PWD/install-$BF_HOSTNAME/lib:$PWD/dpdk/build/lib SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
+             basic_test_bdev
 }
 
-# Test with spdk_nvme_perf POSIX-XLIO non zcopy
-function test5() {
-    SOCK_IMPL=posix \
-	     NVME_PERF_EXTRA_OPTS="-z posix -P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="LD_PRELOAD=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
+function test_perf_snap4() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local ACCEL_OPTS="--qp-size 64 --num-requests 512"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+    if [ -n "$VERIFY" ]; then
+	local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+	local RW=randwrite
+	local FIO_JOBS=1
+	local QUEUE_DEPTHS=1
+    fi
 
-# Test with bdevperf POSIX-XLIO non zcopy
-function test6() {
-    SOCK_IMPL=posix \
-	     SOCK_EXTRA_OPTS="--disable-recv-pipe" \
-	     PERF_ENV_OPTS="LD_PRELOAD=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_bdev
-}
-
-# Test with spdk_nvme_perf POSIX-Kernel non zcopy
-function test7() {
-    LIBXLIO= \
-	  SOCK_IMPL=posix \
-	  NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" \
-	  basic_test_nvme
-}
-
-# Test with bdevperf POSIX-Kernel non zcopy
-function test8() {
-    LIBXLIO= \
-	  SOCK_IMPL=posix \
-	  basic_test_bdev
-}
-
-# Test with PI + spdk_nvme_perf XLIO non zcopy + PI
-function test9() {
-    SOCK_IMPL=xlio \
-	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
-	     NVME_PERF_EXTRA_OPTS="-P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
-
-# Test with bdevperf XLIO non zcopy + PI
-function test10() {
-    SOCK_IMPL=xlio \
-	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
-	     BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_bdev
-}
-
-# Test with spdk_nvme_perf XLIO zcopy + PI
-function test11() {
-    SOCK_IMPL=xlio \
-	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
-	     NVME_PERF_EXTRA_OPTS="-e PRACT=0,PRCHK=GUARD|REFTAG -n -Z xlio -P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
-
-# Test with bdevperf XLIO zcopy + PI
-function test12() {
-    SOCK_IMPL=xlio \
-	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
-	     BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="-r -g" \
-	     BDEV_PERF_EXTRA_OPTS="-Z $BDEV_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_bdev
-}
-
-# Test with spdk_nvme_perf XLIO zcopy + digest
-function test13() {
-    SOCK_IMPL=xlio \
-	     NVME_PERF_EXTRA_OPTS="-H -I -n -Z xlio -P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
-
-# Test with spdk_nvme_perf XLIO zcopy + PI + digest
-function test14() {
-    SOCK_IMPL=xlio \
-	     BDEV_NULL_OPTS="8192 520 -m 8 -t 1" \
-	     NVME_PERF_EXTRA_OPTS="-H -I -e PRACT=0,PRCHK=GUARD|REFTAG -n -Z xlio -P 2 $NVME_PERF_EXTRA_OPTS" \
-	     PERF_ENV_OPTS="SPDK_XLIO_PATH=$LIBXLIO $PERF_ENV_OPTS" \
-	     basic_test_nvme
-}
-
-# Test with fio via SNAP with DV DMA 
-function test_snap_fio_multipath() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=1 NVME_SNAP_ZCOPY=1 SNAP_DMA_Q_OPMODE=2" \
-	         SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
-                 basic_test_fio_snap_multipath
-}
-
-# Test with spdk_nvme_perf via SNAP service
-function test_snap_service() {
-    basic_test_nvme_snap_service
-}
-
-# Test with spdk_nvme_perf via custom SNAP with zcopy and verbs DMA
-function test_snap_1() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=1 SNAP_DMA_Q_OPMODE=1" \
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
 		 SOCK_IMPL=xlio \
-		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --disable-zerocopy-send-server --disable-zerocopy-send-client" \
-		 basic_test_nvme_snap
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
 }
 
-# Test with spdk_nvme_perf via custom SNAP without zcopy and verbs DMA
-function test_snap_2() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 SNAP_DMA_Q_OPMODE=1" \
+function test_perf_snap4_delay() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local ACCEL_OPTS="--qp-size 256 --num-requests 512"
+    local TGT_CONFIG=config_tgt_delay
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_digest() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="--hdgst --ddgst"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local ACCEL_OPTS="--qp-size 64 --num-requests 512"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
 		 SOCK_IMPL=xlio \
-		 SOCK_EXTRA_OPTS="--disable-zerocopy-recv --disable-zerocopy-send-server --disable-zerocopy-send-client" \
-		 basic_test_nvme_snap
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
 }
 
-# Test with spdk_nvme_perf via custom SNAP with zcopy and DV DMA
-function test_snap_3() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=1 NVME_SNAP_ZCOPY=1 SNAP_DMA_Q_OPMODE=2" \
+function test_perf_snap4_no_mem_domain() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
 		 SOCK_IMPL=xlio \
-		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --disable-zerocopy-send-client" \
-		 basic_test_nvme_snap
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
 }
 
-# Test with spdk_nvme_perf via custom SNAP with zcopy and GGA DMA
-function test_snap_3_tx() {
-    RW=randwrite \
-      SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 NVME_SNAP_ZCOPY=1 SNAP_DMA_Q_OPMODE=3" \
-      SOCK_IMPL=xlio \
-      SOCK_EXTRA_OPTS="--disable-zerocopy-recv --enable-zerocopy-send-server --enable-zerocopy-send-client" \
-      basic_test_nvme_snap
+function test_perf_snap4_delay_no_mem_domain() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local TGT_CONFIG=config_tgt_delay
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 basic_test_fio_snap
 }
 
-# Test with spdk_nvme_perf via custom SNAP with zcopy and GGA DMA
-function test_snap_3_mix() {
-    RW=randrw \
-      NVME_PERF_EXTRA_OPTS="$NVME_PERF_EXTRA_OPTS -M 50" \
-      SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=1 SNAP_DMA_Q_OPMODE=2" \
-      SOCK_IMPL=xlio \
-      SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-server --enable-zerocopy-send-client" \
-      basic_test_nvme_snap
-}
+function test_perf_snap4_no_mem_domain_digest() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN=1"
+    local BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="--hdgst --ddgst"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
 
-# Test with spdk_nvme_perf via custom SNAP without zcopy and DV DMA
-function test_snap_4() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 SNAP_DMA_Q_OPMODE=2" \
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
 		 SOCK_IMPL=xlio \
-		 SOCK_EXTRA_OPTS="--disable-zerocopy-recv --disable-zerocopy-send-server --disable-zerocopy-send-client" \
-		 basic_test_nvme_snap
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
 }
 
-# Test with spdk_nvme_perf via custom SNAP, no zcopy, DV DMA, posix XLIO socket impl
-function test_snap_5() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 SNAP_DMA_Q_OPMODE=2" \
-		 SOCK_IMPL=posix \
-		 SOCK_EXTRA_OPTS="--disable-zerocopy-send-server --disable-zerocopy-send-client --disable-recv-pipe" \
-		 basic_test_nvme_snap
-}
+function test_perf_snap4_tcp_mem_domain() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN=1 \
+	  SNAP_DMA_Q_OPMODE=0"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
 
-# Test with spdk_nvme_perf via custom SNAP, no zcopy, GGA DMA, posix XLIO socket impl
-function test_snap_5_tx() {
-    RW=randwrite \
-      SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 SNAP_DMA_Q_OPMODE=3" \
-      SOCK_IMPL=posix \
-      SOCK_EXTRA_OPTS="--enable-zerocopy-send-server --enable-zerocopy-send-client --disable-recv-pipe" \
-      basic_test_nvme_snap
-}
-
-# Test with spdk_nvme_perf via custom SNAP, no zcopy, GGA DMA, posix XLIO socket impl
-function test_snap_5_mix() {
-    RW=randrw \
-      NVME_PERF_EXTRA_OPTS="$NVME_PERF_EXTRA_OPTS -M 50" \
-      SNAP_ENV_OPTS="$SNAP_ENV_OPTS LD_PRELOAD=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=2" \
-      SOCK_IMPL=posix \
-      SOCK_EXTRA_OPTS="--enable-zerocopy-send-server --enable-zerocopy-send-client --disable-recv-pipe" \
-      basic_test_nvme_snap
-}
-
-# Test with spdk_nvme_perf via custom SNAP without zcopy and GGA DMA
-function test_snap_6() {
-    SNAP_ENV_OPTS="$SNAP_ENV_OPTS SPDK_XLIO_PATH=$LIBXLIO NVME_SNAP_TCP_RX_ZCOPY=0 SNAP_DMA_Q_MODE=3" \
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
 		 SOCK_IMPL=xlio \
-		 SOCK_EXTRA_OPTS="--disable-zerocopy-recv --disable-zerocopy-send-server --disable-zerocopy-send-client" \
-		 basic_test_nvme_snap
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
 }
+
+function test_perf_snap4_tcp_mem_domain_digest() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN=1 \
+	  SNAP_DMA_Q_OPMODE=0"
+    local BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="--hdgst --ddgst"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local ACCEL_OPTS="--qp-size 512 --num-requests 4096"
+    if [ -n "$VERIFY" ]; then
+	local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+	local RW=randwrite
+	local FIO_JOBS=1
+	local QUEUE_DEPTHS=1
+    fi
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_delay_crypto() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local ACCEL_OPTS="--qp-size 512 --num-requests 4096"
+    local TGT_CONFIG=config_tgt_delay
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto_multiblock() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local ACCEL_OPTS="--qp-size 512 --num-requests 4096 --use-crypto-mb"
+    if [ -n "$VERIFY" ]; then
+	local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+	local RW=randwrite
+	local FIO_JOBS=1
+	local QUEUE_DEPTHS=1
+    fi
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_delay_crypto_multiblock() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local ACCEL_OPTS="--qp-size 512 --num-requests 4096 --use-crypto-mb"
+    local TGT_CONFIG=config_tgt_delay
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto_digest() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="--hdgst --ddgst"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local ACCEL_OPTS="--qp-size 512 --num-requests 4096"
+    if [ -n "$VERIFY" ]; then
+	local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+	local RW=randwrite
+	local FIO_JOBS=1
+	local QUEUE_DEPTHS=1
+    fi
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto_4k() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local BDEV_NULL_OPTS="8192 4096"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto_4k_digest() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1"
+    local BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="--hdgst --ddgst"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto
+    local BDEV_NULL_OPTS="8192 4096"
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto_sw() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN=1 \
+	  SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ=1"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto_sw
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
+function test_perf_snap4_crypto_digest_sw() {
+    local EXTRA_SNAP_OPTS="SPDK_XLIO_PATH=$LIBXLIO \
+	  SNAP4_RDMA_ZCOPY_ENABLE=1 \
+	  SNAP4_TCP_XLIO_ENABLE=1 \
+	  MLX5_SHUT_UP_BF=1 \
+	  SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN=1 \
+	  SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ=1"
+    local BDEV_NVME_ATTACH_CONTROLLER_EXTRA_OPTS="--hdgst --ddgst"
+    local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
+    local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
+    local SNAP_CONFIG=config_snap_crypto_sw
+    #local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
+    #local FIO_EXTRA_OPTS="--log_flags=all"
+
+    SNAP_ENV_OPTS="$SNAP_ENV_OPTS $EXTRA_SNAP_OPTS" \
+		 SOCK_IMPL=xlio \
+		 SOCK_EXTRA_OPTS="--enable-zerocopy-recv --enable-zerocopy-send-client" \
+		 basic_test_fio_snap
+}
+
 
 if [ -n "$1" ]; then
     tests="$@"
@@ -722,8 +1134,8 @@ else
 	   test14"
 fi
 
-rm -rf rpc.log rpc_tgt.log perf.log tgt.log snap.log report.log fio.log
-echo "| Test | Perf CPU | TGT CPU | IO size | QD | KIOPS | BW | Lat_avg | Lat_99 | Lat_99.99 |" >> report.log
+rm -rf rpc.log rpc_snap.log rpc_tgt.log perf.log tgt.log snap.log report.log fio.log
+echo "| Test | Perf CPU | TGT CPU | SNAP CPU | RW | IO size | QD | KIOPS | BW | Lat_avg | Lat_99 | Lat_99.99 |" >> report.log
 echo "Running tests: $tests"
 for t in $tests; do
     TEST="$t"

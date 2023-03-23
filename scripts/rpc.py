@@ -271,7 +271,8 @@ if __name__ == "__main__":
                                                key=args.key,
                                                cipher=args.cipher,
                                                key2=args.key2,
-                                               key_name=args.key_name))
+                                               key_name=args.key_name,
+                                               optimal_io_boundary=args.optimal_io_boundary))
     p = subparsers.add_parser('bdev_crypto_create', help='Add a crypto vbdev')
     p.add_argument('base_bdev_name', help="Name of the base bdev")
     p.add_argument('name', help="Name of the crypto vbdev")
@@ -280,6 +281,7 @@ if __name__ == "__main__":
     p.add_argument('-c', '--cipher', help="cipher to use. Obsolete, see accel_crypto_key_create", required=False)
     p.add_argument('-k2', '--key2', help="2nd key for cipher AES_XTS. Obsolete, see accel_crypto_key_create", default=None)
     p.add_argument('-n', '--key-name', help="Key name to use, see accel_crypto_key_create", required=False)
+    p.add_argument('-o', '--optimal-io-boundary', help="Optimal IO boundary", required=False, type=int)
     p.set_defaults(func=bdev_crypto_create)
 
     def bdev_crypto_delete(args):
@@ -868,7 +870,7 @@ if __name__ == "__main__":
     p.add_argument('-b', '--name', help='Name of the NVMe bdev', required=True)
     p.add_argument('-p', '--policy', help='Multipath policy (active_passive or active_active)', required=True)
     p.add_argument('-s', '--selector', help='Multipath selector (round_robin, queue_depth)', required=False)
-    p.add_argument('-r', '--rr-min-io', help='Number of IO to route to a path before switching to another for round-robin', required=False)
+    p.add_argument('-r', '--rr-min-io', help='Number of IO to route to a path before switching to another for round-robin', type=int, required=False)
     p.set_defaults(func=bdev_nvme_set_multipath_policy)
 
     def bdev_nvme_get_path_iostat(args):
@@ -2869,13 +2871,15 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                                      cipher=args.cipher,
                                                      key=args.key,
                                                      key2=args.key2,
-                                                     name=args.name))
+                                                     name=args.name,
+                                                     tweak_offset=args.tweak_offset))
 
     p = subparsers.add_parser('accel_crypto_key_create', help='Create encryption key')
     p.add_argument('-c', '--cipher', help='cipher', required=True, type=str)
     p.add_argument('-k', '--key', help='key', required=True, type=str)
     p.add_argument('-e', '--key2', help='key2', required=False, type=str)
     p.add_argument('-n', '--name', help='key name', required=True, type=str)
+    p.add_argument('-o', '--tweak-offset', help='Offset of a tweak (8 bytes) in 16 bytes IV', required=False, type=int, default=8)
     p.set_defaults(func=accel_crypto_key_create)
 
     def accel_crypto_key_destroy(args):
@@ -2953,11 +2957,17 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def mlx5_scan_accel_module(args):
         rpc.mlx5.mlx5_scan_accel_module(args.client,
                                         qp_size=args.qp_size,
-                                        num_requests=args.num_requests)
+                                        num_requests=args.num_requests,
+                                        enable_crypto=args.enable_crypto,
+                                        use_crypto_mb=args.use_crypto_mb,
+                                        split_mb_blocks=args.split_mb_blocks)
 
     p = subparsers.add_parser('mlx5_scan_accel_module', help='Enable mlx5 accel module.')
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
     p.add_argument('-r', '--num-requests', type=int, help='Size of the shared requests pool')
+    p.add_argument('-c', '--enable-crypto', dest='enable_crypto', action='store_true', help="Enable crypto operations")
+    p.add_argument('-m', '--use-crypto-mb', dest='use_crypto_mb', action='store_true', help="Use crypto multi block operations if supported by HW")
+    p.add_argument('-s', '--split-mb-blocks', type=int, help="Number of data blocks to be processed in 1 UMR. Requires crypto-mb")
     p.set_defaults(func=mlx5_scan_accel_module)
 
     # opal

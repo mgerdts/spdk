@@ -1,29 +1,19 @@
 #  SPDX-License-Identifier: BSD-3-Clause
-#  Copyright (C) 2020 Intel Corporation. All rights reserved.
-#  Copyright (c) Mellanox Technologies LTD. All rights reserved.
+#  Copyright (c) Intel Corporation. All rights reserved.
 #  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-SO_VER := 5
+SO_VER := 1
 SO_MINOR := 0
 
-SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_rdma.map)
+SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_rdma_utils.map)
 
-LIBNAME = rdma
+LIBNAME = rdma_utils
 
-C_SRCS = common.c rdma_memory.c
-
-ifeq ($(CONFIG_RDMA_PROV),verbs)
-C_SRCS += rdma_verbs.c
-else ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-C_SRCS += rdma_mlx5_dv.c
-LOCAL_SYS_LIBS += -lmlx5
-else
-$(error Wrong RDMA provider specified: $(CONFIG_RDMA_PROV))
-endif
+C_SRCS = rdma_utils.c
 
 LOCAL_SYS_LIBS += -libverbs -lrdmacm
 #Attach only if FreeBSD and RDMA is specified with configure

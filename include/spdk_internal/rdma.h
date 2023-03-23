@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_RDMA_H
@@ -10,13 +10,26 @@
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 
-/* Contains hooks definition */
-#include "spdk/nvme.h"
 #include "spdk/dma.h"
 
 /* rxe driver vendor_id has been changed from 0 to 0XFFFFFF in 0184afd15a141d7ce24c32c0d86a1e3ba6bc0eb3 */
 #define SPDK_RDMA_RXE_VENDOR_ID_OLD 0
 #define SPDK_RDMA_RXE_VENDOR_ID_NEW 0XFFFFFF
+
+struct spdk_accel_sequence;
+
+/* Result of memory translation of accel operation */
+struct spdk_rdma_memory_descriptor {
+	void *addr;
+	size_t length;
+	uint32_t lkey;
+	uint32_t rkey;
+};
+
+struct spdk_rdma_accel_sequence_ctx {
+	struct spdk_rdma_qp *qp;
+	struct spdk_rdma_memory_descriptor result;
+};
 
 struct spdk_rdma_wr_stats {
 	/* Total number of submitted requests */
@@ -59,22 +72,6 @@ struct spdk_rdma_qp {
 	bool shared_stats;
 };
 
-struct spdk_rdma_mem_map;
-
-union spdk_rdma_mr {
-	struct ibv_mr	*mr;
-	uint64_t	key;
-};
-
-enum SPDK_RDMA_TRANSLATION_TYPE {
-	SPDK_RDMA_TRANSLATION_MR = 0,
-	SPDK_RDMA_TRANSLATION_KEY
-};
-
-struct spdk_rdma_memory_translation {
-	union spdk_rdma_mr mr_or_key;
-	uint8_t translation_type;
-};
 struct spdk_rdma_srq_init_attr {
 	struct ibv_pd *pd;
 	struct spdk_rdma_wr_stats *stats;
@@ -88,24 +85,12 @@ struct spdk_rdma_srq {
 	bool shared_stats;
 };
 
-enum spdk_rdma_memory_map_role {
-	SPDK_RDMA_MEMORY_MAP_ROLE_TARGET,
-	SPDK_RDMA_MEMORY_MAP_ROLE_INITIATOR
-};
-
 struct spdk_rdma_memory_domain {
 	TAILQ_ENTRY(spdk_rdma_memory_domain) link;
 	uint32_t ref;
 	struct ibv_pd *pd;
 	struct spdk_memory_domain *domain;
 	struct spdk_memory_domain_rdma_ctx rdma_ctx;
-};
-
-struct spdk_rdma_memory_translation_ctx {
-	void *addr;
-	size_t length;
-	uint32_t lkey;
-	uint32_t rkey;
 };
 
 /**
@@ -224,87 +209,6 @@ bool spdk_rdma_qp_queue_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_r
 int spdk_rdma_qp_flush_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_recv_wr **bad_wr);
 
 /**
- * Create a memory map which is used to register Memory Regions and perform address -> memory
- * key translations
- *
- * \param pd Protection Domain which will be used to create Memory Regions
- * \param hooks Optional hooks which are used to create Protection Domain or ger RKey
- * \param role Specifies whether this map is used by RDMA target or initiator, determines access flags of registered MRs
- * \return Pointer to memory map or NULL on failure
- */
-struct spdk_rdma_mem_map *
-spdk_rdma_create_mem_map(struct ibv_pd *pd, struct spdk_nvme_rdma_hooks *hooks,
-			 enum spdk_rdma_memory_map_role role);
-
-/**
- * Free previously allocated memory map
- *
- * \param map Pointer to memory map to free
- */
-void spdk_rdma_free_mem_map(struct spdk_rdma_mem_map **map);
-
-/**
- * Get a translation for the given address and length.
- *
- * Note: the user of this function should use address returned in \b translation structure
- *
- * \param map Pointer to translation map
- * \param address Memory address for translation
- * \param length Length of the memory address
- * \param[in,out] translation Pointer to translation result to be filled by this function
- * \retval -EINVAL if translation is not found
- * \retval 0 translation succeed
- */
-int spdk_rdma_get_translation(struct spdk_rdma_mem_map *map, void *address,
-			      size_t length, struct spdk_rdma_memory_translation *translation);
-
-/**
- * Helper function for retrieving Local Memory Key. Should be applied to a translation
- * returned by \b spdk_rdma_get_translation
- *
- * \param translation Memory translation
- * \return Local Memory Key
- */
-static inline uint32_t
-spdk_rdma_memory_translation_get_lkey(struct spdk_rdma_memory_translation
-				      *translation)
-{
-	return translation->translation_type == SPDK_RDMA_TRANSLATION_MR ?
-	       translation->mr_or_key.mr->lkey : (uint32_t)translation->mr_or_key.key;
-}
-
-/**
- * Helper function for retrieving Remote Memory Key. Should be applied to a translation
- * returned by \b spdk_rdma_get_translation
- *
- * \param translation Memory translation
- * \return Remote Memory Key
- */
-static inline uint32_t
-spdk_rdma_memory_translation_get_rkey(struct spdk_rdma_memory_translation
-				      *translation)
-{
-	return translation->translation_type == SPDK_RDMA_TRANSLATION_MR ?
-	       translation->mr_or_key.mr->rkey : (uint32_t)translation->mr_or_key.key;
-}
-
-/**
- * Get a Protection Domain for an RDMA device context.
- *
- * \param context RDMA device context
- * \return Pointer to the allocated Protection Domain
- */
-struct ibv_pd *
-spdk_rdma_get_pd(struct ibv_context *context);
-
-/**
- * Return a Protection Domain.
- *
- * \param pd Pointer to the Protection Domain
- */
-void spdk_rdma_put_pd(struct ibv_pd *pd);
-
-/**
  * Get memory domain for the specified protection domain.
  *
  * If memory domain does not exist for the specified protection domain, it will be allocated.
@@ -332,5 +236,17 @@ struct spdk_rdma_memory_domain * spdk_rdma_get_tcp_memory_domain(struct ibv_pd *
  * \param domain Pointer to memory domain
  */
 void spdk_rdma_put_memory_domain(struct spdk_rdma_memory_domain *domain);
+
+bool spdk_rdma_accel_seq_supported(void);
+
+int spdk_rdma_qp_accel_seq_ctx_create(struct spdk_rdma_qp *spdk_rdma_qp,
+				      struct spdk_rdma_accel_sequence_ctx **ctx);
+
+void spdk_rdma_qp_accel_seq_ctx_release(struct spdk_rdma_accel_sequence_ctx **ctx);
+
+typedef void(*accel_seq_done_fn)(void *cb_arg, int status);
+
+int spdk_rdma_qp_apply_accel_seq(struct spdk_accel_sequence *seq,
+				 struct spdk_rdma_accel_sequence_ctx *ctx, accel_seq_done_fn cpl_cb, void *cb_arg);
 
 #endif /* SPDK_RDMA_H */

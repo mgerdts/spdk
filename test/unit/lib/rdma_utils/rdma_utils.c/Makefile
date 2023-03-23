@@ -4,6 +4,6 @@
 
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
-TEST_FILE = common_ut.c
+TEST_FILE = rdma_utils_ut.c
 
 include $(SPDK_ROOT_DIR)/mk/spdk.unittest.mk

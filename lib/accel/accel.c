@@ -49,6 +49,8 @@ static void *g_fini_cb_arg = NULL;
 static bool g_modules_started = false;
 static struct spdk_memory_domain *g_accel_domain;
 
+static struct spdk_accel_external_manager *g_external_manager;
+
 /* Global list of registered accelerator modules */
 static TAILQ_HEAD(, spdk_accel_module_if) spdk_accel_module_list =
 	TAILQ_HEAD_INITIALIZER(spdk_accel_module_list);
@@ -138,6 +140,7 @@ struct spdk_accel_sequence {
 	bool					in_process_sequence;
 	spdk_accel_completion_cb		cb_fn;
 	void					*cb_arg;
+	void					*ext_manager_arg;
 	TAILQ_ENTRY(spdk_accel_sequence)	link;
 };
 
@@ -738,6 +741,7 @@ accel_sequence_get(struct accel_io_channel *ch)
 	seq->status = 0;
 	seq->state = ACCEL_SEQUENCE_STATE_INIT;
 	seq->in_process_sequence = false;
+	seq->ext_manager_arg = NULL;
 
 	return seq;
 }
@@ -1412,7 +1416,7 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 	struct spdk_io_channel *module_ch;
 	struct spdk_accel_task *task;
 	enum accel_sequence_state state;
-	int rc;
+	int rc = 0;
 
 	/* Prevent recursive calls to this function */
 	if (spdk_unlikely(seq->in_process_sequence)) {
@@ -1466,11 +1470,25 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 			module_ch = accel_ch->module_ch[task->op_code];
 
 			accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_AWAIT_TASK);
-			rc = module->submit_tasks(module_ch, task);
-			if (spdk_unlikely(rc != 0)) {
-				SPDK_ERRLOG("Failed to submit %s operation, sequence: %p\n",
-					    g_opcode_strings[task->op_code], seq);
-				accel_sequence_set_fail(seq, rc);
+			if (g_external_manager) {
+				SPDK_DEBUGLOG(accel, "Process task %s with external manager\n",
+					      g_opcode_strings[task->op_code]);
+				rc = g_external_manager->accel_manager_submit_tasks(module_ch,
+										    &task,
+										    g_external_manager,
+										    seq->ext_manager_arg);
+			}
+
+			if (!g_external_manager || rc != 0) {
+				/* No external manager or external manager didn't handle the task */
+				SPDK_DEBUGLOG(accel, "Process task %s with accel module\n",
+					      g_opcode_strings[task->op_code]);
+				rc = module->submit_tasks(module_ch, task);
+				if (spdk_unlikely(rc != 0)) {
+					SPDK_ERRLOG("Failed to submit %s operation, sequence: %p\n",
+						    g_opcode_strings[task->op_code], seq);
+					accel_sequence_set_fail(seq, rc);
+				}
 			}
 			break;
 		case ACCEL_SEQUENCE_STATE_PULL_DATA:
@@ -1761,7 +1779,12 @@ spdk_accel_crypto_key_create(const struct spdk_accel_crypto_key_create_param *pa
 	size_t hex_key_size, hex_key2_size;
 	int rc;
 
+	SPDK_NOTICELOG("Create key %s\n", param->key_name);
+
 	if (!param || !param->hex_key || !param->cipher || !param->key_name) {
+		return -EINVAL;
+	}
+	if (param->tweak_offset > 8) {
 		return -EINVAL;
 	}
 
@@ -1808,6 +1831,7 @@ spdk_accel_crypto_key_create(const struct spdk_accel_crypto_key_create_param *pa
 		rc = -ENOMEM;
 		goto error;
 	}
+	key->param.tweak_offset = param->tweak_offset;
 
 	key->key_size = hex_key_size / 2;
 	key->key = spdk_unhexlify(key->param.hex_key);
@@ -2278,5 +2302,46 @@ spdk_accel_finish(spdk_accel_fini_cb cb_fn, void *cb_arg)
 	spdk_io_device_unregister(&spdk_accel_module_list, NULL);
 	spdk_accel_module_finish();
 }
+
+int
+spdk_accel_get_memory_domain(enum accel_opcode opcode, struct spdk_memory_domain **domains,
+			     int array_size)
+{
+	struct spdk_accel_module_if *module;
+
+	if (opcode >= ACCEL_OPC_LAST) {
+		/* invalid opcode */
+		return -EINVAL;
+	}
+	module = g_modules_opc[opcode].module;
+	if (!module) {
+		return -ENOTSUP;
+	}
+
+	if (module->get_memory_domains) {
+		return module->get_memory_domains(domains, array_size);
+	}
+
+	return 0;
+}
+
+void
+spdk_accel_sequence_set_external_manager_arg(struct spdk_accel_sequence *seq, void *arg)
+{
+	seq->ext_manager_arg = arg;
+}
+
+int
+spdk_accel_register_external_manager(struct spdk_accel_external_manager *manager)
+{
+	if (g_external_manager) {
+		return -EEXIST;
+	}
+
+	g_external_manager = manager;
+
+	return 0;
+}
+
 
 SPDK_LOG_REGISTER_COMPONENT(accel)

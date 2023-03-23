@@ -29,6 +29,7 @@ struct spdk_accel_crypto_key_create_param {
 	char *hex_key;	/**< Hexlified key */
 	char *hex_key2;	/**< Hexlified key2 */
 	char *key_name;	/**< Key name */
+	uint8_t tweak_offset;	/** 64 bytes tweak offset in 128 bytes IV. Possible values are 0-8 bytes */
 };
 
 enum accel_opcode {
@@ -382,6 +383,23 @@ int spdk_accel_append_decompress(struct spdk_accel_sequence **seq, struct spdk_i
 				 struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 				 int flags, spdk_accel_step_cb cb_fn, void *cb_arg);
 
+struct spdk_accel_task;
+
+struct spdk_accel_external_manager {
+	int (*accel_manager_submit_tasks)(struct spdk_io_channel *ch, struct spdk_accel_task **task,
+					  struct spdk_accel_external_manager *manager, void *manager_arg);
+};
+
+int spdk_accel_register_external_manager(struct spdk_accel_external_manager *manager);
+
+/**
+ * Set an argument which will be passed to the external accel manager
+ *
+ * \param seq Accel sequence to add the argument to
+ * \param arg External manager argument
+ */
+void spdk_accel_sequence_set_external_manager_arg(struct spdk_accel_sequence *seq, void *arg);
+
 /**
  * Append an encrypt operation to a sequence.
  *
@@ -601,6 +619,23 @@ int spdk_accel_get_opc_module_name(enum accel_opcode opcode, const char **module
  *  or if the framework has started (cannot change modules after startup)
  */
 int spdk_accel_assign_opc(enum accel_opcode opcode, const char *name);
+
+struct spdk_memory_domain;
+
+/**
+ * Get memory domains of accel module which implements a specific operation
+ *
+ * \param opcode Determines accel module to return memory domains from
+ * \param domains Pointer to an array of memory domains to be filled by this function. The user should allocate big enough
+ * array to keep all memory domains used by accel module
+ * \param array_size size of \b domains array
+ * \return the number of entries in \b domains array or negated errno. If returned value is bigger than \b array_size passed by the user
+ * then the user should increase the size of \b domains array and call this function again. There is no guarantees that
+ * the content of \b domains array is valid in that case.
+ *         -EINVAL if input parameters were invalid
+ */
+int spdk_accel_get_memory_domain(enum accel_opcode opcode, struct spdk_memory_domain **domains,
+				 int array_size);
 
 struct spdk_json_write_ctx;
 

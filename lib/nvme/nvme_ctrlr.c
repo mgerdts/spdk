@@ -5286,3 +5286,9 @@ spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 {
 	return nvme_transport_ctrlr_get_memory_domains(ctrlr, domains, array_size);
 }
+
+bool
+spdk_nvme_ctrlr_accel_seq_supported(const struct spdk_nvme_ctrlr *ctrlr)
+{
+	return ctrlr->accel_seq_supported;
+}

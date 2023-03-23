@@ -25,6 +25,7 @@ struct vbdev_crypto_opts {
 	char				*bdev_name;	/* base bdev name */
 	struct spdk_accel_crypto_key	*key;		/* crypto key */
 	bool				key_owner;	/* If wet to true then the key was created by RPC and needs to be destroyed */
+	uint32_t			optimal_io_boundary;
 };
 
 typedef void (*spdk_delete_crypto_complete)(void *cb_arg, int bdeverrno);

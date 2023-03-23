@@ -483,6 +483,13 @@ struct spdk_bdev {
 	 */
 	bool media_events;
 
+	/**
+	 * If set to true then block device module can handle IO requests with attached accel sequence.
+	 * Otherwise block device layer will apply accel sequence before submitting IO request to the
+	 * bdev module
+	 */
+	bool accel_seq_supported;
+
 	/* Upon receiving a reset request, this is the amount of time in seconds
 	 * to wait for all I/O to complete before moving forward with the reset.
 	 * If all I/O completes prior to this time out, the reset will be skipped.

@@ -19,6 +19,7 @@
 #include "spdk/util.h"
 #include "spdk/trace.h"
 #include "spdk/dma.h"
+#include "spdk/accel.h"
 
 #include "spdk/bdev_module.h"
 #include "spdk/log.h"
@@ -3035,22 +3036,60 @@ _bdev_io_ext_use_bounce_buffer(struct spdk_bdev_io *bdev_io)
 				       bdev_io->u.bdev.num_blocks * bdev_io->bdev->blocklen);
 }
 
+static void
+_bdev_write_accel_seq_cpl(void *cb_arg, int status)
+{
+	struct spdk_bdev_io *bdev_io = cb_arg;
+
+	if (status) {
+		SPDK_ERRLOG("Failed to get data buffer, completing IO\n");
+		bdev_io_complete(bdev_io);
+	} else {
+		SPDK_DEBUGLOG(bdev, "apply seq on write completed, submit IO\n");
+		bdev_io_submit(bdev_io);
+	}
+}
+
 static inline void
 _bdev_io_submit_ext(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io,
 		    struct spdk_bdev_ext_io_opts *opts, bool copy_opts)
 {
+	struct spdk_bdev *bdev;
+
 	if (opts) {
 		bool use_pull_push = opts->memory_domain && !desc->memory_domains_supported;
+		bool apply_accel_seq;
+
+		bdev = spdk_bdev_desc_get_bdev(desc);
+		apply_accel_seq = opts->accel_seq && !bdev->accel_seq_supported;
+
 		assert(opts->size <= sizeof(*opts));
+		assert(!(apply_accel_seq && use_pull_push));
 		/*
 		 * copy if size is smaller than opts struct to avoid having to check size
 		 * on every access to bdev_io->u.bdev.ext_opts
 		 */
-		if (copy_opts || use_pull_push || opts->size < sizeof(*opts)) {
+		if (copy_opts || use_pull_push || apply_accel_seq || opts->size < sizeof(*opts)) {
 			_bdev_io_copy_ext_opts(bdev_io, opts);
 			if (use_pull_push) {
 				_bdev_io_ext_use_bounce_buffer(bdev_io);
 				return;
+			}
+			if (apply_accel_seq) {
+				/* bdev doesn't accel sequence. It is needed to apply accel seq before issuing IO operation.
+				 * For write operation we need apply the seq from memory domain before submitting IO,
+				 * for read operation - after read completes
+				 * This IO request will go through a regular IO flow, so clear accel seq pointers in
+				 * the copied ext_opts */
+				bdev_io->internal.ext_opts_copy.accel_seq = NULL;
+				SPDK_DEBUGLOG(bdev, "bdev %s doesn't support accel_seq\n", bdev->name);
+
+				if (bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE) {
+					SPDK_DEBUGLOG(bdev, "bdev %s apply accel_seq on write\n", bdev->name);
+					spdk_accel_sequence_finish(opts->accel_seq,
+								   _bdev_write_accel_seq_cpl, bdev_io);
+					return;
+				}
 			}
 		}
 	}
@@ -4711,11 +4750,13 @@ bdev_readv_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *c
 	struct spdk_bdev_channel *channel = __io_ch_to_bdev_ch(ch);
 
 	if (!bdev_io_valid_blocks(bdev, offset_blocks, num_blocks)) {
+		SPDK_ERRLOG("Invalid blocks\n");
 		return -EINVAL;
 	}
 
 	bdev_io = bdev_channel_get_io(channel);
 	if (!bdev_io) {
+		SPDK_ERRLOG("no bdev io\n");
 		return -ENOMEM;
 	}
 
@@ -4772,11 +4813,14 @@ _bdev_io_check_opts(struct spdk_bdev_ext_io_opts *opts, struct iovec *iov)
 	 * spdk_bdev_ext_io_opts (ac6f2bdd8d) since access to those members
 	 * are not checked internal.
 	 */
-	return opts->size >= offsetof(struct spdk_bdev_ext_io_opts, metadata) +
-	       sizeof(opts->metadata) &&
+	return opts->size >= offsetof(struct spdk_bdev_ext_io_opts, accel_seq) +
+	       sizeof(opts->accel_seq) &&
 	       opts->size <= sizeof(*opts) &&
 	       /* When memory domain is used, the user must provide data buffers */
-	       (!opts->memory_domain || (iov && iov[0].iov_base));
+	       (!opts->memory_domain || (iov && iov[0].iov_base)) &&
+	       /* If opts contains accel_seq then memory domain must be passed in the opts -
+	        * it can be part of accel_seq */
+	       !(opts->accel_seq && opts->memory_domain);
 }
 
 int
@@ -4907,6 +4951,7 @@ bdev_writev_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *
 	}
 
 	if (!bdev_io_valid_blocks(bdev, offset_blocks, num_blocks)) {
+		SPDK_ERRLOG("Incorrect blocks\n");
 		return -EINVAL;
 	}
 
@@ -4987,12 +5032,14 @@ spdk_bdev_writev_blocks_ext(struct spdk_bdev_desc *desc, struct spdk_io_channel 
 
 	if (opts) {
 		if (spdk_unlikely(!_bdev_io_check_opts(opts, iov))) {
+			SPDK_ERRLOG("Incorrect ext opts\n");
 			return -EINVAL;
 		}
 		md = opts->metadata;
 	}
 
 	if (md && !spdk_bdev_is_md_separate(spdk_bdev_desc_get_bdev(desc))) {
+		SPDK_ERRLOG("Incorrect md\n");
 		return -EINVAL;
 	}
 
@@ -6457,6 +6504,26 @@ bdev_unfreeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 	spdk_bdev_for_each_channel_continue(i, 0);
 }
 
+static void
+_bdev_read_accel_seq_cpl(void *cb_arg, int status)
+{
+	struct spdk_bdev_io *bdev_io = cb_arg;
+	struct spdk_bdev_channel *bdev_ch = bdev_io->internal.ch;
+	struct spdk_bdev_shared_resource *shared_resource = bdev_ch->shared_resource;
+
+	if (status) {
+		bdev_io->internal.status = SPDK_BDEV_IO_STATUS_FAILED;
+	}
+
+	/* Continue with IO completion flow */
+	_bdev_io_decrement_outstanding(bdev_ch, shared_resource);
+	if (spdk_unlikely(_bdev_io_handle_no_mem(bdev_io))) {
+		return;
+	}
+
+	bdev_io_complete(bdev_io);
+}
+
 void
 spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status status)
 {
@@ -6488,6 +6555,14 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 		if (spdk_unlikely(bdev_io->internal.orig_iovcnt != 0)) {
 			_bdev_io_push_bounce_data_buffer(bdev_io, _bdev_io_complete_push_bounce_done);
 			/* bdev IO will be completed in the callback */
+			return;
+		} else if (bdev_io->type == SPDK_BDEV_IO_TYPE_READ &&
+			   bdev_io->internal.status == SPDK_BDEV_IO_STATUS_SUCCESS &&
+			   bdev_io->internal.ext_opts && bdev_io->internal.ext_opts->accel_seq && !bdev->accel_seq_supported) {
+			SPDK_DEBUGLOG(bdev, "Apply accel seq after read completes\n");
+			spdk_accel_sequence_reverse(bdev_io->internal.ext_opts->accel_seq);
+			spdk_accel_sequence_finish(bdev_io->internal.ext_opts->accel_seq, _bdev_read_accel_seq_cpl,
+						   bdev_io);
 			return;
 		}
 

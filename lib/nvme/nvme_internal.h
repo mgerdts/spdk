@@ -1072,6 +1072,8 @@ struct spdk_nvme_ctrlr {
 	/* maximum zone append size in bytes */
 	uint32_t			max_zone_append_size;
 
+	bool				accel_seq_supported;
+
 	/* PMR size in bytes */
 	uint64_t			pmr_size;
 

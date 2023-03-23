@@ -56,6 +56,8 @@ struct spdk_bdev_media_event {
  */
 struct spdk_bdev;
 
+struct spdk_accel_sequence;
+
 /**
  * Block device remove callback.
  *
@@ -222,8 +224,10 @@ struct spdk_bdev_ext_io_opts {
 	void *memory_domain_ctx;
 	/** Metadata buffer, optional */
 	void *metadata;
+	/** Accel sequence attached to this IO request */
+	struct spdk_accel_sequence *accel_seq;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_ext_io_opts) == 32, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_ext_io_opts) == 40, "Incorrect size");
 
 /**
  * Get the options for the bdev module.

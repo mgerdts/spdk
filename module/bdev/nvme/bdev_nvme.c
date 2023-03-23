@@ -2700,9 +2700,18 @@ bdev_nvme_submit_accel_crc32c(void *ctx, uint32_t *dst, struct iovec *iov,
 	}
 }
 
+static struct spdk_io_channel *
+bdev_nvme_get_accel_channel(void *ctx)
+{
+	struct nvme_poll_group *group = ctx;
+
+	return group->accel_channel;
+}
+
 static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.table_size		= sizeof(struct spdk_nvme_accel_fn_table),
 	.submit_accel_crc32c	= bdev_nvme_submit_accel_crc32c,
+	.get_accel_channel	= bdev_nvme_get_accel_channel,
 };
 
 static int
@@ -3485,6 +3494,9 @@ nvme_disk_create(struct spdk_bdev *disk, const char *base_name,
 	disk->ctxt = ctx;
 	disk->fn_table = &nvmelib_fn_table;
 	disk->module = &nvme_if;
+	disk->accel_seq_supported = spdk_nvme_ctrlr_accel_seq_supported(ctrlr);
+
+	SPDK_WARNLOG("bdev %s support accel seq %d\n", disk->name, disk->accel_seq_supported);
 
 	return 0;
 }
@@ -6700,6 +6712,7 @@ bdev_nvme_readv(struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt,
 		bio->ext_opts.memory_domain_ctx = ext_opts->memory_domain_ctx;
 		bio->ext_opts.io_flags = flags;
 		bio->ext_opts.metadata = md;
+		bio->ext_opts.accel_seq = ext_opts->accel_seq;
 
 		rc = spdk_nvme_ns_cmd_readv_ext(ns, qpair, lba, lba_count,
 						bdev_nvme_readv_done, bio,
@@ -6747,6 +6760,7 @@ bdev_nvme_writev(struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt,
 		bio->ext_opts.memory_domain_ctx = ext_opts->memory_domain_ctx;
 		bio->ext_opts.io_flags = flags;
 		bio->ext_opts.metadata = md;
+		bio->ext_opts.accel_seq = ext_opts->accel_seq;
 
 		rc = spdk_nvme_ns_cmd_writev_ext(ns, qpair, lba, lba_count,
 						 bdev_nvme_writev_done, bio,

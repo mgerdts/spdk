@@ -93,7 +93,7 @@ def bdev_compress_get_orphans(client, name=None):
     return client.call('bdev_compress_get_orphans', params)
 
 
-def bdev_crypto_create(client, base_bdev_name, name, crypto_pmd=None, key=None, cipher=None, key2=None, key_name=None):
+def bdev_crypto_create(client, base_bdev_name, name, crypto_pmd=None, key=None, cipher=None, key2=None, key_name=None, optimal_io_boundary=None):
     """Construct a crypto virtual block device.
 
     Args:
@@ -120,6 +120,9 @@ def bdev_crypto_create(client, base_bdev_name, name, crypto_pmd=None, key=None, 
         params['cipher'] = cipher
     if key_name is not None:
         params['key_name'] = key_name
+    if optimal_io_boundary is not None:
+        params['optimal_io_boundary'] = optimal_io_boundary
+
     return client.call('bdev_crypto_create', params)
 
 

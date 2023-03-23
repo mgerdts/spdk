@@ -313,6 +313,7 @@ struct spdk_nvme_accel_fn_table {
 	/** The accelerated crc32c function. */
 	void (*submit_accel_crc32c)(void *ctx, uint32_t *dst, struct iovec *iov,
 				    uint32_t iov_cnt, uint32_t seed, spdk_nvme_accel_completion_cb cb_fn, void *cb_arg);
+	struct spdk_io_channel * (*get_accel_channel)(void *ctx);
 };
 
 /**
@@ -536,7 +537,13 @@ struct spdk_nvme_tcp_stat {
 	uint64_t socket_completions;
 	uint64_t nvme_completions;
 	uint64_t submitted_requests;
+	uint64_t outstanding_reqs;
 	uint64_t queued_requests;
+	uint64_t received_data_pdus;
+	uint64_t received_data_iovs;
+	uint64_t max_data_iovs_per_pdu;
+	uint64_t recv_ddgsts;
+	uint64_t send_ddgsts;
 };
 
 struct spdk_nvme_transport_poll_group_stat {
@@ -574,6 +581,8 @@ enum spdk_nvme_ctrlr_flags {
 	SPDK_NVME_CTRLR_ZCOPY_SUPPORTED		= 1 << 7, /**< Zero copy API is supported */
 };
 
+struct spdk_accel_sequence;
+
 /**
  * Structure with optional IO request parameters
  */
@@ -595,10 +604,9 @@ struct spdk_nvme_ns_cmd_ext_io_opts {
 	uint16_t apptag_mask;
 	/** Application tag to use end-to-end protection information. */
 	uint16_t apptag;
-	/* Hole at bytes 44-47. */
-	uint8_t reserved44[4];
+	struct spdk_accel_sequence *accel_seq;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 48, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 52, "Incorrect size");
 
 /**
  * Parse the string representation of a transport ID.
@@ -4030,6 +4038,8 @@ int spdk_nvme_cuse_unregister(struct spdk_nvme_ctrlr *ctrlr);
  */
 int spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 				       struct spdk_memory_domain **domains, int array_size);
+
+bool spdk_nvme_ctrlr_accel_seq_supported(const struct spdk_nvme_ctrlr *ctrlr);
 
 /**
  * Opaque handle for a transport poll group. Used by the transport function table.

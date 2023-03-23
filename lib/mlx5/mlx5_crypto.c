@@ -12,7 +12,7 @@
 #include "spdk/likely.h"
 #include "spdk/util.h"
 #include "spdk_internal/mlx5.h"
-#include "spdk_internal/rdma.h"
+#include "spdk_internal/rdma_utils.h"
 
 #define MLX5_VENDOR_ID_MELLANOX 0x2c9
 
@@ -39,6 +39,8 @@ struct spdk_mlx5_crypto_keytag {
 	uint32_t deks_num;
 	bool has_keytag;
 	char keytag[8];
+	/* Used to verify that the keytag belongs to mlx5 */
+	int vendor_id;
 };
 
 struct ibv_context **
@@ -90,23 +92,25 @@ spdk_mlx5_crypto_devs_get(int *dev_num)
 			continue;
 		}
 		if (!(dv_dev_attr.crypto_caps.flags & MLX5DV_CRYPTO_CAPS_CRYPTO)) {
-			SPDK_DEBUGLOG(mlx5, "dev %s crypto engine doesn't support crypto, skipping\n", dev->device->name);
-			continue;
+			SPDK_WARNLOG("dev %s crypto engine doesn't support crypto\n", dev->device->name);
+			/* continue; */
 		}
 		if (!(dv_dev_attr.crypto_caps.crypto_engines & (MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS |
-				MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK))) {
-			SPDK_DEBUGLOG(mlx5, "dev %s crypto engine doesn't support AES_XTS, skipping\n", dev->device->name);
-			continue;
+				MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK |
+				MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK))) {
+			SPDK_WARNLOG("dev %s crypto engine doesn't support AES_XTS\n", dev->device->name);
+			/* continue; */
 		}
 		if (dv_dev_attr.crypto_caps.wrapped_import_method &
 		    MLX5DV_CRYPTO_WRAPPED_IMPORT_METHOD_CAP_AES_XTS) {
 			SPDK_WARNLOG("dev %s uses wrapped import method (0x%x) which is not supported by mlx5 accel module\n",
 				     dev->device->name, dv_dev_attr.crypto_caps.wrapped_import_method);
-			continue;
+			/* continue; */
 		}
 
 		SPDK_NOTICELOG("Crypto dev %s\n", dev->device->name);
 		rdma_devs_out[num_crypto_devs++] = dev;
+		break;
 	}
 
 	if (!num_crypto_devs) {
@@ -150,7 +154,7 @@ spdk_mlx5_crypto_keytag_destroy(struct spdk_mlx5_crypto_keytag *keytag)
 			mlx5dv_dek_destroy(dek->dek_obj);
 		}
 		if (dek->pd) {
-			spdk_rdma_put_pd(dek->pd);
+			spdk_rdma_utils_put_pd(dek->pd);
 		}
 	}
 	spdk_memset_s(keytag->keytag, sizeof(keytag->keytag), 0, sizeof(keytag->keytag));
@@ -229,7 +233,7 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 	for (i = 0; i < num_devs; i++) {
 		keytag->deks_num++;
 		dek = &keytag->deks[i];
-		dek->pd = spdk_rdma_get_pd(devs[i]);
+		dek->pd = spdk_rdma_utils_get_pd(devs[i]);
 		if (!dek->pd) {
 			SPDK_ERRLOG("Failed to get PD on device %s\n", devs[i]->device->name);
 			rc = -EINVAL;
@@ -272,6 +276,8 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 		       SPDK_MLX5_AES_XTS_KEYTAG_SIZE);
 	}
 
+	keytag->vendor_id = MLX5_VENDOR_ID_MELLANOX;
+
 	spdk_mlx5_crypto_devs_release(devs);
 	*out = keytag;
 
@@ -300,6 +306,55 @@ mlx5_crypto_get_dek_by_pd(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd 
 	return NULL;
 }
 
+//TODO: rdma-core hides these definitions, we'll need to create DEK manually
+
+enum mlx5_devx_obj_type {
+	MLX5_DEVX_FLOW_TABLE		= 1,
+	MLX5_DEVX_FLOW_COUNTER		= 2,
+	MLX5_DEVX_FLOW_METER		= 3,
+	MLX5_DEVX_QP			= 4,
+	MLX5_DEVX_PKT_REFORMAT_CTX	= 5,
+	MLX5_DEVX_TIR			= 6,
+	MLX5_DEVX_FLOW_GROUP		= 7,
+	MLX5_DEVX_FLOW_TABLE_ENTRY	= 8,
+	MLX5_DEVX_FLOW_SAMPLER		= 9,
+	MLX5_DEVX_ASO_FIRST_HIT		= 10,
+	MLX5_DEVX_ASO_FLOW_METER	= 11,
+	MLX5_DEVX_ASO_CT		= 12,
+};
+
+struct mlx5dv_devx_obj {
+	struct ibv_context *context;
+	uint32_t handle;
+	enum mlx5_devx_obj_type type;
+	uint32_t object_id;
+	uint64_t rx_icm_addr;
+	uint8_t log_obj_range;
+	void *priv;
+};
+
+struct mlx5dv_dek {
+    struct mlx5dv_devx_obj *devx_obj;
+};
+
+int
+spdk_mlx5_crypto_get_dek_obj_id(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd, uint32_t *dek_obj_id)
+{
+	struct spdk_mlx5_crypto_dek *dek;
+
+	if (spdk_unlikely(keytag->vendor_id != MLX5_VENDOR_ID_MELLANOX)) {
+		return -EINVAL;
+	}
+	dek = mlx5_crypto_get_dek_by_pd(keytag, pd);
+	if (spdk_unlikely(!dek)) {
+		SPDK_ERRLOG("No DEK for pd %p (dev %s)\n", pd, pd->context->device->name);
+		return -EINVAL;
+	}
+	*dek_obj_id = dek->dek_obj->devx_obj->object_id & 0x00FFFFFF;
+
+	return 0;
+}
+
 int
 spdk_mlx5_crypto_set_attr(struct mlx5dv_crypto_attr *attr_out,
 			  struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd,
@@ -307,6 +362,10 @@ spdk_mlx5_crypto_set_attr(struct mlx5dv_crypto_attr *attr_out,
 {
 	struct spdk_mlx5_crypto_dek *dek;
 	enum mlx5dv_block_size bs;
+
+	if (spdk_unlikely(keytag->vendor_id != MLX5_VENDOR_ID_MELLANOX)) {
+		return -EINVAL;
+	}
 
 	dek = mlx5_crypto_get_dek_by_pd(keytag, pd);
 	if (spdk_unlikely(!dek)) {
