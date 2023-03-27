@@ -9,6 +9,10 @@ function requires a bdev descriptor to be passed and the claim is automatically 
 descriptor is closed. It allows bdev modules to claim bdevs as a single writer, multiple writers, or
 multiple readers.
 
+### gpt
+
+GPT bdevs now use the GPT Unique Partition ID as the bdev's UUID.
+
 ### lvol
 
 New API `spdk_lvol_iter_immediate_clones` was added to iterate the clones of an lvol.
