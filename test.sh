@@ -101,7 +101,7 @@ XLIO_INTERNAL_THREAD_AFFINITY=0x01
 XLIO_LRO=on
 XLIO_TX_WRE=1024
 XLIO_RX_WRE_BATCHING=1
-XLIO_GRO_STREAMS_MAX=10000
+XLIO_GRO_STREAMS_MAX=0
 XLIO_THREAD_MODE=1
 XLIO_TX_WRE_BATCHING=128
 XLIO_TSO=1
@@ -118,7 +118,7 @@ XLIO_PROGRESS_ENGINE_INTERVAL=0
 XLIO_SELECT_POLL_OS_FORCE=1
 XLIO_SELECT_POLL_OS_RATIO=1
 XLIO_SELECT_SKIP_OS=1
-XLIO_TCP_NODELAY=1
+XLIO_TCP_NODELAY=0
 XLIO_TCP_ABORT_ON_CLOSE=1
 "
 
@@ -176,19 +176,19 @@ function rpc_perf_batch() {
 }
 
 function rpc_snap_spdk() {
-    $(ssh_prefix $SNAP_SSH) sudo $SNIC_SPDK_PATH/scripts/rpc.py -v $@ 2>&1 | tee -a rpc_snap.log
+    $(ssh_prefix $SNAP_SSH) sudo $SNIC_SPDK_PATH/scripts/rpc.py -v $@ 2>&1 | tee -a rpc_snap.log > /dev/null
 }
 
 function rpc_snap_spdk_batch() {
-    echo -e "$@" | $(ssh_prefix $SNAP_SSH) sudo $SNIC_SPDK_PATH/scripts/rpc.py -v 2>&1 | tee -a rpc_snap.log
+    echo -e "$@" | $(ssh_prefix $SNAP_SSH) sudo $SNIC_SPDK_PATH/scripts/rpc.py -v 2>&1 | tee -a rpc_snap.log > /dev/null
 }
 
 function rpc_snap_snap() {
-    $(ssh_prefix $SNAP_SSH) sudo $SNIC_SNAP_PATH/snap_rpc.py $@ 2>&1 | tee -a rpc_snap.log
+    $(ssh_prefix $SNAP_SSH) sudo $SNIC_SNAP_PATH/snap_rpc.py $@ 2>&1 | tee -a rpc_snap.log > /dev/null
 }
 
 function rpc_snap_snap_batch() {
-    echo -e "$@" | $(ssh_prefix $SNAP_SSH) sudo $SNIC_SNAP_PATH/snap_rpc.py 2>&1 | tee -a rpc_snap.log
+    echo -e "$@" | $(ssh_prefix $SNAP_SSH) sudo $SNIC_SNAP_PATH/snap_rpc.py 2>&1 | tee -a rpc_snap.log > /dev/null
 }
 
 function start_tgt() {
@@ -197,11 +197,17 @@ function start_tgt() {
     else
 	$(ssh_prefix $TGT_HOST) sudo $TGT_BIN_PATH/spdk_tgt -m $TGT_MASK --wait-for-rpc 2>&1 | tee tgt.log > /dev/null &
     fi
-    sleep 7
+    for i in $(seq 10); do
+	if rpc_tgt spdk_get_version; then
+	    return
+	fi
+	sleep 1
+    done
 }
 
 function stop_tgt() {
-    rpc_tgt spdk_kill_instance 15
+    local SIGNAL=${1:-15}
+    rpc_tgt spdk_kill_instance $SIGNAL
     sleep 3
 }
 
@@ -289,13 +295,19 @@ function stop_snap_service() {
 function start_snap() {
     $(ssh_prefix $SNAP_SSH) sudo $XLIO_OPTS \
 	 $SNAP_ENV_OPTS \
-	 $SNAP_BIN_PATH/snap_service -m $SNAP_MASK -u --wait-for-rpc \
+	 nice --20 $SNAP_BIN_PATH/snap_service -m $SNAP_MASK -u --wait-for-rpc \
 	 2>&1 | tee snap.log &
-    sleep 5
+    for i in $(seq 10); do
+	if rpc_snap_spdk spdk_get_version; then
+	    return
+	fi
+	sleep 1
+    done
 }
 
 function stop_snap() {
-    $(ssh_prefix $SNAP_SSH) sudo spdk_rpc.py spdk_kill_instance 15
+    local SIGNAL=${1:-15}
+    rpc_snap_spdk spdk_kill_instance $SIGNAL
     sleep 3
 }
 
@@ -806,7 +818,7 @@ function test_perf_snap4() {
 	  MLX5_SHUT_UP_BF=1"
     local FIO_SPDK_CONF="$PWD/fio_spdk_conf.json"
     local FIO_BDEV_JOBS_CONF="$PWD/fio_bdev_jobs"
-    local ACCEL_OPTS="--qp-size 64 --num-requests 512"
+    local ACCEL_OPTS="--qp-size 256 --num-requests 4096"
     #local FIO_EXTRA_OPTS="--log_flags=all"
     if [ -n "$VERIFY" ]; then
 	local FIO_EXTRA_OPTS="--verify=crc32c --verify_backlog=1"
@@ -1114,6 +1126,13 @@ function test_perf_snap4_crypto_digest_sw() {
 		 basic_test_fio_snap
 }
 
+function cleanup() {
+    sudo kill -9 $(pidof fio)
+    stop_snap 9
+    stop_tgt 9
+}
+
+trap cleanup SIGINT
 
 if [ -n "$1" ]; then
     tests="$@"

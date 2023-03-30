@@ -619,6 +619,12 @@ struct spdk_bdev {
 
 		/** Bdev name used for quick lookup */
 		struct spdk_bdev_name bdev_name;
+
+		/** List of all open channels */
+		CIRCLEQ_HEAD(, spdk_bdev_channel) channels;
+
+		/** Open channels lock */
+		struct spdk_spinlock channels_lock;
 	} internal;
 };
 

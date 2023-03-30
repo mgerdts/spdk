@@ -162,11 +162,15 @@ struct spdk_bdev_qos_limit {
 	/** Maximum allowed IOs or bytes to be issued in one timeslice (e.g., 1ms). */
 	uint32_t max_per_timeslice;
 
-	/** Function to check whether to queue the IO. */
-	bool (*queue_io)(const struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io);
+	/** Function to check whether to queue the IO.
+	 * If The IO is allowed to pass, the quota will be reduced correspondingly.
+	 */
+	bool (*queue_io)(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io);
 
-	/** Function to update for the submitted IO. */
-	void (*update_quota)(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io);
+	/** Function to rewind the quota once the IO was allowed to be sent by this
+	 * limit but queued due to one of the further limits.
+	 */
+	void (*rewind_quota)(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io);
 };
 
 struct spdk_bdev_qos {
@@ -179,9 +183,6 @@ struct spdk_bdev_qos {
 	/** The thread on which the poller is running. */
 	struct spdk_thread *thread;
 
-	/** Queue of I/O waiting to be issued. */
-	bdev_io_tailq_t queued;
-
 	/** Size of a timeslice in tsc ticks. */
 	uint64_t timeslice_size;
 
@@ -190,6 +191,9 @@ struct spdk_bdev_qos {
 
 	/** Poller that processes queued I/O commands each time slice. */
 	struct spdk_poller *poller;
+
+	/** Poller that processes queued I/O commands each time slice. */
+	struct spdk_bdev_channel *next_channel;
 };
 
 struct spdk_bdev_mgmt_channel {
@@ -290,6 +294,11 @@ struct spdk_bdev_channel {
 	bdev_io_tailq_t		queued_resets;
 
 	lba_range_tailq_t	locked_ranges;
+
+	CIRCLEQ_ENTRY(spdk_bdev_channel)	link;
+
+	/** Queue of I/O waiting to be issued. */
+	bdev_io_tailq_t		queued_ios;
 };
 
 struct media_event_entry {
@@ -2069,66 +2078,101 @@ bdev_get_io_size_in_byte(struct spdk_bdev_io *bdev_io)
 	}
 }
 
-static bool
-bdev_qos_rw_queue_io(const struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+static inline bool
+bdev_qos_rw_queue_io(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io, uint64_t delta)
 {
-	if (limit->max_per_timeslice > 0 && limit->remaining_this_timeslice <= 0) {
-		return true;
-	} else {
+	int64_t remaining_this_timeslice;
+
+	if (!limit->max_per_timeslice) {
+		/* The QoS is disabled */
 		return false;
 	}
+
+	remaining_this_timeslice = __atomic_sub_fetch(&limit->remaining_this_timeslice, delta,
+				   __ATOMIC_RELAXED);
+	if (remaining_this_timeslice + (int64_t)delta > 0) {
+		/* There was still a quota for this delta -> the IO shouldn't be queued
+		 *
+		 * We allow a slight quota overrun here so an IO bigger than the per-timeslice
+		 * quota can be allowed once a while. Such overrun then taken into account in
+		 * the QoS poller, where the next timeslice quota is calculated.
+		 */
+		return false;
+	}
+
+	/* There was no quota for this delta -> the IO should be queued
+	 * The remaining_this_timeslice must be rewinded so it reflects the real
+	 * amount of IOs or bytes allowed.
+	 */
+	__atomic_add_fetch(
+		&limit->remaining_this_timeslice, delta, __ATOMIC_RELAXED);
+	return true;
+}
+
+static inline void
+bdev_qos_rw_rewind_io(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io, uint64_t delta)
+{
+	__atomic_add_fetch(&limit->remaining_this_timeslice, delta, __ATOMIC_RELAXED);
 }
 
 static bool
-bdev_qos_r_queue_io(const struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+bdev_qos_rw_iops_queue(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+{
+	return bdev_qos_rw_queue_io(limit, io, 1);
+}
+
+static void
+bdev_qos_rw_iops_rewind_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+{
+	bdev_qos_rw_rewind_io(limit, io, 1);
+}
+
+static bool
+bdev_qos_rw_bps_queue(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+{
+	return bdev_qos_rw_queue_io(limit, io, bdev_get_io_size_in_byte(io));
+}
+
+static void
+bdev_qos_rw_bps_rewind_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+{
+	bdev_qos_rw_rewind_io(limit, io, bdev_get_io_size_in_byte(io));
+}
+
+static bool
+bdev_qos_r_bps_queue(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
 	if (bdev_is_read_io(io) == false) {
 		return false;
 	}
 
-	return bdev_qos_rw_queue_io(limit, io);
+	return bdev_qos_rw_bps_queue(limit, io);
+}
+
+static void
+bdev_qos_r_bps_rewind_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+{
+	if (bdev_is_read_io(io) != false) {
+		bdev_qos_rw_rewind_io(limit, io, bdev_get_io_size_in_byte(io));
+	}
 }
 
 static bool
-bdev_qos_w_queue_io(const struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+bdev_qos_w_bps_queue(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
 	if (bdev_is_read_io(io) == true) {
 		return false;
 	}
 
-	return bdev_qos_rw_queue_io(limit, io);
+	return bdev_qos_rw_bps_queue(limit, io);
 }
 
 static void
-bdev_qos_rw_iops_update_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
+bdev_qos_w_bps_rewind_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	limit->remaining_this_timeslice--;
-}
-
-static void
-bdev_qos_rw_bps_update_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
-{
-	limit->remaining_this_timeslice -= bdev_get_io_size_in_byte(io);
-}
-
-static void
-bdev_qos_r_bps_update_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
-{
-	if (bdev_is_read_io(io) == false) {
-		return;
+	if (bdev_is_read_io(io) != true) {
+		bdev_qos_rw_rewind_io(limit, io, bdev_get_io_size_in_byte(io));
 	}
-
-	return bdev_qos_rw_bps_update_quota(limit, io);
-}
-
-static void
-bdev_qos_w_bps_update_quota(struct spdk_bdev_qos_limit *limit, struct spdk_bdev_io *io)
-{
-	if (bdev_is_read_io(io) == true) {
-		return;
-	}
-
-	return bdev_qos_rw_bps_update_quota(limit, io);
 }
 
 static void
@@ -2139,26 +2183,25 @@ bdev_qos_set_ops(struct spdk_bdev_qos *qos)
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		if (qos->rate_limits[i].limit == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 			qos->rate_limits[i].queue_io = NULL;
-			qos->rate_limits[i].update_quota = NULL;
 			continue;
 		}
 
 		switch (i) {
 		case SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT:
-			qos->rate_limits[i].queue_io = bdev_qos_rw_queue_io;
-			qos->rate_limits[i].update_quota = bdev_qos_rw_iops_update_quota;
+			qos->rate_limits[i].queue_io = bdev_qos_rw_iops_queue;
+			qos->rate_limits[i].rewind_quota = bdev_qos_rw_iops_rewind_quota;
 			break;
 		case SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT:
-			qos->rate_limits[i].queue_io = bdev_qos_rw_queue_io;
-			qos->rate_limits[i].update_quota = bdev_qos_rw_bps_update_quota;
+			qos->rate_limits[i].queue_io = bdev_qos_rw_bps_queue;
+			qos->rate_limits[i].rewind_quota = bdev_qos_rw_bps_rewind_quota;
 			break;
 		case SPDK_BDEV_QOS_R_BPS_RATE_LIMIT:
-			qos->rate_limits[i].queue_io = bdev_qos_r_queue_io;
-			qos->rate_limits[i].update_quota = bdev_qos_r_bps_update_quota;
+			qos->rate_limits[i].queue_io = bdev_qos_r_bps_queue;
+			qos->rate_limits[i].rewind_quota = bdev_qos_r_bps_rewind_quota;
 			break;
 		case SPDK_BDEV_QOS_W_BPS_RATE_LIMIT:
-			qos->rate_limits[i].queue_io = bdev_qos_w_queue_io;
-			qos->rate_limits[i].update_quota = bdev_qos_w_bps_update_quota;
+			qos->rate_limits[i].queue_io = bdev_qos_w_bps_queue;
+			qos->rate_limits[i].rewind_quota = bdev_qos_w_bps_rewind_quota;
 			break;
 		default:
 			break;
@@ -2232,15 +2275,15 @@ bdev_qos_queue_io(struct spdk_bdev_qos *qos, struct spdk_bdev_io *bdev_io)
 
 			if (qos->rate_limits[i].queue_io(&qos->rate_limits[i],
 							 bdev_io) == true) {
+				for (i -= 1; i >= 0 ; i--) {
+					if (!qos->rate_limits[i].queue_io) {
+						continue;
+					}
+
+					qos->rate_limits[i].rewind_quota(&qos->rate_limits[i], bdev_io);
+				}
 				return true;
 			}
-		}
-		for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-			if (!qos->rate_limits[i].update_quota) {
-				continue;
-			}
-
-			qos->rate_limits[i].update_quota(&qos->rate_limits[i], bdev_io);
 		}
 	}
 
@@ -2262,19 +2305,10 @@ bdev_qos_io_submit(struct spdk_bdev_channel *ch, struct spdk_bdev_qos *qos)
 	struct spdk_bdev_io		*bdev_io = NULL, *tmp = NULL;
 	int				submitted_ios = 0;
 
-	TAILQ_FOREACH_SAFE(bdev_io, &qos->queued, internal.link, tmp) {
+	TAILQ_FOREACH_SAFE(bdev_io, &ch->queued_ios, internal.link, tmp) {
 		if (!bdev_qos_queue_io(qos, bdev_io)) {
-			TAILQ_REMOVE(&qos->queued, bdev_io, internal.link);
-
-			if (bdev_io->internal.io_submit_ch) {
-				/* Send back the IO to the original thread for the actual processing. */
-				bdev_io->internal.ch = bdev_io->internal.io_submit_ch;
-				bdev_io->internal.io_submit_ch = NULL;
-				spdk_thread_send_msg(spdk_bdev_io_get_thread(bdev_io),
-						     _bdev_io_do_submit, bdev_io);
-			} else {
-				bdev_io_do_submit(ch, bdev_io);
-			}
+			TAILQ_REMOVE(&ch->queued_ios, bdev_io, internal.link);
+			bdev_io_do_submit(ch, bdev_io);
 
 			submitted_ios++;
 		}
@@ -2890,10 +2924,10 @@ _bdev_io_submit(void *ctx)
 		_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_ABORTED);
 	} else if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
 		if (spdk_unlikely(bdev_io->type == SPDK_BDEV_IO_TYPE_ABORT) &&
-		    bdev_abort_queued_io(&bdev->internal.qos->queued, bdev_io->u.abort.bio_to_abort)) {
+		    bdev_abort_queued_io(&bdev_ch->queued_ios, bdev_io->u.abort.bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
 		} else {
-			TAILQ_INSERT_TAIL(&bdev->internal.qos->queued, bdev_io, internal.link);
+			TAILQ_INSERT_TAIL(&bdev_ch->queued_ios, bdev_io, internal.link);
 			bdev_qos_io_submit(bdev_ch, bdev->internal.qos);
 		}
 	} else {
@@ -2963,10 +2997,8 @@ void
 bdev_io_submit(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev *bdev = bdev_io->bdev;
-	struct spdk_thread *thread = spdk_bdev_io_get_thread(bdev_io);
 	struct spdk_bdev_channel *ch = bdev_io->internal.ch;
 
-	assert(thread != NULL);
 	assert(bdev_io->internal.status == SPDK_BDEV_IO_STATUS_PENDING);
 
 	if (!TAILQ_EMPTY(&ch->locked_ranges)) {
@@ -2993,17 +3025,7 @@ bdev_io_submit(struct spdk_bdev_io *bdev_io)
 		return;
 	}
 
-	if (ch->flags & BDEV_CH_QOS_ENABLED) {
-		if ((thread == bdev->internal.qos->thread) || !bdev->internal.qos->thread) {
-			_bdev_io_submit(bdev_io);
-		} else {
-			bdev_io->internal.io_submit_ch = ch;
-			bdev_io->internal.ch = bdev->internal.qos->ch;
-			spdk_thread_send_msg(bdev->internal.qos->thread, _bdev_io_submit, bdev_io);
-		}
-	} else {
-		_bdev_io_submit(bdev_io);
-	}
+	_bdev_io_submit(bdev_io);
 }
 
 static inline void
@@ -3194,18 +3216,30 @@ bdev_qos_update_max_quota_per_timeslice(struct spdk_bdev_qos *qos)
 		qos->rate_limits[i].max_per_timeslice = spdk_max(max_per_timeslice,
 							qos->rate_limits[i].min_per_timeslice);
 
-		qos->rate_limits[i].remaining_this_timeslice = qos->rate_limits[i].max_per_timeslice;
+		__atomic_store_n(&qos->rate_limits[i].remaining_this_timeslice,
+				 qos->rate_limits[i].max_per_timeslice, __ATOMIC_RELEASE);
 	}
 
 	bdev_qos_set_ops(qos);
 }
 
+static void
+bdev_qos_io_submit_msg(void *arg)
+{
+	struct spdk_bdev_channel *ch = arg;
+
+	bdev_qos_io_submit(ch, ch->bdev->internal.qos);
+}
+
 static int
 bdev_channel_poll_qos(void *arg)
 {
-	struct spdk_bdev_qos *qos = arg;
+	struct spdk_bdev *bdev = arg;
+	struct spdk_bdev_qos *qos = bdev->internal.qos;
 	uint64_t now = spdk_get_ticks();
 	int i;
+	int64_t remaining_last_timeslice;
+	struct spdk_bdev_channel *first_channel;
 
 	if (now < (qos->last_timeslice + qos->timeslice_size)) {
 		/* We received our callback earlier than expected - return
@@ -3223,20 +3257,42 @@ bdev_channel_poll_qos(void *arg)
 		 * here, we'll account for the overrun so that the next timeslice will
 		 * be appropriately reduced.
 		 */
-		if (qos->rate_limits[i].remaining_this_timeslice > 0) {
-			qos->rate_limits[i].remaining_this_timeslice = 0;
+		remaining_last_timeslice = __atomic_exchange_n(&qos->rate_limits[i].remaining_this_timeslice,
+					   0, __ATOMIC_RELAXED);
+		if (remaining_last_timeslice < 0) {
+			/* There could be a race condition here as both bdev_qos_rw_queue_io() and bdev_channel_poll_qos()
+			 * potentially use 2 atomic ops each, so they can intertwine.
+			 * This race can potentialy cause the limits to be a little fuzzy but won't cause any real damage.
+			 */
+			__atomic_store_n(&qos->rate_limits[i].remaining_this_timeslice,
+					 remaining_last_timeslice, __ATOMIC_RELAXED);
 		}
 	}
 
 	while (now >= (qos->last_timeslice + qos->timeslice_size)) {
 		qos->last_timeslice += qos->timeslice_size;
 		for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-			qos->rate_limits[i].remaining_this_timeslice +=
-				qos->rate_limits[i].max_per_timeslice;
+			__atomic_add_fetch(&qos->rate_limits[i].remaining_this_timeslice,
+					   qos->rate_limits[i].max_per_timeslice, __ATOMIC_RELAXED);
 		}
 	}
 
-	return bdev_qos_io_submit(qos->ch, qos);
+	assert(qos->next_channel != NULL);
+	assert(!CIRCLEQ_EMPTY(&bdev->internal.channels));
+
+	/* Trigger sending for all channels */
+	spdk_spin_lock(&bdev->internal.channels_lock);
+	first_channel = qos->next_channel;
+	do {
+		spdk_thread_send_msg(spdk_io_channel_get_thread(qos->next_channel->channel), bdev_qos_io_submit_msg,
+				     qos->next_channel);
+		qos->next_channel = CIRCLEQ_NEXT(qos->next_channel, link); /* round-robin */
+	} while (qos->next_channel != first_channel);
+	/* For feairness - next time start with next channel */
+	qos->next_channel = CIRCLEQ_NEXT(qos->next_channel, link);
+	spdk_spin_unlock(&bdev->internal.channels_lock);
+
+	return SPDK_POLLER_BUSY;
 }
 
 static void
@@ -3298,8 +3354,6 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 
 			qos->thread = spdk_io_channel_get_thread(io_ch);
 
-			TAILQ_INIT(&qos->queued);
-
 			for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 				if (bdev_qos_is_iops_rate_limit(i) == true) {
 					qos->rate_limits[i].min_per_timeslice =
@@ -3317,8 +3371,11 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 			qos->timeslice_size =
 				SPDK_BDEV_QOS_TIMESLICE_IN_USEC * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
 			qos->last_timeslice = spdk_get_ticks();
+			spdk_spin_lock(&bdev->internal.channels_lock);
+			qos->next_channel = CIRCLEQ_FIRST(&bdev->internal.channels);
+			spdk_spin_unlock(&bdev->internal.channels_lock);
 			qos->poller = SPDK_POLLER_REGISTER(bdev_channel_poll_qos,
-							   qos,
+							   bdev,
 							   SPDK_BDEV_QOS_TIMESLICE_IN_USEC);
 		}
 
@@ -3520,6 +3577,7 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	ch->io_outstanding = 0;
 	TAILQ_INIT(&ch->queued_resets);
 	TAILQ_INIT(&ch->locked_ranges);
+	TAILQ_INIT(&ch->queued_ios);
 	ch->flags = 0;
 	ch->shared_resource = shared_resource;
 
@@ -3554,6 +3612,10 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 		}
 	}
 #endif
+
+	spdk_spin_lock(&bdev->internal.channels_lock);
+	CIRCLEQ_INSERT_TAIL(&bdev->internal.channels, ch, link);
+	spdk_spin_unlock(&bdev->internal.channels_lock);
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	bdev_enable_qos(bdev, ch);
@@ -3729,7 +3791,6 @@ bdev_qos_destroy(struct spdk_bdev *bdev)
 	new_qos->ch = NULL;
 	new_qos->thread = NULL;
 	new_qos->poller = NULL;
-	TAILQ_INIT(&new_qos->queued);
 	/*
 	 * The limit member of spdk_bdev_qos_limit structure is not zeroed.
 	 * It will be used later for the new QoS structure.
@@ -3936,12 +3997,27 @@ static void
 bdev_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_bdev_channel *ch = ctx_buf;
+	struct spdk_bdev_channel *next_ch;
 
 	SPDK_DEBUGLOG(bdev, "Destroying channel %p for bdev %s on thread %p\n", ch, ch->bdev->name,
 		      spdk_get_thread());
 
 	spdk_trace_record(TRACE_BDEV_IOCH_DESTROY, 0, 0, 0, ch->bdev->name,
 			  spdk_thread_get_id(spdk_io_channel_get_thread(ch->channel)));
+
+	spdk_spin_lock(&ch->bdev->internal.channels_lock);
+	if (ch->bdev->internal.qos && ch->bdev->internal.qos->next_channel == ch) {
+		/* First we store the next_ch, so we don't rely on the specific CIRCLEQ_REMOVE implementation and
+		 * the following piece of code will work even if CIRCLEQ_REMOVE nullifies or poisons the pointers.
+		 */
+		next_ch = CIRCLEQ_EMPTY(&ch->bdev->internal.channels) ? NULL :
+			  CIRCLEQ_NEXT(ch->bdev->internal.qos->next_channel, link);
+		CIRCLEQ_REMOVE(&ch->bdev->internal.channels, ch, link);
+		ch->bdev->internal.qos->next_channel = next_ch;
+	} else {
+		CIRCLEQ_REMOVE(&ch->bdev->internal.channels, ch, link);
+	}
+	spdk_spin_unlock(&ch->bdev->internal.channels_lock);
 
 	/* This channel is going away, so add its statistics into the bdev so that they don't get lost. */
 	spdk_spin_lock(&ch->bdev->internal.spinlock);
@@ -5757,7 +5833,7 @@ bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bd
 		 * just take it anyway. */
 		spdk_spin_lock(&channel->bdev->internal.spinlock);
 		if (channel->bdev->internal.qos->ch == channel) {
-			TAILQ_SWAP(&channel->bdev->internal.qos->queued, &tmp_queued, spdk_bdev_io, internal.link);
+			TAILQ_SWAP(&channel->queued_ios, &tmp_queued, spdk_bdev_io, internal.link);
 		}
 		spdk_spin_unlock(&channel->bdev->internal.spinlock);
 	}
@@ -6813,6 +6889,9 @@ bdev_register(struct spdk_bdev *bdev)
 	bdev->internal.qd_poller = NULL;
 	bdev->internal.qos = NULL;
 
+	spdk_spin_init(&bdev->internal.channels_lock);
+	CIRCLEQ_INIT(&bdev->internal.channels);
+
 	TAILQ_INIT(&bdev->internal.open_descs);
 	TAILQ_INIT(&bdev->internal.locked_ranges);
 	TAILQ_INIT(&bdev->internal.pending_locked_ranges);
@@ -7029,6 +7108,7 @@ bdev_unregister(struct spdk_bdev *bdev, void *_ctx, int status)
 	spdk_spin_unlock(&g_bdev_mgr.spinlock);
 
 	if (rc == 0) {
+		spdk_spin_destroy(&bdev->internal.channels_lock);
 		spdk_io_device_unregister(__bdev_to_io_dev(bdev), bdev_destroy_cb);
 	}
 }
@@ -7676,31 +7756,12 @@ bdev_disable_qos_done(void *cb_arg)
 {
 	struct set_qos_limit_ctx *ctx = cb_arg;
 	struct spdk_bdev *bdev = ctx->bdev;
-	struct spdk_bdev_io *bdev_io;
 	struct spdk_bdev_qos *qos;
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	qos = bdev->internal.qos;
 	bdev->internal.qos = NULL;
 	spdk_spin_unlock(&bdev->internal.spinlock);
-
-	while (!TAILQ_EMPTY(&qos->queued)) {
-		/* Send queued I/O back to their original thread for resubmission. */
-		bdev_io = TAILQ_FIRST(&qos->queued);
-		TAILQ_REMOVE(&qos->queued, bdev_io, internal.link);
-
-		if (bdev_io->internal.io_submit_ch) {
-			/*
-			 * Channel was changed when sending it to the QoS thread - change it back
-			 *  before sending it back to the original thread.
-			 */
-			bdev_io->internal.ch = bdev_io->internal.io_submit_ch;
-			bdev_io->internal.io_submit_ch = NULL;
-		}
-
-		spdk_thread_send_msg(spdk_bdev_io_get_thread(bdev_io),
-				     _bdev_io_submit, bdev_io);
-	}
 
 	if (qos->thread != NULL) {
 		spdk_put_io_channel(spdk_io_channel_from_ctx(qos->ch));
@@ -7734,8 +7795,20 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 		     struct spdk_io_channel *ch, void *_ctx)
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
+	struct spdk_bdev_io *bdev_io;
 
 	bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
+
+	while (!TAILQ_EMPTY(&bdev_ch->queued_ios)) {
+		/* Re-send queued I/O for resubmission. */
+		bdev_io = TAILQ_FIRST(&bdev_ch->queued_ios);
+		TAILQ_REMOVE(&bdev_ch->queued_ios, bdev_io, internal.link);
+
+		assert(spdk_bdev_io_get_thread(bdev_io) == spdk_get_thread());
+
+		spdk_thread_send_msg(spdk_bdev_io_get_thread(bdev_io),
+				     _bdev_io_submit, bdev_io);
+	}
 
 	spdk_bdev_for_each_channel_continue(i, 0);
 }

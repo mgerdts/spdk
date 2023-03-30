@@ -115,6 +115,7 @@ struct nvme_ctrlr {
 	uint32_t				destruct : 1;
 	uint32_t				ana_log_page_updating : 1;
 	uint32_t				io_path_cache_clearing : 1;
+	uint32_t				dont_retry : 1;
 
 	struct nvme_ctrlr_opts			opts;
 
@@ -242,6 +243,12 @@ typedef void (*nvme_bdev_ctrlr_for_each_fn)(struct nvme_bdev_ctrlr *nbdev_ctrlr,
 
 void nvme_bdev_ctrlr_for_each(nvme_bdev_ctrlr_for_each_fn fn, void *ctx);
 
+struct nvme_ctrlr *nvme_bdev_ctrlr_get_ctrlr(struct nvme_bdev_ctrlr *nbdev_ctrlr,
+		const struct spdk_nvme_transport_id *trid);
+
+struct nvme_ctrlr *nvme_bdev_ctrlr_get_ctrlr_by_subnqn(struct nvme_bdev_ctrlr *nbdev_ctrlr,
+		const char *subnqn);
+
 void nvme_bdev_dump_trid_json(const struct spdk_nvme_transport_id *trid,
 			      struct spdk_json_write_ctx *w);
 
@@ -285,6 +292,7 @@ struct spdk_bdev_nvme_opts {
 	bool nvme_error_stat;
 	uint32_t rdma_srq_size;
 	bool io_path_stat;
+	uint32_t poll_group_requests;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);
@@ -319,6 +327,10 @@ int bdev_nvme_start_mdns_discovery(const char *base_name,
 int bdev_nvme_stop_mdns_discovery(const char *name);
 void bdev_nvme_get_mdns_discovery_info(struct spdk_jsonrpc_request *request);
 void bdev_nvme_mdns_discovery_config_json(struct spdk_json_write_ctx *w);
+
+int bdev_nvme_add_secondary_trid(struct nvme_ctrlr *nvme_ctrlr,
+				 struct spdk_nvme_ctrlr *new_ctrlr,
+				 struct spdk_nvme_transport_id *trid);
 
 struct spdk_nvme_ctrlr *bdev_nvme_get_ctrlr(struct spdk_bdev *bdev);
 

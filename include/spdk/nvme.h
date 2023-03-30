@@ -1906,6 +1906,15 @@ int32_t spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 spdk_nvme_qp_failure_reason spdk_nvme_qpair_get_failure_reason(struct spdk_nvme_qpair *qpair);
 
 /**
+ * Control if DNR is set or not when aborting I/O commands.
+ * The default value of DNR is 0.
+ *
+ * \param qpair The qpair to set.
+ * \param dnr The new value of DNR.
+ */
+void spdk_nvme_qpair_set_dnr(struct spdk_nvme_qpair *qpair, uint8_t dnr);
+
+/**
  * Send the given admin command to the NVMe controller.
  *
  * This is a low level interface for submitting admin commands directly. Prefer
@@ -4206,13 +4215,18 @@ struct spdk_nvme_transport_opts {
 	uint32_t rdma_srq_size;
 
 	/**
+	 * The number of requests to allocate for each poll group.
+	 */
+	uint32_t poll_group_requests;
+
+	/**
 	 * The size of spdk_nvme_transport_opts according to the caller of this library is used for ABI
 	 * compatibility.  The library uses this field to know how many fields in this
 	 * structure are valid. And the library will populate any remaining fields with default values.
 	 */
 	size_t opts_size;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 12, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 16, "Incorrect size");
 
 /**
  * Get the current NVMe transport options.

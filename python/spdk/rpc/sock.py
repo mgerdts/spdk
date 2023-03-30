@@ -30,7 +30,10 @@ def sock_impl_set_options(client,
                           enable_ktls=None,
                           psk_key=None,
                           psk_identity=None,
-                          enable_zerocopy_recv=None):
+                          enable_zerocopy_recv=None,
+                          enable_tcp_nodelay=None,
+                          buffers_pool_size=None,
+                          packets_pool_size=None):
     """Set parameters for the socket layer implementation.
 
     Args:
@@ -48,6 +51,9 @@ def sock_impl_set_options(client,
         psk_key: set psk_key (optional)
         psk_identity: set psk_identity (optional)
         enable_zerocopy_recv: enable or disable zerocopy on receive (optional)
+        enable_tcp_nodelay: enable or disable TCP_NODELAY socket option (optional)
+        buffers_pool_size: per poll group socket buffers pool size (optional)
+        packets_pool_size: per poll group packets pool size (optional)
     """
     params = {}
 
@@ -78,6 +84,12 @@ def sock_impl_set_options(client,
         params['psk_identity'] = psk_identity
     if enable_zerocopy_recv is not None:
         params['enable_zerocopy_recv'] = enable_zerocopy_recv
+    if enable_tcp_nodelay is not None:
+        params['enable_tcp_nodelay'] = enable_tcp_nodelay
+    if buffers_pool_size is not None:
+        params['buffers_pool_size'] = buffers_pool_size
+    if packets_pool_size is not None:
+        params['packets_pool_size'] = packets_pool_size
 
     return client.call('sock_impl_set_options', params)
 

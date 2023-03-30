@@ -118,6 +118,10 @@ struct spdk_xlio_sock_group_impl {
 	struct spdk_sock_group_impl	base;
 	int				fd;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_recv;
+	struct xlio_sock_packet	*packets;
+	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
+	struct xlio_sock_buf	*buffers;
+	struct spdk_sock_buf	*free_buffers;
 };
 
 static struct spdk_sock_impl_opts g_spdk_xlio_sock_impl_opts = {
@@ -130,7 +134,10 @@ static struct spdk_sock_impl_opts g_spdk_xlio_sock_impl_opts = {
 	.enable_zerocopy_send_server = true,
 	.enable_zerocopy_send_client = true,
 	.enable_zerocopy_recv = true,
-	.zerocopy_threshold = 4096
+	.zerocopy_threshold = 4096,
+	.enable_tcp_nodelay = false,
+	.buffers_pool_size = 1024,
+	.packets_pool_size = 1024
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
@@ -700,11 +707,14 @@ retry:
 			/* error */
 			continue;
 		}
-		rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
-		if (rc != 0) {
-			g_xlio_ops.close(fd);
-			/* error */
-			continue;
+
+		if (g_spdk_xlio_sock_impl_opts.enable_tcp_nodelay) {
+			rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+			if (rc != 0) {
+				g_xlio_ops.close(fd);
+				/* error */
+				continue;
+			}
 		}
 
 #if defined(SO_PRIORITY)
@@ -1049,6 +1059,25 @@ dump_packet(struct xlio_sock_packet *packet)
 }
 #endif
 
+static struct xlio_sock_packet *
+xlio_sock_get_packet(struct spdk_xlio_sock *sock) {
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+	struct xlio_sock_packet *packet = NULL;
+
+	if (spdk_likely(group && xlio_group->packets)) {
+		packet = STAILQ_FIRST(&xlio_group->free_packets);
+		STAILQ_REMOVE_HEAD(&xlio_group->free_packets, link);
+	} else {
+		packet = STAILQ_FIRST(&sock->free_packets);
+		STAILQ_REMOVE_HEAD(&sock->free_packets, link);
+	}
+
+	/* @todo: handle lack of free packets */
+	assert(packet);
+	return packet;
+}
+
 static ssize_t
 xlio_sock_recvfrom_zcopy(struct spdk_xlio_sock *sock)
 {
@@ -1080,7 +1109,7 @@ xlio_sock_recvfrom_zcopy(struct spdk_xlio_sock *sock)
 	/* Wrap all xlio packets and link to received packets list */
 	xlio_packet = &xlio_packets->pkts[0];
 	for (i = 0; i < xlio_packets->n_packet_num; ++i) {
-		struct xlio_sock_packet *packet = STAILQ_FIRST(&sock->free_packets);
+		struct xlio_sock_packet *packet;
 		size_t j, len = 0;
 
 		/* @todo: Filter out zero length packets.
@@ -1103,9 +1132,7 @@ xlio_sock_recvfrom_zcopy(struct spdk_xlio_sock *sock)
 			continue;
 		}
 
-		/* @todo: handle lack of free packets */
-		assert(packet);
-		STAILQ_REMOVE_HEAD(&sock->free_packets, link);
+		packet = xlio_sock_get_packet(sock);
 		/*
 		 * @todo: XLIO packet pointer is only valid till next
 		 * recvfrom_zcopy. We should be done with iovs by that
@@ -1139,6 +1166,8 @@ static void
 xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet) {
 	int ret;
 	struct xlio_recvfrom_zcopy_packet_t xlio_packet;
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
 
 	SPDK_DEBUGLOG(xlio, "Sock %d: free xlio packet %p\n",
 		      sock->fd, packet->xlio_packet->packet_id);
@@ -1152,7 +1181,11 @@ xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *pack
 			    ret, errno);
 	}
 
-	STAILQ_INSERT_HEAD(&sock->free_packets, packet, link);
+	if (spdk_likely(group && xlio_group->packets)) {
+		STAILQ_INSERT_HEAD(&xlio_group->free_packets, packet, link);
+	} else {
+		STAILQ_INSERT_HEAD(&sock->free_packets, packet, link);
+	}
 }
 
 static void
@@ -1645,6 +1678,9 @@ xlio_sock_group_impl_create(void)
 {
 	struct spdk_xlio_sock_group_impl *group_impl;
 	int fd;
+	uint32_t num_packets = g_spdk_xlio_sock_impl_opts.packets_pool_size;
+	uint32_t num_buffers = g_spdk_xlio_sock_impl_opts.buffers_pool_size;
+	uint32_t i;
 
 #if defined(SPDK_EPOLL)
 	fd = g_xlio_ops.epoll_create1(0);
@@ -1665,7 +1701,40 @@ xlio_sock_group_impl_create(void)
 	group_impl->fd = fd;
 	TAILQ_INIT(&group_impl->pending_recv);
 
+	if (num_packets) {
+		group_impl->packets = calloc(num_packets, sizeof(struct xlio_sock_packet));
+		if (!group_impl->packets) {
+			SPDK_ERRLOG("Failed to allocated packets pool for group %p\n", group_impl);
+			goto fail;
+		}
+
+		STAILQ_INIT(&group_impl->free_packets);
+		for (i = 0; i < num_packets; ++i) {
+			STAILQ_INSERT_TAIL(&group_impl->free_packets, &group_impl->packets[i], link);
+		}
+	}
+
+	if (num_buffers) {
+		group_impl->buffers = calloc(num_buffers, sizeof(struct xlio_sock_buf));
+		if (!group_impl->buffers) {
+			SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group_impl);
+			goto fail;
+		}
+
+		group_impl->free_buffers = &group_impl->buffers[0].sock_buf;
+		for (i = 1; i < num_buffers; ++i) {
+			group_impl->buffers[i - 1].sock_buf.next = &group_impl->buffers[i].sock_buf;
+		}
+	}
+
 	return &group_impl->base;
+
+ fail:
+	free(group_impl->buffers);
+	free(group_impl->packets);
+	free(group_impl);
+	g_xlio_ops.close(fd);
+	return NULL;
 }
 
 static int
@@ -1841,6 +1910,8 @@ xlio_sock_group_impl_close(struct spdk_sock_group_impl *_group)
 	int rc;
 
 	rc = g_xlio_ops.close(group->fd);
+	free(group->buffers);
+	free(group->packets);
 	free(group);
 	return rc;
 }
@@ -1872,6 +1943,8 @@ xlio_sock_impl_get_opts(struct spdk_sock_impl_opts *opts, size_t *len)
 	GET_FIELD(enable_zerocopy_send_client);
 	GET_FIELD(enable_zerocopy_recv);
 	GET_FIELD(zerocopy_threshold);
+	GET_FIELD(enable_tcp_nodelay);
+	GET_FIELD(buffers_pool_size);
 
 #undef GET_FIELD
 #undef FIELD_OK
@@ -1906,6 +1979,8 @@ xlio_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	SET_FIELD(enable_zerocopy_send_client);
 	SET_FIELD(enable_zerocopy_recv);
 	SET_FIELD(zerocopy_threshold);
+	SET_FIELD(enable_tcp_nodelay);
+	SET_FIELD(buffers_pool_size);
 
 #undef SET_FIELD
 #undef FIELD_OK
@@ -1928,18 +2003,40 @@ xlio_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
 static struct xlio_sock_buf *
 xlio_sock_get_buf(struct spdk_xlio_sock *sock)
 {
-	struct spdk_sock_buf *sock_buf = sock->free_buffers;
-	/* @todo: we don't handle lack of buffers yet */
-	assert(sock_buf);
-	sock->free_buffers = sock_buf->next;
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+	struct spdk_sock_buf *sock_buf = NULL;
+
+	if (spdk_likely(group && xlio_group->buffers)) {
+		sock_buf = xlio_group->free_buffers;
+		if (spdk_unlikely(!sock_buf)) {
+			return NULL;
+		}
+		xlio_group->free_buffers = sock_buf->next;
+	} else {
+		sock_buf = sock->free_buffers;
+		if (spdk_unlikely(!sock_buf)) {
+			return NULL;
+		}
+		sock->free_buffers = sock_buf->next;
+	}
+
 	return SPDK_CONTAINEROF(sock_buf, struct xlio_sock_buf, sock_buf);
 }
 
 static void
 xlio_sock_free_buf(struct spdk_xlio_sock *sock, struct xlio_sock_buf *buf)
 {
-	buf->sock_buf.next = sock->free_buffers;
-	sock->free_buffers = &buf->sock_buf;
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+
+	if (spdk_likely(group && xlio_group->buffers)) {
+		buf->sock_buf.next = xlio_group->free_buffers;
+		xlio_group->free_buffers = &buf->sock_buf;
+	} else {
+		buf->sock_buf.next = sock->free_buffers;
+		sock->free_buffers = &buf->sock_buf;
+	}
 }
 
 static ssize_t
@@ -1978,8 +2075,21 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 
 		assert(chunk_len <= len);
 		buf = xlio_sock_get_buf(sock);
-		/* @todo: we don't handle lack of buffers yet */
-		assert(buf);
+		if (spdk_unlikely(!buf)) {
+			SPDK_DEBUGLOG(xlio, "Sock %d: no more buffers, total_len %d\n", sock->fd, ret);
+			if (ret == 0) {
+				if (!sock->pending_recv) {
+					struct spdk_xlio_sock_group_impl *group =
+						__xlio_group_impl(sock->base.group_impl);
+					sock->pending_recv = true;
+					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
+				}
+				ret = -1;
+				errno = EAGAIN;
+			}
+			break;
+		}
+
 		buf->sock_buf.iov.iov_base = data;
 		buf->sock_buf.iov.iov_len = chunk_len;
 		buf->sock_buf.next = NULL;

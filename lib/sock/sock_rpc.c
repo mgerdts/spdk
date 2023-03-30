@@ -61,7 +61,10 @@ rpc_sock_impl_get_options(struct spdk_jsonrpc_request *request,
 	if (sock_opts.psk_identity) {
 		spdk_json_write_named_string(w, "psk_identity", sock_opts.psk_identity);
 	}
-	spdk_json_write_named_bool(w, "enable_zerocopy_recv", sock_opts.enable_zerocopy_send);
+	spdk_json_write_named_bool(w, "enable_zerocopy_recv", sock_opts.enable_zerocopy_recv);
+	spdk_json_write_named_bool(w, "enable_tcp_nodelay", sock_opts.enable_tcp_nodelay);
+	spdk_json_write_named_uint32(w, "buffers_pool_size", sock_opts.buffers_pool_size);
+	spdk_json_write_named_uint32(w, "packets_pool_size", sock_opts.packets_pool_size);
 	spdk_json_write_object_end(w);
 	spdk_jsonrpc_end_result(request, w);
 	free(impl_name);
@@ -130,6 +133,18 @@ static const struct spdk_json_object_decoder rpc_sock_impl_set_opts_decoders[] =
 	{
 		"enable_zerocopy_recv", offsetof(struct spdk_rpc_sock_impl_set_opts, sock_opts.enable_zerocopy_recv),
 		spdk_json_decode_bool, true
+	},
+	{
+		"enable_tcp_nodelay", offsetof(struct spdk_rpc_sock_impl_set_opts, sock_opts.enable_tcp_nodelay),
+		spdk_json_decode_bool, true
+	},
+	{
+		"buffers_pool_size", offsetof(struct spdk_rpc_sock_impl_set_opts, sock_opts.buffers_pool_size),
+		spdk_json_decode_uint32, true
+	},
+	{
+		"packets_pool_size", offsetof(struct spdk_rpc_sock_impl_set_opts, sock_opts.packets_pool_size),
+		spdk_json_decode_uint32, true
 	}
 };
 

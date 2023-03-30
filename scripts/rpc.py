@@ -560,7 +560,8 @@ if __name__ == "__main__":
                                        transport_tos=args.transport_tos,
                                        nvme_error_stat=args.nvme_error_stat,
                                        rdma_srq_size=args.rdma_srq_size,
-                                       io_path_stat=args.io_path_stat)
+                                       io_path_stat=args.io_path_stat,
+                                       poll_group_requests=args.poll_group_requests)
 
     p = subparsers.add_parser('bdev_nvme_set_options',
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -638,6 +639,8 @@ if __name__ == "__main__":
     p.add_argument('--io-path-stat',
                    help="""Enable collecting I/O path stat of each io path.""",
                    action='store_true')
+    p.add_argument('--poll-group-requests',
+                   help='The number of requests allocated for each NVMe poll group. Default: 0', type=int)
 
     p.set_defaults(func=bdev_nvme_set_options)
 
@@ -3211,7 +3214,10 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                        enable_ktls=args.enable_ktls,
                                        psk_key=args.psk_key,
                                        psk_identity=args.psk_identity,
-                                       enable_zerocopy_recv=args.enable_zerocopy_recv)
+                                       enable_zerocopy_recv=args.enable_zerocopy_recv,
+                                       enable_tcp_nodelay=args.enable_tcp_nodelay,
+                                       buffers_pool_size=args.buffers_pool_size,
+                                       packets_pool_size=args.packets_pool_size)
 
     p = subparsers.add_parser('sock_impl_set_options', help="""Set options of socket layer implementation""")
     p.add_argument('-i', '--impl', help='Socket implementation name, e.g. posix', required=True)
@@ -3246,10 +3252,16 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    action='store_true', dest='enable_zerocopy_recv')
     p.add_argument('--disable-zerocopy-recv', help='Disable zerocopy on receive',
                    action='store_false', dest='enable_zerocopy_recv')
+    p.add_argument('--enable-tcp-nodelay', help='Enable TCP_NODELAY option',
+                   action='store_true', dest='enable_tcp_nodelay')
+    p.add_argument('--disable-tcp-nodelay', help='Disable TCP_NODELAY',
+                   action='store_false', dest='enable_tcp_nodelay')
+    p.add_argument('--buffers-pool-size', help='Set per poll group socket buffers pool size', type=int)
+    p.add_argument('--packets-pool-size', help='Set per poll group packets pool size', type=int)
     p.set_defaults(func=sock_impl_set_options, enable_recv_pipe=None, enable_quickack=None,
                    enable_placement_id=None, enable_zerocopy_send_server=None, enable_zerocopy_send_client=None,
                    zerocopy_threshold=None, tls_version=None, enable_ktls=None, psk_key=None, psk_identity=None,
-                   enable_zerocopy_recv=None)
+                   enable_zerocopy_recv=None, enable_tcp_nodelay=None, buffers_pool_size=None, packets_pool_size=None)
 
     def sock_set_default_impl(args):
         print_json(rpc.sock.sock_set_default_impl(args.client,

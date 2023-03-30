@@ -158,9 +158,24 @@ struct spdk_sock_impl_opts {
 	char *psk_identity;
 
 	/**
-	 * Enable or disable use of zero copy flow on receive. Used by vma socket module.
+	 * Enable or disable use of zero copy flow on receive. Used by xlio socket module.
 	 */
 	bool enable_zerocopy_recv;
+
+	/**
+	 * Enable or disable use of TCP_NODELAY socket option. Used by xlio socket module.
+	 */
+	bool enable_tcp_nodelay;
+
+	/**
+	 * Socket buffers per poll group pool size. Used by xlio socket module.
+	 */
+	uint32_t buffers_pool_size;
+
+	/**
+	 * Packets per poll group pool size. Used by xlio socket module.
+	 */
+	uint32_t packets_pool_size;
 };
 
 /**

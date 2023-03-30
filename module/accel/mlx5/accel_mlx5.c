@@ -31,6 +31,13 @@
 #define ACCEL_MLX5_TASK_CACHE_LINES (SPDK_CEIL_DIV(sizeof(struct accel_mlx5_task), 64))
 #define ACCEL_MLX5_MAX_MKEYS_IN_TASK (32)
 
+/* TODO: after review with Achiad:
+ * 1. try to reduce number of pointer redirections like task->dev->dev_ctx
+ * 2. CQ_UPDATE for last WQE in a batch. Needs more rework:
+ * 	1. Mark all RDMA ops as non-signaled
+ * 	2. Before ringing the DB update last WQE with CQ_UPDATE flag
+ * 	3. Track completions of all tasks submitted in a batch */
+
 struct accel_mlx5_io_channel;
 struct accel_mlx5_task;
 
@@ -460,7 +467,6 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	struct accel_mlx5_io_channel *ch = dev->ch;
 	uint32_t src_lkey = 0, dst_lkey = 0;
 	uint64_t iv;
-	uint32_t last_umr_flags = MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
 	uint16_t i;
 	uint32_t num_ops = mlx5_task->num_ops;
 	uint32_t req_len;
@@ -499,8 +505,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	SPDK_DEBUGLOG(accel_mlx5, "begin, task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
 	/* At this moment we have as many requests as can be submitted to a qp */
-	assert(num_ops > 0);
-	for (i = 0; i < num_ops - 1; i++) {
+	for (i = 0; i < num_ops; i++) {
 		if (mlx5_task->num_submitted_reqs + i + 1 == mlx5_task->num_reqs) {
 			/* Last request may consume less than calculated */
 			req_len = (mlx5_task->num_blocks - mlx5_task->blocks_per_req * (mlx5_task->num_submitted_reqs + i)) * task->block_size;
@@ -518,22 +523,6 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		dev->reqs_submitted++;
 	}
-	if (mlx5_task->num_submitted_reqs + i + 1 == mlx5_task->num_reqs) {
-		/* Last request may consume less than calculated */
-		req_len = (mlx5_task->num_blocks - mlx5_task->blocks_per_req * (mlx5_task->num_submitted_reqs + i)) * task->block_size;
-	} else {
-		req_len = mlx5_task->blocks_per_req * task->block_size;
-	}
-
-	rc = accel_mlx5_configure_crypto_umr(mlx5_task, dev, &ch->klms[i], mlx5_task->mkeys[i]->mkey,
-					     src_lkey, dst_lkey, iv, 0, last_umr_flags, req_len);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
-		return rc;
-	}
-	dev->stats.umrs++;
-	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-	dev->reqs_submitted++;
 
 	for (i = 0; i < num_ops - 1; i++) {
 		if (task->op_code == ACCEL_OPC_ENCRYPT) {
@@ -631,6 +620,8 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 		uint16_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
 		task->num_ops = spdk_min(qp_slot, task->num_reqs - task->num_completed_reqs);
 		if (task->num_ops == 0) {
+			/* Pool is empty, queue this task */
+			TAILQ_INSERT_TAIL(&task->dev->nomem, task, link);
 			return -ENOMEM;
 		}
 		return accel_mlx5_copy_task_process(task);

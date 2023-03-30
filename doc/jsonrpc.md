@@ -3696,6 +3696,7 @@ transport_tos              | Optional | number      | IPv4 Type of Service value
 nvme_error_stat            | Optional | boolean     | Enable collecting NVMe error counts.
 rdma_srq_size              | Optional | number      | Set the size of a shared rdma receive queue. Default: 0 (disabled).
 io_path_stat               | Optional | boolean     | Enable collecting I/O stat of each nvme bdev io path. Default: `false`.
+poll_group_requests        | Optional | number      | The number of requests allocated for each NVMe poll group. Default: 0.
 
 #### Example
 
@@ -11200,6 +11201,10 @@ tls_version                 | Optional | number      | TLS protocol version, e.g
 enable_ktls                 | Optional | boolean     | Enable or disable Kernel TLS (only applies when impl_name == ssl)
 psk_key                     | Optional | string      | Default PSK KEY in hexadecimal digits, e.g. 1234567890ABCDEF (only applies when impl_name == ssl)
 psk_identity                | Optional | string      | Default PSK ID, e.g. psk.spdk.io (only applies when impl_name == ssl)
+enable_zerocopy_recv        | Optional | boolean     | Enable or disable zero copy on receive
+enable_tcp_nodelay          | Optional | boolean     | Enable or disable TCP_NODELAY socket option
+buffers_pool_size           | Optional | number      | Set per poll group socket buffers pool size
+packets_pool_size           | Optional | number      | Set per poll group packets pool size
 
 #### Response
 

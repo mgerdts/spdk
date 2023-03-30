@@ -27,6 +27,7 @@ int g_current_transport_index = 0;
 
 struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
 	.rdma_srq_size = 0,
+	.poll_group_requests = 1024,
 };
 
 const struct spdk_nvme_transport *
@@ -551,8 +552,9 @@ nvme_transport_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk
 void
 nvme_transport_ctrlr_disconnect_qpair_done(struct spdk_nvme_qpair *qpair)
 {
-	if (qpair->active_proc == nvme_ctrlr_get_current_process(qpair->ctrlr)) {
-		nvme_qpair_abort_all_queued_reqs(qpair, 0);
+	if (qpair->active_proc == nvme_ctrlr_get_current_process(qpair->ctrlr) ||
+	    nvme_qpair_is_admin_queue(qpair)) {
+		nvme_qpair_abort_all_queued_reqs(qpair);
 	}
 	nvme_qpair_set_state(qpair, NVME_QPAIR_DISCONNECTED);
 }
@@ -572,17 +574,16 @@ nvme_transport_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 }
 
 void
-nvme_transport_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
+nvme_transport_qpair_abort_reqs(struct spdk_nvme_qpair *qpair)
 {
 	const struct spdk_nvme_transport *transport;
 
-	assert(dnr <= 1);
 	if (spdk_likely(!nvme_qpair_is_admin_queue(qpair))) {
-		qpair->transport->ops.qpair_abort_reqs(qpair, dnr);
+		qpair->transport->ops.qpair_abort_reqs(qpair, qpair->dnr);
 	} else {
 		transport = nvme_get_transport(qpair->ctrlr->trid.trstring);
 		assert(transport != NULL);
-		transport->ops.qpair_abort_reqs(qpair, dnr);
+		transport->ops.qpair_abort_reqs(qpair, qpair->dnr);
 	}
 }
 
@@ -668,12 +669,33 @@ struct spdk_nvme_transport_poll_group *
 nvme_transport_poll_group_create(const struct spdk_nvme_transport *transport)
 {
 	struct spdk_nvme_transport_poll_group *group = NULL;
+	size_t req_size_padded;
+	uint32_t num_requests, i;
 
 	group = transport->ops.poll_group_create();
 	if (group) {
 		group->transport = transport;
 		STAILQ_INIT(&group->connected_qpairs);
 		STAILQ_INIT(&group->disconnected_qpairs);
+		STAILQ_INIT(&group->free_req);
+
+		num_requests = g_spdk_nvme_transport_opts.poll_group_requests;
+		if (num_requests != 0) {
+			req_size_padded = SPDK_ALIGN_CEIL(sizeof(struct nvme_request), 64);
+			group->req_buf = spdk_zmalloc(req_size_padded * num_requests, 64, NULL,
+						      SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_SHARE);
+			if (group->req_buf == NULL) {
+				SPDK_ERRLOG("Failed to allocate nvme requests pool\n");
+				transport->ops.poll_group_destroy(group);
+				return NULL;
+			}
+
+			for (i= 0; i < num_requests; i++) {
+				struct nvme_request *req = group->req_buf + i * req_size_padded;
+
+				STAILQ_INSERT_TAIL(&group->free_req, req, stailq);
+			}
+		}
 	}
 
 	return group;
@@ -741,6 +763,7 @@ nvme_transport_poll_group_process_completions(struct spdk_nvme_transport_poll_gr
 int
 nvme_transport_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 {
+	spdk_free(tgroup->req_buf);
 	return tgroup->transport->ops.poll_group_destroy(tgroup);
 }
 
@@ -843,10 +866,11 @@ spdk_nvme_transport_get_opts(struct spdk_nvme_transport_opts *opts, size_t opts_
 	} \
 
 	SET_FIELD(rdma_srq_size);
+	SET_FIELD(poll_group_requests);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 12, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 16, "Incorrect size");
 
 #undef SET_FIELD
 }
@@ -870,6 +894,7 @@ spdk_nvme_transport_set_opts(const struct spdk_nvme_transport_opts *opts, size_t
 	} \
 
 	SET_FIELD(rdma_srq_size);
+	SET_FIELD(poll_group_requests);
 
 	g_spdk_nvme_transport_opts.opts_size = opts->opts_size;
 
