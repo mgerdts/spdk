@@ -34,17 +34,8 @@
 #include "spdk/stdinc.h"
 #include "spdk/env.h"
 
-#if defined(__FreeBSD__)
-#include <sys/event.h>
-#define SPDK_KEVENT
-#else
 #include <sys/epoll.h>
-#define SPDK_EPOLL
-#endif
-
-#if defined(__linux__)
 #include <linux/errqueue.h>
-#endif
 
 #include <dlfcn.h>
 
@@ -98,6 +89,7 @@ struct spdk_xlio_sock {
 	uint32_t		sendmsg_idx;
 	struct ibv_pd *pd;
 	bool			pending_recv;
+	bool			pending_send;
 	bool			zcopy;
 	bool			recv_zcopy;
 	int			so_priority;
@@ -112,12 +104,14 @@ struct spdk_xlio_sock {
 	struct spdk_sock_buf	*free_buffers;
 
 	TAILQ_ENTRY(spdk_xlio_sock)	link;
+	TAILQ_ENTRY(spdk_xlio_sock)	link_send;
 };
 
 struct spdk_xlio_sock_group_impl {
 	struct spdk_sock_group_impl	base;
 	int				fd;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_recv;
+	TAILQ_HEAD(, spdk_xlio_sock)	pending_send;
 	struct xlio_sock_packet	*packets;
 	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
 	struct xlio_sock_buf	*buffers;
@@ -1062,7 +1056,7 @@ dump_packet(struct xlio_sock_packet *packet)
 static struct xlio_sock_packet *
 xlio_sock_get_packet(struct spdk_xlio_sock *sock) {
 	struct spdk_sock_group_impl *group = sock->base.group_impl;
-	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
 	struct xlio_sock_packet *packet = NULL;
 
 	if (spdk_likely(group && xlio_group->packets)) {
@@ -1167,7 +1161,7 @@ xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *pack
 	int ret;
 	struct xlio_recvfrom_zcopy_packet_t xlio_packet;
 	struct spdk_sock_group_impl *group = sock->base.group_impl;
-	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
 
 	SPDK_DEBUGLOG(xlio, "Sock %d: free xlio packet %p\n",
 		      sock->fd, packet->xlio_packet->packet_id);
@@ -1578,16 +1572,26 @@ _sock_flush_ext(struct spdk_sock *sock)
 static void
 xlio_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 {
+	struct spdk_xlio_sock *vsock = __xlio_sock(sock);
+	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(sock->group_impl);
 	int rc;
 
 	spdk_sock_request_queue(sock, req);
 
 	/* If there are a sufficient number queued, just flush them out immediately. */
 	if (sock->queued_iovcnt >= IOV_BATCH_SIZE) {
+		if (vsock->pending_send && sock->group_impl) {
+			TAILQ_REMOVE(&group->pending_send, vsock, link_send);
+			vsock->pending_send = false;
+		}
+
 		rc = _sock_flush_ext(sock);
 		if (rc) {
 			spdk_sock_abort_requests(sock);
 		}
+	} else if (!vsock->pending_send && sock->group_impl) {
+		TAILQ_INSERT_TAIL(&group->pending_send, vsock, link_send);
+		vsock->pending_send = true;
 	}
 }
 
@@ -1682,11 +1686,7 @@ xlio_sock_group_impl_create(void)
 	uint32_t num_buffers = g_spdk_xlio_sock_impl_opts.buffers_pool_size;
 	uint32_t i;
 
-#if defined(SPDK_EPOLL)
 	fd = g_xlio_ops.epoll_create1(0);
-#elif defined(SPDK_KEVENT)
-	fd = kqueue();
-#endif
 	if (fd == -1) {
 		return NULL;
 	}
@@ -1700,6 +1700,7 @@ xlio_sock_group_impl_create(void)
 
 	group_impl->fd = fd;
 	TAILQ_INIT(&group_impl->pending_recv);
+	TAILQ_INIT(&group_impl->pending_send);
 
 	if (num_packets) {
 		group_impl->packets = calloc(num_packets, sizeof(struct xlio_sock_packet));
@@ -1743,8 +1744,6 @@ xlio_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group, struct spdk_s
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 	int rc;
-
-#if defined(SPDK_EPOLL)
 	struct epoll_event event;
 
 	memset(&event, 0, sizeof(event));
@@ -1753,14 +1752,6 @@ xlio_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group, struct spdk_s
 	event.data.ptr = sock;
 
 	rc = g_xlio_ops.epoll_ctl(group->fd, EPOLL_CTL_ADD, sock->fd, &event);
-#elif defined(SPDK_KEVENT)
-	struct kevent event;
-	struct timespec ts = {0};
-
-	EV_SET(&event, sock->fd, EVFILT_READ, EV_ADD, 0, 0, sock);
-
-	rc = kevent(group->fd, &event, 1, NULL, 0, &ts);
-#endif
 
 	return rc;
 }
@@ -1771,25 +1762,10 @@ xlio_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct spd
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 	int rc;
-
-#if defined(SPDK_EPOLL)
 	struct epoll_event event;
 
 	/* Event parameter is ignored but some old kernel version still require it. */
 	rc = g_xlio_ops.epoll_ctl(group->fd, EPOLL_CTL_DEL, sock->fd, &event);
-#elif defined(SPDK_KEVENT)
-	struct kevent event;
-	struct timespec ts = {0};
-
-	EV_SET(&event, sock->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-
-	rc = kevent(group->fd, &event, 1, NULL, 0, &ts);
-	if (rc == 0 && event.flags & EV_ERROR) {
-		rc = -1;
-		errno = event.data;
-	}
-#endif
-
 	spdk_sock_abort_requests(_sock);
 
 	return rc;
@@ -1800,32 +1776,21 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 			 struct spdk_sock **socks)
 {
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
-	struct spdk_sock *sock, *tmp;
+	struct spdk_sock *sock;
 	int num_events, i, rc;
 	struct spdk_xlio_sock *vsock, *ptmp;
-#if defined(SPDK_EPOLL)
 	struct epoll_event events[MAX_EVENTS_PER_POLL];
-#elif defined(SPDK_KEVENT)
-	struct kevent events[MAX_EVENTS_PER_POLL];
-	struct timespec ts = {0};
-#endif
 
-	/* This must be a TAILQ_FOREACH_SAFE because while flushing,
-	 * a completion callback could remove the sock from the
-	 * group. */
-	TAILQ_FOREACH_SAFE(sock, &_group->socks, link, tmp) {
-		rc = _sock_flush_ext(sock);
+	while ((vsock = TAILQ_FIRST(&group->pending_send)) != NULL) {
+		TAILQ_REMOVE(&group->pending_send, vsock, link_send);
+		vsock->pending_send = false;
+		rc = _sock_flush_ext(&vsock->base);
 		if (rc) {
-			spdk_sock_abort_requests(sock);
+			spdk_sock_abort_requests(&vsock->base);
 		}
 	}
 
-#if defined(SPDK_EPOLL)
 	num_events = g_xlio_ops.epoll_wait(group->fd, events, max_events, 0);
-#elif defined(SPDK_KEVENT)
-	num_events = kevent(group->fd, NULL, 0, events, max_events, &ts);
-#endif
-
 	if (num_events == -1) {
 		return -1;
 	} else if (num_events == 0 && !TAILQ_EMPTY(&_group->socks)) {
@@ -1842,7 +1807,6 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	}
 
 	for (i = 0; i < num_events; i++) {
-#if defined(SPDK_EPOLL)
 		sock = events[i].data.ptr;
 		vsock = __xlio_sock(sock);
 
@@ -1860,11 +1824,6 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		if ((events[i].events & EPOLLIN) == 0) {
 			continue;
 		}
-
-#elif defined(SPDK_KEVENT)
-		sock = events[i].udata;
-		vsock = __xlio_sock(sock);
-#endif
 
 		/* If the socket does not already have recv pending, add it now */
 		if (!vsock->pending_recv) {
@@ -2004,7 +1963,7 @@ static struct xlio_sock_buf *
 xlio_sock_get_buf(struct spdk_xlio_sock *sock)
 {
 	struct spdk_sock_group_impl *group = sock->base.group_impl;
-	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
 	struct spdk_sock_buf *sock_buf = NULL;
 
 	if (spdk_likely(group && xlio_group->buffers)) {
@@ -2028,7 +1987,7 @@ static void
 xlio_sock_free_buf(struct spdk_xlio_sock *sock, struct xlio_sock_buf *buf)
 {
 	struct spdk_sock_group_impl *group = sock->base.group_impl;
-	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(sock->base.group_impl);
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
 
 	if (spdk_likely(group && xlio_group->buffers)) {
 		buf->sock_buf.next = xlio_group->free_buffers;

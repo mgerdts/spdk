@@ -273,6 +273,9 @@ struct spdk_bdev_fn_table {
 	 * Dump I/O statistics specific for this bdev context.
 	 */
 	void (*dump_device_stat_json)(void *ctx, struct spdk_json_write_ctx *w);
+
+	/** Check if bdev can handle spdk_accel_sequence to handle I/O of specific type. */
+	bool (*accel_sequence_supported)(void *ctx, enum spdk_bdev_io_type type);
 };
 
 /** bdev I/O completion status */
@@ -483,13 +486,6 @@ struct spdk_bdev {
 	 */
 	bool media_events;
 
-	/**
-	 * If set to true then block device module can handle IO requests with attached accel sequence.
-	 * Otherwise block device layer will apply accel sequence before submitting IO request to the
-	 * bdev module
-	 */
-	bool accel_seq_supported;
-
 	/* Upon receiving a reset request, this is the amount of time in seconds
 	 * to wait for all I/O to complete before moving forward with the reset.
 	 * If all I/O completes prior to this time out, the reset will be skipped.
@@ -695,8 +691,12 @@ struct spdk_bdev_io {
 			/** Starting offset (in blocks) of the bdev for this I/O. */
 			uint64_t offset_blocks;
 
-			/** Pointer to user's ext opts to be used by bdev modules */
-			struct spdk_bdev_ext_io_opts *ext_opts;
+			/** Memory domain and its context to be used by bdev modules */
+			struct spdk_memory_domain *memory_domain;
+			void *memory_domain_ctx;
+
+			/* Sequence of accel operations */
+			struct spdk_accel_sequence *accel_sequence;
 
 			/** stored user callback in case we split the I/O and use a temporary callback */
 			spdk_bdev_io_completion_cb stored_user_cb;
@@ -845,6 +845,9 @@ struct spdk_bdev_io {
 		/** Status for the IO */
 		int8_t status;
 
+		/** Indicates whether the IO is split */
+		bool split;
+
 		/** bdev allocated memory associated with this request */
 		void *buf;
 
@@ -864,7 +867,14 @@ struct spdk_bdev_io {
 		/** Callback for when buf is allocated */
 		spdk_bdev_io_get_buf_cb get_buf_cb;
 
-		/** Member used for linking child I/Os together. */
+		/**
+		 * Queue entry used in several cases:
+		 *  1. IOs awaiting retry due to NOMEM status,
+		 *  2. IOs awaiting submission due to QoS,
+		 *  3. IOs with an accel sequence being executed,
+		 *  4. IOs awaiting memory domain pull/push,
+		 *  5. queued reset requests.
+		 */
 		TAILQ_ENTRY(spdk_bdev_io) link;
 
 		/** Entry to the list need_buf of struct spdk_bdev. */
@@ -879,11 +889,12 @@ struct spdk_bdev_io {
 		/** Enables queuing parent I/O when no bdev_ios available for split children. */
 		struct spdk_bdev_io_wait_entry waitq_entry;
 
-		/** Pointer to a structure passed by the user in ext API */
-		struct spdk_bdev_ext_io_opts *ext_opts;
+		/** Memory domain and its context passed by the user in ext API */
+		struct spdk_memory_domain *memory_domain;
+		void *memory_domain_ctx;
 
-		/** Copy of user's opts, used when I/O is split */
-		struct spdk_bdev_ext_io_opts ext_opts_copy;
+		/* Sequence of accel operations passed by the user */
+		struct spdk_accel_sequence *accel_sequence;
 
 		/** Data transfer completion callback */
 		void (*data_transfer_cpl)(void *ctx, int rc);

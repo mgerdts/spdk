@@ -246,10 +246,10 @@ spdk_mlx5_dma_qp_rdma_write(struct spdk_mlx5_dma_qp *dma_qp, struct mlx5_wqe_dat
 	pi = hw_qp->sq.pi & (hw_qp->sq.wqe_cnt - 1);
 	to_end = (hw_qp->sq.wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 
-	if (to_end < bb_count * MLX5_SEND_WQE_BB) {
-		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid, bb_count);
-	} else {
+	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
 		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid, bb_count);
+	} else {
+		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid, bb_count);
 	}
 
 	return 0;
@@ -277,10 +277,10 @@ spdk_mlx5_dma_qp_rdma_read(struct spdk_mlx5_dma_qp *dma_qp, struct mlx5_wqe_data
 	pi = hw_qp->sq.pi & (hw_qp->sq.wqe_cnt - 1);
 	to_end = (hw_qp->sq.wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 
-	if (to_end < bb_count * MLX5_SEND_WQE_BB) {
-		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
-	} else {
+	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
 		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
+	} else {
+		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
 	}
 
 	return 0;

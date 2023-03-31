@@ -271,8 +271,7 @@ if __name__ == "__main__":
                                                key=args.key,
                                                cipher=args.cipher,
                                                key2=args.key2,
-                                               key_name=args.key_name,
-                                               optimal_io_boundary=args.optimal_io_boundary))
+                                               key_name=args.key_name))
     p = subparsers.add_parser('bdev_crypto_create', help='Add a crypto vbdev')
     p.add_argument('base_bdev_name', help="Name of the base bdev")
     p.add_argument('name', help="Name of the crypto vbdev")
@@ -281,7 +280,6 @@ if __name__ == "__main__":
     p.add_argument('-c', '--cipher', help="cipher to use. Obsolete, see accel_crypto_key_create", required=False)
     p.add_argument('-k2', '--key2', help="2nd key for cipher AES_XTS. Obsolete, see accel_crypto_key_create", default=None)
     p.add_argument('-n', '--key-name', help="Key name to use, see accel_crypto_key_create", required=False)
-    p.add_argument('-o', '--optimal-io-boundary', help="Optimal IO boundary", required=False, type=int)
     p.set_defaults(func=bdev_crypto_create)
 
     def bdev_crypto_delete(args):
@@ -2900,6 +2898,14 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p = subparsers.add_parser('accel_crypto_keys_get', help='Get a list of the crypto keys')
     p.add_argument('-k', '--key-name', help='Get information about a specific key', type=str)
     p.set_defaults(func=accel_crypto_keys_get)
+
+    def accel_set_driver(args):
+        rpc.accel.accel_set_driver(args.client, name=args.name)
+
+    p = subparsers.add_parser('accel_set_driver', help='Select accel platform driver to execute ' +
+                              'operation chains')
+    p.add_argument('name', help='name of the platform driver')
+    p.set_defaults(func=accel_set_driver)
 
     # ioat
     def ioat_scan_accel_module(args):

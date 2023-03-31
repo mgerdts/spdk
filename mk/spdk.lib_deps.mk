@@ -37,13 +37,10 @@ DEPDIRS-conf := log util
 DEPDIRS-json := log util
 DEPDIRS-rdma_utils := log util
 DEPDIRS-rdma := log util dma
-ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-rdma += accel mlx5
-endif
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
 
-DEPDIRS-nvme := log sock util trace
+DEPDIRS-nvme := log sock util trace accel
 ifeq ($(OS),Linux)
 DEPDIRS-nvme += vfio_user
 endif
@@ -63,7 +60,7 @@ DEPDIRS-net := log util $(JSON_LIBS)
 DEPDIRS-notify := log util $(JSON_LIBS)
 DEPDIRS-trace := log util $(JSON_LIBS)
 
-DEPDIRS-bdev := log util thread $(JSON_LIBS) notify trace dma accel
+DEPDIRS-bdev := accel log util thread $(JSON_LIBS) notify trace dma
 DEPDIRS-blobfs := log thread blob trace util
 DEPDIRS-event := log util thread $(JSON_LIBS) trace init
 DEPDIRS-init := jsonrpc json log rpc thread util
@@ -78,7 +75,7 @@ ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-nvmf += rdma rdma_utils
 endif
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-mlx5 = log rdma_utils util
+DEPDIRS-mlx5 = log rdma util
 endif
 DEPDIRS-scsi := log util thread $(JSON_LIBS) trace bdev
 

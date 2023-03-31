@@ -16,21 +16,6 @@
 #define SPDK_RDMA_RXE_VENDOR_ID_OLD 0
 #define SPDK_RDMA_RXE_VENDOR_ID_NEW 0XFFFFFF
 
-struct spdk_accel_sequence;
-
-/* Result of memory translation of accel operation */
-struct spdk_rdma_memory_descriptor {
-	void *addr;
-	size_t length;
-	uint32_t lkey;
-	uint32_t rkey;
-};
-
-struct spdk_rdma_accel_sequence_ctx {
-	struct spdk_rdma_qp *qp;
-	struct spdk_rdma_memory_descriptor result;
-};
-
 struct spdk_rdma_wr_stats {
 	/* Total number of submitted requests */
 	uint64_t num_submitted_wrs;
@@ -91,6 +76,13 @@ struct spdk_rdma_memory_domain {
 	struct ibv_pd *pd;
 	struct spdk_memory_domain *domain;
 	struct spdk_memory_domain_rdma_ctx rdma_ctx;
+};
+
+struct spdk_rdma_memory_translation_ctx {
+	void *addr;
+	size_t length;
+	uint32_t lkey;
+	uint32_t rkey;
 };
 
 /**
@@ -236,17 +228,5 @@ struct spdk_rdma_memory_domain * spdk_rdma_get_tcp_memory_domain(struct ibv_pd *
  * \param domain Pointer to memory domain
  */
 void spdk_rdma_put_memory_domain(struct spdk_rdma_memory_domain *domain);
-
-bool spdk_rdma_accel_seq_supported(void);
-
-int spdk_rdma_qp_accel_seq_ctx_create(struct spdk_rdma_qp *spdk_rdma_qp,
-				      struct spdk_rdma_accel_sequence_ctx **ctx);
-
-void spdk_rdma_qp_accel_seq_ctx_release(struct spdk_rdma_accel_sequence_ctx **ctx);
-
-typedef void(*accel_seq_done_fn)(void *cb_arg, int status);
-
-int spdk_rdma_qp_apply_accel_seq(struct spdk_accel_sequence *seq,
-				 struct spdk_rdma_accel_sequence_ctx *ctx, accel_seq_done_fn cpl_cb, void *cb_arg);
 
 #endif /* SPDK_RDMA_H */

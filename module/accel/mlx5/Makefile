@@ -12,8 +12,6 @@ SO_MINOR := 0
 LIBNAME = accel_mlx5
 C_SRCS = accel_mlx5.c accel_mlx5_rpc.c
 
-LOCAL_SYS_LIBS += -libverbs -lmlx5
-
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
 LOCAL_SYS_LIBS += -libverbs -lmlx5

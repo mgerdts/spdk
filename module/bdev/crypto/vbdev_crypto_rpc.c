@@ -17,7 +17,6 @@ struct rpc_construct_crypto {
 	char *base_bdev_name;
 	char *name;
 	char *crypto_pmd;
-	uint32_t optimal_io_boundary;
 	struct spdk_accel_crypto_key_create_param param;
 };
 
@@ -49,7 +48,6 @@ static const struct spdk_json_object_decoder rpc_construct_crypto_decoders[] = {
 	{"cipher", offsetof(struct rpc_construct_crypto, param.cipher), spdk_json_decode_string, true},
 	{"key2", offsetof(struct rpc_construct_crypto, param.hex_key2), spdk_json_decode_string, true},
 	{"key_name", offsetof(struct rpc_construct_crypto, param.key_name), spdk_json_decode_string, true},
-	{"optimal_io_boundary", offsetof(struct rpc_construct_crypto, optimal_io_boundary), spdk_json_decode_uint32, true},
 };
 
 static struct vbdev_crypto_opts *
@@ -75,7 +73,6 @@ create_crypto_opts(struct rpc_construct_crypto *rpc, struct spdk_accel_crypto_ke
 
 	opts->key = key;
 	opts->key_owner = key_owner;
-	opts->optimal_io_boundary = rpc->optimal_io_boundary;
 
 	return opts;
 }

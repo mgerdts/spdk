@@ -13,6 +13,7 @@
 
 #include "spdk/stdinc.h"
 
+#include "spdk/accel.h"
 #include "spdk/scsi_spec.h"
 #include "spdk/nvme_spec.h"
 #include "spdk/json.h"
@@ -55,8 +56,6 @@ struct spdk_bdev_media_event {
  * This is a virtual representation of a block device that is exported by the backend.
  */
 struct spdk_bdev;
-
-struct spdk_accel_sequence;
 
 /**
  * Block device remove callback.
@@ -210,7 +209,6 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 32, "Incorrect size");
 
 /**
  * Structure with optional IO request parameters
- * The content of this structure must be valid until the IO request is completed
  */
 struct spdk_bdev_ext_io_opts {
 	/** Size of this structure in bytes */
@@ -224,8 +222,11 @@ struct spdk_bdev_ext_io_opts {
 	void *memory_domain_ctx;
 	/** Metadata buffer, optional */
 	void *metadata;
-	/** Accel sequence attached to this IO request */
-	struct spdk_accel_sequence *accel_seq;
+	/**
+	 * Sequence of accel operations to be executed before/after (depending on the IO type) the
+	 * request is submitted.
+	 */
+	struct spdk_accel_sequence *accel_sequence;
 } __attribute__((packed));
 SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_ext_io_opts) == 40, "Incorrect size");
 

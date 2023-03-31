@@ -19,10 +19,5 @@
 	spdk_rdma_get_tcp_memory_domain;
 	spdk_rdma_put_memory_domain;
 
-	spdk_rdma_qp_accel_seq_ctx_create;
-	spdk_rdma_qp_accel_seq_ctx_release;
-	spdk_rdma_qp_apply_accel_seq;
-	spdk_rdma_accel_seq_supported;
-
 	local: *;
 };

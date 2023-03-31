@@ -275,9 +275,7 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 		memcpy(keytag->keytag, attr->dek + attr->dek_len - SPDK_MLX5_AES_XTS_KEYTAG_SIZE,
 		       SPDK_MLX5_AES_XTS_KEYTAG_SIZE);
 	}
-
 	keytag->vendor_id = MLX5_VENDOR_ID_MELLANOX;
-
 	spdk_mlx5_crypto_devs_release(devs);
 	*out = keytag;
 
@@ -362,10 +360,6 @@ spdk_mlx5_crypto_set_attr(struct mlx5dv_crypto_attr *attr_out,
 {
 	struct spdk_mlx5_crypto_dek *dek;
 	enum mlx5dv_block_size bs;
-
-	if (spdk_unlikely(keytag->vendor_id != MLX5_VENDOR_ID_MELLANOX)) {
-		return -EINVAL;
-	}
 
 	dek = mlx5_crypto_get_dek_by_pd(keytag, pd);
 	if (spdk_unlikely(!dek)) {

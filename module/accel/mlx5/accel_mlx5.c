@@ -392,8 +392,8 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 
 static inline int
 accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev, struct accel_mlx5_klm *klm,
-				struct spdk_mlx5_indirect_mkey *dv_mkey, uint32_t src_lkey, uint32_t dst_lkey, uint64_t iv, uint64_t wrid, uint32_t fence,
-				uint32_t req_len)
+				struct spdk_mlx5_indirect_mkey *dv_mkey, uint32_t src_lkey, uint32_t dst_lkey, uint64_t iv,
+				uint64_t wrid, uint32_t fence, uint32_t req_len)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct spdk_mlx5_umr_crypto_attr cattr;
@@ -427,7 +427,6 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	cattr.xts_iv = htobe64(iv);
 	cattr.keytag = 0;
 	cattr.tweak_offset = task->crypto_key->param.tweak_offset;
-	umr_attr.crypto_attr = &cattr;
 
 	umr_attr.dv_mkey = dv_mkey;
 	umr_attr.umr_len = req_len;
@@ -453,7 +452,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 			umr_attr.klm = klm->dst_klm;
 		}
 	}
-	rc = spdk_mlx5_umr_configure(dev->dma_qp, &umr_attr, wrid, fence);
+	rc = spdk_mlx5_umr_configure_crypto(dev->dma_qp, &umr_attr, &cattr, wrid, fence);
 
 	return rc;
 }
@@ -642,11 +641,6 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 
 	if (spdk_unlikely(mlx5_task->crypto_op && (src_nbytes % mlx5_task->base.block_size != 0))) {
 		return -EINVAL;
-	}
-
-	if (task->src_domain && task->dst_domain) {
-		SPDK_ERRLOG("Ambiguous domain usage - both src and dst domains are not supported");
-		return -ENOTSUP;
 	}
 
 	mlx5_task->dev = dev;

@@ -201,7 +201,6 @@ struct spdk_mlx5_umr_attr {
 	struct mlx5_wqe_data_seg *klm;
 	uint32_t umr_len;
 	uint16_t klm_count;
-	struct spdk_mlx5_umr_crypto_attr *crypto_attr;
 };
 
 int spdk_mlx5_dma_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
@@ -266,8 +265,11 @@ int spdk_mlx5_dma_qp_rdma_read(struct spdk_mlx5_dma_qp *qp, struct mlx5_wqe_data
 				uint64_t wrid, uint32_t flags);
 
 
+int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+				   struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags);
+
 int spdk_mlx5_umr_configure(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
-			    uint64_t wr_id, uint32_t flags);
+				uint64_t wr_id, uint32_t flags);
 
 struct mlx5_devx_mkey_attr {
 	uint64_t addr;

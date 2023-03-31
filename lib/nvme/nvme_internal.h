@@ -1559,7 +1559,7 @@ nvme_free_request(struct nvme_request *req)
 		struct spdk_nvme_transport_poll_group *poll_group = req->qpair->poll_group;
 
 		if (spdk_likely(poll_group != NULL && poll_group->req_buf != NULL)) {
-			STAILQ_INSERT_HEAD(&req->qpair->poll_group->free_req, req, stailq);
+			STAILQ_INSERT_HEAD(&poll_group->free_req, req, stailq);
 		} else {
 			STAILQ_INSERT_HEAD(&req->qpair->free_req, req, stailq);
 		}
