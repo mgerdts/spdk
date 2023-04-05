@@ -1580,14 +1580,14 @@ xlio_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 
 	/* If there are a sufficient number queued, just flush them out immediately. */
 	if (sock->queued_iovcnt >= IOV_BATCH_SIZE) {
-		if (vsock->pending_send && sock->group_impl) {
-			TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-			vsock->pending_send = false;
-		}
-
 		rc = _sock_flush_ext(sock);
 		if (rc) {
 			spdk_sock_abort_requests(sock);
+		}
+
+		if (TAILQ_EMPTY(&sock->queued_reqs) && vsock->pending_send && sock->group_impl) {
+			TAILQ_REMOVE(&group->pending_send, vsock, link_send);
+			vsock->pending_send = false;
 		}
 	} else if (!vsock->pending_send && sock->group_impl) {
 		TAILQ_INSERT_TAIL(&group->pending_send, vsock, link_send);
@@ -1781,12 +1781,15 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	struct spdk_xlio_sock *vsock, *ptmp;
 	struct epoll_event events[MAX_EVENTS_PER_POLL];
 
-	while ((vsock = TAILQ_FIRST(&group->pending_send)) != NULL) {
-		TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-		vsock->pending_send = false;
+	TAILQ_FOREACH_SAFE(vsock, &group->pending_send, link_send, ptmp) {
 		rc = _sock_flush_ext(&vsock->base);
 		if (rc) {
 			spdk_sock_abort_requests(&vsock->base);
+		}
+
+		if (TAILQ_EMPTY(&vsock->base.queued_reqs)) {
+			TAILQ_REMOVE(&group->pending_send, vsock, link_send);
+			vsock->pending_send = false;
 		}
 	}
 
