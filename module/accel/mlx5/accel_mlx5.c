@@ -990,9 +990,6 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 int
 accel_mlx5_enable(struct accel_mlx5_attr *attr)
 {
-	if (g_accel_mlx5.enabled) {
-		return -EEXIST;
-	}
 	if (attr) {
 		if (!attr->enable_crypto && attr->use_crypto_mb) {
 			SPDK_ERRLOG("Crypto multi block requires to enable crypto\n");
@@ -1003,12 +1000,9 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 			return -EINVAL;
 		}
 		g_accel_mlx5.attr = *attr;
-	} else {
-		accel_mlx5_get_default_attr(&g_accel_mlx5.attr);
 	}
 
 	g_accel_mlx5.enabled = true;
-	spdk_accel_module_list_add(&g_accel_mlx5.module);
 
 	return 0;
 }
@@ -1329,7 +1323,16 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 		.crypto_key_init	= accel_mlx5_crypto_key_init,
 		.crypto_key_deinit	= accel_mlx5_crypto_key_deinit,
 		.get_memory_domains	= accel_mlx5_get_memory_domains,
+	},
+	.enabled = true,
+	.attr = {
+		.qp_size = ACCEL_MLX5_QP_SIZE,
+		.num_requests = ACCEL_MLX5_NUM_MKEYS,
+		.enable_crypto = false,
+		.use_crypto_mb = false,
+		.split_mb_blocks = 0
 	}
 };
 
+SPDK_ACCEL_MODULE_REGISTER(mlx5, &g_accel_mlx5.module)
 SPDK_LOG_REGISTER_COMPONENT(accel_mlx5)
