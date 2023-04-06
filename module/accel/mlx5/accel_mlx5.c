@@ -359,7 +359,7 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 {
 
 	struct accel_mlx5_dev *dev = mlx5_task->dev;
-	uint32_t i;
+	uint16_t i;
 	int rc;
 
 	dev->stats.tasks++;
