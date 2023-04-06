@@ -176,6 +176,7 @@ static void nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req, struct nvme_tcp_
 static struct nvme_tcp_req *get_nvme_active_req_by_cid(struct nvme_tcp_qpair *tqpair, uint32_t cid);
 static int nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 static int nvme_tcp_qpair_capsule_cmd_send(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req);
+static bool nvme_tcp_memory_domain_enabled(void);
 
 static inline bool
 nvme_tcp_pdu_is_zcopy(struct nvme_tcp_pdu *pdu)
@@ -2967,6 +2968,13 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 					return -ENOTSUP;
 				}
 				tqpair->pdus_mkey = spdk_rdma_utils_memory_translation_get_lkey(&mem_translation);
+			} else {
+				if (nvme_tcp_memory_domain_enabled() &&
+				    getenv("SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ") == NULL) {
+					ctrlr->accel_seq_supported = true;
+				} else {
+					SPDK_NOTICELOG("Accel sequence support disabled\n");
+				}
 			}
 		}
 	} else {
@@ -3101,13 +3109,6 @@ nvme_tcp_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 		SPDK_ERRLOG("nvme_ctrlr_add_process() failed\n");
 		nvme_ctrlr_destruct(&tctrlr->ctrlr);
 		return NULL;
-	}
-
-	char *disable_accel_seq = getenv("SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ");
-	if (!disable_accel_seq) {
-		tctrlr->ctrlr.accel_seq_supported = true;
-	} else {
-		SPDK_NOTICELOG("Accel sequence support disabled\n");
 	}
 
 	return &tctrlr->ctrlr;
@@ -3448,14 +3449,23 @@ nvme_tcp_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 	free(stats);
 }
 
+static bool
+nvme_tcp_memory_domain_enabled(void)
+{
+	const char *module_name;
+
+	return getenv("SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN") == NULL &&
+		spdk_accel_get_opc_module_name(ACCEL_OPC_COPY, &module_name) == 0 &&
+		strcmp(module_name, "mlx5") == 0;
+}
+
 static int
 nvme_tcp_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 				  struct spdk_memory_domain **domains, int array_size)
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(ctrlr->adminq);
-	char *disable_mem_domain = getenv("SPDK_NVDA_TCP_DISABLE_MEM_DOMAIN");
 
-	if (!tqpair->memory_domain || disable_mem_domain) {
+	if (!tqpair->memory_domain || !nvme_tcp_memory_domain_enabled()) {
 		SPDK_NOTICELOG("Memory domain support disabled\n");
 		return 0;
 	} else if (domains && array_size > 0) {
