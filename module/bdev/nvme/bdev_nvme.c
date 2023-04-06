@@ -5417,7 +5417,7 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 	nbdev_ctrlr = nvme_bdev_ctrlr_get_by_name(base_name);
 	if (nbdev_ctrlr != NULL) {
 		nvme_ctrlr = nvme_bdev_ctrlr_get_ctrlr_by_subnqn(nbdev_ctrlr, trid->subnqn);
-		if (nvme_ctrlr != NULL) {
+		if (nvme_ctrlr != NULL && !multipath) {
 			free(ctx);
 			rc = bdev_nvme_add_secondary_trid(nvme_ctrlr, NULL, trid);
 			if (cb_fn) {
