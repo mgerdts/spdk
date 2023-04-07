@@ -1587,7 +1587,8 @@ get_nvme_active_req_by_cid(struct nvme_tcp_qpair *tqpair, uint32_t cid)
 	struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(group);
 
 	if (spdk_likely(group && tgroup->tcp_reqs)) {
-		if ((cid >= tqpair->num_entries) || (tqpair->tcp_reqs_lookup[cid]->state == NVME_TCP_REQ_FREE)) {
+		if ((cid >= tqpair->num_entries) || (tqpair->tcp_reqs_lookup[cid] == NULL) ||
+		    (tqpair->tcp_reqs_lookup[cid]->state == NVME_TCP_REQ_FREE)) {
 			return NULL;
 		}
 
@@ -2578,7 +2579,9 @@ nvme_tcp_read_pdu(struct nvme_tcp_qpair *tqpair, uint32_t *reaped, uint32_t max_
 			nvme_tcp_pdu_payload_handle(tqpair, reaped);
 			break;
 		case NVME_TCP_PDU_RECV_STATE_ERROR:
-			memset(pdu, 0, sizeof(struct nvme_tcp_pdu));
+			if (pdu) {
+				memset(pdu, 0, sizeof(struct nvme_tcp_pdu));
+			}
 			return NVME_TCP_PDU_FATAL;
 		default:
 			assert(0);
