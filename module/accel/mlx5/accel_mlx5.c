@@ -682,7 +682,8 @@ accel_mlx5_get_copy_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struc
 					 * become first sge element in next op */
 					split_by_src_iov_counter = 1;
 				} else {
-				    split_by_src_iov_counter = 0;
+					src_len = 0;
+				    	split_by_src_iov_counter = 0;
 				}
 				src_counter++;
 				break;
@@ -870,6 +871,7 @@ accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 			task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
 			if (spdk_unlikely(wc[i].status)) {
 				SPDK_ERRLOG("RDMA: qp %p, task %p WC status %d\n", dev->dma_qp, task, wc[i].status);
+				abort();
 				accel_mlx5_task_complete(task, -EIO);
 				continue;
 			}
