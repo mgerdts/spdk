@@ -3456,10 +3456,11 @@ bdev_channel_poll_qos(void *arg)
 	do {
 		spdk_thread_send_msg(spdk_io_channel_get_thread(qos->next_channel->channel), bdev_qos_io_submit_msg,
 				     qos->next_channel);
-		qos->next_channel = CIRCLEQ_NEXT(qos->next_channel, link); /* round-robin */
+		qos->next_channel = CIRCLEQ_LOOP_NEXT(&bdev->internal.channels, qos->next_channel,
+						      link); /* round-robin */
 	} while (qos->next_channel != first_channel);
 	/* For feairness - next time start with next channel */
-	qos->next_channel = CIRCLEQ_NEXT(qos->next_channel, link);
+	qos->next_channel = CIRCLEQ_LOOP_NEXT(&bdev->internal.channels, qos->next_channel, link);
 	spdk_spin_unlock(&bdev->internal.channels_lock);
 
 	return SPDK_POLLER_BUSY;
