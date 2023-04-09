@@ -485,10 +485,11 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	uint32_t src_lkey = 0, dst_lkey = 0;
 	uint64_t iv;
 	uint16_t i;
-	uint32_t num_ops = mlx5_task->num_ops;
+	uint32_t num_ops = spdk_min(mlx5_task->num_reqs - mlx5_task->num_completed_reqs, mlx5_task->num_ops);
 	uint32_t req_len;
 	/* First RDMA after UMR must have a SMALL_FENCE */
 	uint32_t first_rdma_fence = MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
+	uint32_t blocks_processed;
 	size_t ops_len = mlx5_task->blocks_per_req * num_ops;
 	int rc;
 
@@ -500,7 +501,6 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	dev->stats.tasks++;
-	iv = task->iv + mlx5_task->num_completed_reqs;
 
 	if (ops_len <= mlx5_task->src.iov->iov_len - mlx5_task->src.iov_offset || task->s.iovcnt == 1) {
 		rc = accel_mlx5_translate_addr(task->s.iovs[0].iov_base, task->s.iovs[0].iov_len, task->src_domain,
@@ -518,6 +518,8 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		}
 		dst_lkey = ch->klms[0].dst_klm->lkey;
 	}
+	blocks_processed = mlx5_task->num_submitted_reqs * mlx5_task->blocks_per_req;
+	iv = task->iv + blocks_processed;
 
 	SPDK_DEBUGLOG(accel_mlx5, "begin, task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
@@ -525,17 +527,20 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	for (i = 0; i < num_ops; i++) {
 		if (mlx5_task->num_submitted_reqs + i + 1 == mlx5_task->num_reqs) {
 			/* Last request may consume less than calculated */
-			req_len = (mlx5_task->num_blocks - mlx5_task->blocks_per_req * (mlx5_task->num_submitted_reqs + i)) * task->block_size;
+			assert(mlx5_task->num_blocks > blocks_processed);
+			req_len = (mlx5_task->num_blocks - blocks_processed) * task->block_size;
 		} else {
 			req_len = mlx5_task->blocks_per_req * task->block_size;
 		}
+
 		rc = accel_mlx5_configure_crypto_umr(mlx5_task, dev, &ch->klms[i], mlx5_task->mkeys[i]->mkey,
 						     src_lkey, dst_lkey, iv, 0, 0, req_len);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("UMR configure failed with %d\n", rc);
 			return rc;
 		}
-		iv++;
+		blocks_processed += mlx5_task->blocks_per_req;
+		iv += mlx5_task->blocks_per_req;
 		dev->stats.umrs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		dev->reqs_submitted++;
@@ -618,12 +623,6 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 	int rc;
 
 	if (task->crypto_op) {
-		if (task->num_ops != 0 && task->num_ops < spdk_min(task->num_reqs - task->num_completed_reqs, 4)) {
-			/* If task has small amount of ops, try to get more */
-			spdk_mempool_put_bulk(task->dev->dev_ctx->mkey_pool, (void **) task->mkeys,
-					      task->num_ops);
-			task->num_ops = 0;
-		}
 		if (task->num_ops == 0) {
 			rc = accel_mlx5_task_alloc_mkeys(task);
 			if (spdk_unlikely(rc != 0)) {
