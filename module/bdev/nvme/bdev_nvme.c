@@ -5442,7 +5442,8 @@ static bool
 nvme_path_should_delete(struct nvme_path_id *p, const struct nvme_path_id *path_id)
 {
 	if (path_id->trid.trtype != 0) {
-		if (path_id->trid.trtype == SPDK_NVME_TRANSPORT_CUSTOM) {
+		if (path_id->trid.trtype == SPDK_NVME_TRANSPORT_CUSTOM ||
+		    path_id->trid.trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS) {
 			if (strcasecmp(path_id->trid.trstring, p->trid.trstring) != 0) {
 				return false;
 			}

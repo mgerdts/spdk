@@ -1266,6 +1266,7 @@ spdk_nvme_trid_populate_transport(struct spdk_nvme_transport_id *trid,
 		trstring = SPDK_NVME_TRANSPORT_NAME_VFIOUSER;
 		break;
 	case SPDK_NVME_TRANSPORT_CUSTOM:
+	case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
 		trstring = SPDK_NVME_TRANSPORT_NAME_CUSTOM;
 		break;
 	default:
@@ -1343,6 +1344,7 @@ spdk_nvme_transport_id_trtype_str(enum spdk_nvme_transport_type trtype)
 	case SPDK_NVME_TRANSPORT_VFIOUSER:
 		return "VFIOUSER";
 	case SPDK_NVME_TRANSPORT_CUSTOM:
+	case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
 		return "CUSTOM";
 	default:
 		return NULL;
