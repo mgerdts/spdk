@@ -1426,8 +1426,8 @@ nvme_tcp_qpair_set_recv_state(struct nvme_tcp_qpair *tqpair,
 		return;
 	}
 	tqpair->recv_state = state;
-	if (state == NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY ||
-	    state == NVME_TCP_PDU_RECV_STATE_ERROR) {
+	if ((state == NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY ||
+	     state == NVME_TCP_PDU_RECV_STATE_ERROR) && tqpair->recv_pdu) {
 		nvme_tcp_recv_pdu_put(tqpair, tqpair->recv_pdu);
 	}
 }
