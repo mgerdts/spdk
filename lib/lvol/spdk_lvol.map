@@ -17,13 +17,21 @@
 	spdk_lvol_close;
 	spdk_lvol_get_io_channel;
 	spdk_lvs_load;
+	spdk_lvs_load_ext;
 	spdk_lvol_open;
 	spdk_lvol_inflate;
 	spdk_lvol_decouple_parent;
+	spdk_lvol_create_esnap_clone;
+	spdk_lvol_iter_immediate_clones;
+	spdk_lvol_get_by_uuid;
+	spdk_lvol_get_by_names;
 
 	# internal functions
 	spdk_lvol_resize;
 	spdk_lvol_set_read_only;
+	spdk_lvs_esnap_missing_add;
+	spdk_lvs_esnap_missing_remove;
+	spdk_lvs_esnap_notify_hotplug;
 
 	local: *;
 };

@@ -120,6 +120,9 @@
 	spdk_bdev_module_fini_start_done;
 	spdk_bdev_module_claim_bdev;
 	spdk_bdev_module_release_bdev;
+	spdk_bdev_claim_get_name;
+	spdk_bdev_claim_opts_init;
+	spdk_bdev_module_claim_bdev_desc;
 	spdk_bdev_alias_add;
 	spdk_bdev_alias_del;
 	spdk_bdev_alias_del_all;
@@ -150,6 +153,7 @@
 	spdk_bdev_part_base_hotremove;
 	spdk_bdev_part_base_construct_ext;
 	spdk_bdev_part_construct;
+	spdk_bdev_part_construct_uuid;
 	spdk_bdev_part_submit_request;
 	spdk_bdev_part_submit_request_ext;
 	spdk_bdev_part_get_bdev;

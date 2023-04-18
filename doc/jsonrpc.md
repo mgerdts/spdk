@@ -9757,6 +9757,55 @@ Example response:
 }
 ~~~
 
+### bdev_lvol_clone_bdev {#rpc_bdev_lvol_clone_bdev}
+
+Create a logical volume based on an external snapshot bdev. The external snapshot bdev
+is a bdev that will not be written to by any consumer and must not be an lvol in the
+lvstore as the clone.
+
+Regardless of whether the bdev is specified by name or UUID, the bdev UUID will be stored
+in the logical volume's metadata for use while the lvolstore is loading. For this reason,
+it is important that the bdev chosen has a static UUID.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+bdev                    | Required | string      | Name or UUID for bdev that acts as the external snapshot
+lvs_name                | Required | string      | logical volume store name
+clone_name              | Required | string      | Name for the logical volume to create
+
+#### Response
+
+UUID of the created logical volume clone is returned.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_lvol_clone_bdev",
+  "id": 1,
+  "params": {
+    "bdev_uuid": "e4b40d8b-f623-416d-8234-baf5a4c83cbd",
+    "lvs_name": "lvs1",
+    "clone_name": "clone2"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "336f662b-08e5-4006-8e06-e2023f7f9886"
+}
+~~~
+
 ### bdev_lvol_rename {#rpc_bdev_lvol_rename}
 
 Rename a logical volume. New name will rename only the alias of the logical volume.
@@ -9972,6 +10021,58 @@ Example response:
   "id": 1,
   "result": true
 }
+~~~
+
+### bdev_lvol_get_lvols {#rpc_bdev_lvol_get_lvols}
+
+Get a list of logical volumes. This list can be limited by lvol store and will display volumes regardless
+of their health. Unhealthy lvols do not have an associated bdev, thus this RPC call may return lvols
+not returned by `bdev_get_bdevs`.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+lvs_uuid                | Optional | string      | Only show volumes in the logical volume store with this UUID
+lvs_name                | Optional | string      | Only show volumes in the logical volume store with this name
+
+Either lvs_uuid or lvs_name may be specified, but not both.
+If both lvs_uuid and lvs_name are omitted, information about lvols in all logical volume stores is returned.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_lvol_get_lvols",
+  "id": 1,
+  "params": {
+    "lvs_name": "lvs_test"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+[
+  {
+    "alias": "lvs_test/lvol1",
+    "uuid": "b335c368-851d-4099-81e0-018cc494fdf6",
+    "name": "lvol1",
+    "is_thin_provisioned": false,
+    "is_snapshot": false,
+    "is_clone": false,
+    "is_esnap_clone": false,
+    "is_healthy": true,
+    "lvs": {
+      "name": "lvs_test",
+      "uuid": "a1c8d950-5715-4558-936d-ab9e6eca0794"
+    }
+  }
+]
 ~~~
 
 ## RAID

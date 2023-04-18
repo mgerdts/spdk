@@ -3,6 +3,7 @@
 #  Copyright (C) 2016 Intel Corporation
 #  All rights reserved.
 #  Copyright (c) 2022 Dell Inc, or its subsidiaries.
+#  Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 import logging
@@ -1973,6 +1974,19 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('clone_name', help='lvol clone name')
     p.set_defaults(func=bdev_lvol_clone)
 
+    def bdev_lvol_clone_bdev(args):
+        print_json(rpc.lvol.bdev_lvol_clone_bdev(args.client,
+                                                 bdev=args.bdev,
+                                                 lvs_name=args.lvs_name,
+                                                 clone_name=args.clone_name))
+
+    p = subparsers.add_parser('bdev_lvol_clone_bdev',
+                              help='Create a clone of a non-lvol bdev')
+    p.add_argument('bdev', help='bdev to clone')
+    p.add_argument('lvs_name', help='logical volume store name')
+    p.add_argument('clone_name', help='lvol clone name')
+    p.set_defaults(func=bdev_lvol_clone_bdev)
+
     def bdev_lvol_rename(args):
         rpc.lvol.bdev_lvol_rename(args.client,
                                   old_name=args.old_name,
@@ -2044,6 +2058,16 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-u', '--uuid', help='lvol store UUID', required=False)
     p.add_argument('-l', '--lvs-name', help='lvol store name', required=False)
     p.set_defaults(func=bdev_lvol_get_lvstores)
+
+    def bdev_lvol_get_lvols(args):
+        print_dict(rpc.lvol.bdev_lvol_get_lvols(args.client,
+                                                lvs_uuid=args.lvs_uuid,
+                                                lvs_name=args.lvs_name))
+
+    p = subparsers.add_parser('bdev_lvol_get_lvols', help='Display current logical volume list')
+    p.add_argument('-u', '--lvs-uuid', help='only lvols in  lvol store UUID', required=False)
+    p.add_argument('-l', '--lvs-name', help='only lvols in lvol store name', required=False)
+    p.set_defaults(func=bdev_lvol_get_lvols)
 
     def bdev_raid_get_bdevs(args):
         print_json(rpc.bdev.bdev_raid_get_bdevs(args.client,

@@ -1,7 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
-#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
+#  Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 # A quick note on organization:
@@ -53,7 +53,7 @@ DEPDIRS-accel := log util thread json rpc jsonrpc dma
 DEPDIRS-jsonrpc := log util json
 DEPDIRS-virtio := log util json thread vfio_user
 
-DEPDIRS-lvol := log util blob
+DEPDIRS-lvol := log util blob thread
 DEPDIRS-rpc := log util json jsonrpc
 
 DEPDIRS-net := log util $(JSON_LIBS)

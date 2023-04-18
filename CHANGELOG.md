@@ -1,6 +1,32 @@
 # Changelog
 
-## v23.01: accel chained ops, accel crypto, ublk target
+## v23.01.nvda
+
+### bdev
+
+A new API `spdk_bdev_module_claim_bdev_desc` was added. Unlike `spdk_bdev_module_claim_bdev`, this
+function requires a bdev descriptor to be passed and the claim is automatically released when the
+descriptor is closed. It allows bdev modules to claim bdevs as a single writer, multiple writers, or
+multiple readers.
+
+### gpt
+
+GPT bdevs now use the GPT Unique Partition ID as the bdev's UUID. Do not rely on the newly
+introduced spdk_bdev_part_construct_uuid(). A more flexible replacement will come later.
+
+### lvol
+
+New API `spdk_lvol_iter_immediate_clones` was added to iterate the clones of an lvol.
+
+New APIs `spdk_lvol_get_by_uuid` and `spdk_lvol_get_by_names` to get lvols by the lvol's UUID or
+lvstore and lvol names.
+
+New `bdev_lvol_get_lvols` RPC to list logical volumes. This provides information about logical
+volumes without providing information about the bdevs. It is useful for listing the lvols
+associated with specific lvol stores and for listing lvols that are not healthy and have no
+associated bdev.
+
+## v23.01
 
 ### accel
 

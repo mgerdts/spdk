@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -12,6 +13,7 @@
 
 #include "spdk/stdinc.h"
 #include "spdk/blob.h"
+#include "spdk/uuid.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,12 +44,33 @@ enum lvs_clear_method {
  * Parameters for lvolstore initialization.
  */
 struct spdk_lvs_opts {
+	/** Size of cluster in bytes. Must be multiple of 4KiB page size. */
 	uint32_t		cluster_sz;
+
+	/** Clear method */
 	enum lvs_clear_method	clear_method;
+
+	/** Name of the lvolstore */
 	char			name[SPDK_LVS_NAME_MAX];
+
 	/** num_md_pages_per_cluster_ratio = 100 means 1 page per cluster */
 	uint32_t		num_md_pages_per_cluster_ratio;
-};
+
+	/**
+	 * The size of spdk_lvol_opts according to the caller of this library is used for ABI
+	 * compatibility. The library uses this field to know how many fields in this
+	 * structure are valid. And the library will populate any remaining fields with default
+	 * values. After that, new added fields should be put in the end of the struct.
+	 */
+	uint32_t		opts_size;
+
+	/**
+	 * A function to be called to load external snapshots. If this is NULL while the lvolstore
+	 * is being loaded, the lvolstore will not support external snapshots.
+	 */
+	spdk_bs_esnap_dev_create esnap_bs_dev_create;
+} __attribute__((packed));
+SPDK_STATIC_ASSERT(sizeof(struct spdk_lvs_opts) == 88, "Incorrect size");
 
 /**
  * Initialize an spdk_lvs_opts structure to the defaults.
@@ -92,6 +115,15 @@ typedef void (*spdk_lvol_op_with_handle_complete)(void *cb_arg, struct spdk_lvol
  * \param lvolerrno Error
  */
 typedef void (*spdk_lvol_op_complete)(void *cb_arg, int lvolerrno);
+
+/**
+ * Callback definition for spdk_lvol_iter_clones.
+ *
+ * \param lvol An iterated lvol.
+ * \param cb_arg Opaque context passed to spdk_lvol_iter_clone().
+ * \return 0 to continue iterating, any other value to stop iterating.
+ */
+typedef int (*spdk_lvol_iter_cb)(void *cb_arg, struct spdk_lvol *lvol);
 
 /**
  * Initialize lvolstore on given bs_bdev.
@@ -185,6 +217,24 @@ void spdk_lvol_create_clone(struct spdk_lvol *lvol, const char *clone_name,
 			    spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg);
 
 /**
+ * Create clone of given non-lvol device.
+ *
+ * The bdev that is being cloned is commonly called an external snapshot or esnap. The clone is
+ * commonly called an esnap clone.
+ *
+ * \param esnap_id The identifier that will be passed to the spdk_bs_esnap_dev_create callback.
+ * \param id_len The length of esnap_id, in bytes.
+ * \param size_bytes The size of the external snapshot device, in bytes.
+ * \param lvs Handle to lvolstore.
+ * \param clone_name Name of created clone.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Completion callback custom arguments.
+ */
+int spdk_lvol_create_esnap_clone(const void *esnap_id, uint32_t id_len, uint64_t size_bytes,
+				 struct spdk_lvol_store *lvs, const char *clone_name,
+				 spdk_lvol_op_with_handle_complete cb_fn, void *cb_arg);
+
+/**
  * Rename lvol with new_name.
  *
  * \param lvol Handle to lvol.
@@ -221,6 +271,35 @@ void spdk_lvol_destroy(struct spdk_lvol *lvol, spdk_lvol_op_complete cb_fn, void
 void spdk_lvol_close(struct spdk_lvol *lvol, spdk_lvol_op_complete cb_fn, void *cb_arg);
 
 /**
+ * Iterate clones of an lvol.
+ *
+ * Iteration stops if cb_fn(cb_arg, clone_lvol) returns non-zero.
+ *
+ * \param lvol Handle to lvol.
+ * \param cb_fn Function to call for each lvol that clones this lvol.
+ * \param cb_arg Context to pass wtih cb_fn.
+ * \return -ENOMEM if memory allocation failed, non-zero return from cb_fn(), or 0.
+ */
+int spdk_lvol_iter_immediate_clones(struct spdk_lvol *lvol, spdk_lvol_iter_cb cb_fn, void *cb_arg);
+
+/**
+ * Get the lvol that has a particular UUID.
+ *
+ * \param uuid The lvol's UUID.
+ * \return A pointer to the requested lvol on success, else NULL.
+ */
+struct spdk_lvol *spdk_lvol_get_by_uuid(const struct spdk_uuid *uuid);
+
+/**
+ * Get the lvol that has the specified name in the specified lvolstore.
+ *
+ * \param lvs_name Name of the lvolstore.
+ * \param lvol_name Name ofthe lvol.
+ * \return A pointer to the requested lvol on success, else NULL.
+ */
+struct spdk_lvol *spdk_lvol_get_by_names(const char *lvs_name, const char *lvol_name);
+
+/**
  * Get I/O channel of bdev associated with specified lvol.
  *
  * \param lvol Handle to lvol.
@@ -238,6 +317,20 @@ struct spdk_io_channel *spdk_lvol_get_io_channel(struct spdk_lvol *lvol);
  */
 void spdk_lvs_load(struct spdk_bs_dev *bs_dev, spdk_lvs_op_with_handle_complete cb_fn,
 		   void *cb_arg);
+
+/**
+ * Load lvolstore from the given blobstore device with options.
+ *
+ * If lvs_opts is not NULL, it should be initalized with spdk_lvs_opts_init().
+ *
+ * \param bs_dev Pointer to the blobstore device.
+ * \param lvs_opts lvolstore options.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Completion callback custom arguments.
+ * blobstore.
+ */
+void spdk_lvs_load_ext(struct spdk_bs_dev *bs_dev, const struct spdk_lvs_opts *lvs_opts,
+		       spdk_lvs_op_with_handle_complete cb_fn, void *cb_arg);
 
 /**
  * Grow a lvstore to fill the underlying device
