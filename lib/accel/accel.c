@@ -2160,10 +2160,15 @@ spdk_accel_get_io_channel(void)
 static void
 accel_module_initialize(void)
 {
-	struct spdk_accel_module_if *accel_module;
+	struct spdk_accel_module_if *accel_module, *tmp;
+	int rc;
 
-	TAILQ_FOREACH(accel_module, &spdk_accel_module_list, tailq) {
-		accel_module->module_init();
+	TAILQ_FOREACH_SAFE(accel_module, &spdk_accel_module_list, tailq, tmp) {
+		rc = accel_module->module_init();
+		if (rc) {
+			SPDK_ERRLOG("Failed to init accel module %s, ignoring it\n", accel_module->name);
+			TAILQ_REMOVE(&spdk_accel_module_list, accel_module, tailq);
+		}
 	}
 }
 
