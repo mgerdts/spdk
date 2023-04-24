@@ -102,7 +102,7 @@ function test_esnap_reload_missing() {
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '. | length' <<< "$lvols")" == "1" ]
 	[ "$(jq -r '.[] | select(.name == "eclone").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "false" ]
 
 	# Unload the lvstore and delete the external snapshot
 	rpc_cmd bdev_aio_delete "$aio_bdev"
@@ -117,7 +117,7 @@ function test_esnap_reload_missing() {
 	NOT rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '. | length' <<< "$lvols")" == "1" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "true" ]
 
 	# Reload the lvstore with esnap present during load. This should make the lvol healthy.
 	# State:
@@ -132,7 +132,7 @@ function test_esnap_reload_missing() {
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '. | length' <<< "$lvols")" == "1" ]
 	[ "$(jq -r '.[] | select(.name == "eclone").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "false" ]
 
 	# Create a clone of eclone, then reload without the esnap present.
 	# State:
@@ -147,9 +147,9 @@ function test_esnap_reload_missing() {
 	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '.[] | select(.name == "eclone").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "true" ]
 	[ "$(jq -r '.[] | select(.name == "clone").is_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "true" ]
 	NOT rpc_cmd bdev_get_bdevs -b lvs_test/eclone
 	NOT rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 	NOT rpc_cmd bdev_get_bdevs -b lvs_test/clone
@@ -164,9 +164,9 @@ function test_esnap_reload_missing() {
 	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '.[] | select(.name == "eclone").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "false" ]
 	[ "$(jq -r '.[] | select(.name == "clone").is_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "clone").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "clone").is_degraded' <<< "$lvols")" == "false" ]
 	rpc_cmd bdev_get_bdevs -b lvs_test/eclone
 	rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 	rpc_cmd bdev_get_bdevs -b lvs_test/clone
@@ -184,12 +184,12 @@ function test_esnap_reload_missing() {
 	bs_dev=$(rpc_cmd bdev_aio_create "$testdir/aio_bdev_0" "$aio_bdev" "$block_size")
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '.[] | select(.name == "eclone").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "true" ]
 	[ "$(jq -r '.[] | select(.name == "clone").is_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "clone").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.name == "clone").is_degraded' <<< "$lvols")" == "true" ]
 	[ "$(jq -r '.[] | select(.name == "snap").is_clone' <<< "$lvols")" == "true" ]
 	[ "$(jq -r '.[] | select(.name == "snap").is_snapshot' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "snap").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.name == "snap").is_degraded' <<< "$lvols")" == "true" ]
 	NOT rpc_cmd bdev_get_bdevs -b lvs_test/eclone
 	NOT rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 	NOT rpc_cmd bdev_get_bdevs -b lvs_test/clone
@@ -202,12 +202,12 @@ function test_esnap_reload_missing() {
 	rpc_cmd bdev_wait_for_examine
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '.[] | select(.name == "eclone").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "eclone").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "eclone").is_degraded' <<< "$lvols")" == "false" ]
 	[ "$(jq -r '.[] | select(.name == "clone").is_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "clone").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "clone").is_degraded' <<< "$lvols")" == "false" ]
 	[ "$(jq -r '.[] | select(.name == "snap").is_clone' <<< "$lvols")" == "true" ]
 	[ "$(jq -r '.[] | select(.name == "snap").is_snapshot' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.name == "snap").is_healthy' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.name == "snap").is_degraded' <<< "$lvols")" == "false" ]
 	rpc_cmd bdev_get_bdevs -b lvs_test/eclone
 	rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 	rpc_cmd bdev_get_bdevs -b lvs_test/clone
@@ -415,7 +415,7 @@ function test_esnap_late_arrival() {
 	NOT rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
 	[ "$(jq -r '.[] | select(.uuid == "'$eclone_uuid'").is_esnap_clone' <<< "$lvols")" == "true" ]
-	[ "$(jq -r '.[] | select(.uuid == "'$eclone_uuid'").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.uuid == "'$eclone_uuid'").is_degraded' <<< "$lvols")" == "true" ]
 
 	# Create the esnap device and verify that the esnap clone finds it.
 	esnap_dev=$(rpc_cmd bdev_malloc_create -u "$esnap_uuid" "$esnap_size_mb" "$block_size")
@@ -462,8 +462,8 @@ function test_esnap_remove_unhealthy() {
 
 	# Verify clone and eclone are not healhty
 	lvols=$(rpc_cmd bdev_lvol_get_lvols)
-	[ "$(jq -r '.[] | select(.uuid == "'$eclone_uuid'").is_healthy' <<< "$lvols")" == "false" ]
-	[ "$(jq -r '.[] | select(.uuid == "'$clone_uuid'").is_healthy' <<< "$lvols")" == "false" ]
+	[ "$(jq -r '.[] | select(.uuid == "'$eclone_uuid'").is_degraded' <<< "$lvols")" == "true" ]
+	[ "$(jq -r '.[] | select(.uuid == "'$clone_uuid'").is_degraded' <<< "$lvols")" == "true" ]
 	NOT rpc_cmd bdev_get_bdevs -b "$clone_uuid"
 	NOT rpc_cmd bdev_get_bdevs -b "$eclone_uuid"
 

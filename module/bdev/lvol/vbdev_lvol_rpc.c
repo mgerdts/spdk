@@ -1169,7 +1169,7 @@ rpc_dump_lvol(struct spdk_json_write_ctx *w, struct spdk_lvol *lvol)
 	spdk_json_write_named_bool(w, "is_snapshot", spdk_blob_is_snapshot(lvol->blob));
 	spdk_json_write_named_bool(w, "is_clone", spdk_blob_is_clone(lvol->blob));
 	spdk_json_write_named_bool(w, "is_esnap_clone", spdk_blob_is_esnap_clone(lvol->blob));
-	spdk_json_write_named_bool(w, "is_healthy", spdk_blob_is_healthy(lvol->blob));
+	spdk_json_write_named_bool(w, "is_degraded", !spdk_blob_is_healthy(lvol->blob));
 
 	spdk_json_write_named_object_begin(w, "lvs");
 	spdk_json_write_named_string(w, "name", lvs->name);
