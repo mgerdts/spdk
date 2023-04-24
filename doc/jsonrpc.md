@@ -10066,7 +10066,7 @@ Example response:
     "is_snapshot": false,
     "is_clone": false,
     "is_esnap_clone": false,
-    "is_healthy": true,
+    "is_degraded": false,
     "lvs": {
       "name": "lvs_test",
       "uuid": "a1c8d950-5715-4558-936d-ab9e6eca0794"
