@@ -67,13 +67,6 @@ spdk_mlx5_crypto_devs_get(int *dev_num)
 
 	for (i = 0; i < num_rdma_devs; i++) {
 		dev = rdma_devs[i];
-
-		if (strcmp(dev->device->name, "mlx5_0") == 0 ||
-		    strcmp(dev->device->name, "mlx5_1") == 0) {
-			SPDK_WARNLOG("Ignore dev %s just because\n", dev->device->name);
-			continue;
-		}
-
 		rc = ibv_query_device(dev, &dev_attr);
 		if (rc) {
 			SPDK_ERRLOG("Failed to query dev %s, skipping\n", dev->device->name);
