@@ -21,6 +21,10 @@ volumes without providing information about the bdevs. It is useful for listing 
 associated with specific lvol stores and for listing lvols that are not healthy and have no
 associated bdev.
 
+### part
+
+New API `spdk_bdev_part_construct_ext` is added and allows the bdev's UUID to be specified.
+
 ## v23.01
 
 ### accel
