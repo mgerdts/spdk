@@ -653,7 +653,7 @@ _vbdev_lvol_destroy(struct spdk_lvol *lvol, spdk_lvol_op_complete cb_fn, void *c
 	ctx->cb_fn = cb_fn;
 	ctx->cb_arg = cb_arg;
 
-	if (!spdk_blob_is_healthy(lvol->blob)) {
+	if (spdk_lvol_is_degraded(lvol)) {
 		spdk_lvol_close(lvol, _vbdev_lvol_destroy_cb, ctx);
 		return;
 	}
@@ -1111,8 +1111,8 @@ _create_lvol_disk(struct spdk_lvol *lvol, bool destroy)
 	unsigned char *alias;
 	int rc;
 
-	if (!spdk_blob_is_healthy(lvol->blob)) {
-		SPDK_NOTICELOG("lvol %s: blob is not healthy: deferring bdev creation\n",
+	if (spdk_lvol_is_degraded(lvol)) {
+		SPDK_NOTICELOG("lvol %s: blob is degraded: deferring bdev creation\n",
 			       lvol->unique_id);
 		return 0;
 	}

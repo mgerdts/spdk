@@ -48,8 +48,8 @@ DEFINE_STUB(spdk_lvol_iter_immediate_clones, int,
 DEFINE_STUB(spdk_lvs_esnap_missing_add, int,
 	    (struct spdk_lvol_store *lvs, struct spdk_lvol *lvol, const void *esnap_id,
 	     uint32_t id_len), -ENOTSUP);
-DEFINE_STUB(spdk_blob_is_healthy, bool, (const struct spdk_blob *blob), true);
 DEFINE_STUB(spdk_blob_get_esnap_bs_dev, struct spdk_bs_dev *, (const struct spdk_blob *blob), NULL);
+DEFINE_STUB(spdk_lvol_is_degraded, bool, (const struct spdk_lvol *lvol), false);
 
 struct spdk_blob {
 	uint64_t	id;
@@ -1800,7 +1800,7 @@ ut_esnap_dev_create(void)
 
 	/* Bdev not found */
 	g_base_bdev = NULL;
-	MOCK_SET(spdk_blob_is_healthy, false);
+	MOCK_SET(spdk_lvol_is_degraded, true);
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, uuid_str, sizeof(uuid_str), &bs_dev);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
@@ -1811,7 +1811,7 @@ ut_esnap_dev_create(void)
 	/* TODO: This suggests we need a way to wait for a claim to be available. */
 	g_base_bdev = &bdev;
 	lvol_already_opened = true;
-	MOCK_SET(spdk_blob_is_healthy, false);
+	MOCK_SET(spdk_lvol_is_degraded, true);
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, uuid_str, sizeof(uuid_str), &bs_dev);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
@@ -1820,7 +1820,7 @@ ut_esnap_dev_create(void)
 
 	/* Happy path */
 	lvol_already_opened = false;
-	MOCK_SET(spdk_blob_is_healthy, true);
+	MOCK_SET(spdk_lvol_is_degraded, false);
 	rc = vbdev_lvol_esnap_dev_create(&lvs, &lvol, &blob, uuid_str, sizeof(uuid_str), &bs_dev);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(bs_dev != NULL);
@@ -1830,7 +1830,7 @@ ut_esnap_dev_create(void)
 	g_base_bdev = NULL;
 	lvol_already_opened = false;
 	free(unterminated);
-	MOCK_CLEAR(spdk_blob_is_healthy);
+	MOCK_CLEAR(spdk_lvol_is_degraded);
 }
 
 static void
